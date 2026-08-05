@@ -805,3 +805,46 @@ Live examples of the ceiling, all current:
 - **a runbook is not verified until an operator uses it in a real incident.**
 ⭐ **`<DEPLOYED>` is not evidence** — nine things in this system were built, looked alive,
 and had never run.
+
+---
+
+### AR9 · The capital-drift CRITICAL — noise accepted **for one session only**, with four reopen conditions
+
+- **Accepted:** `⚠️ Capital Drift Detected` (**CRITICAL**, `Module: order_reconciler`) fires on a
+  delivery day **by construction**, and is treated as **informational**. It fired **3×** on
+  05-Aug-2026 (~10:01 → 11:51:20), the first day this system traded delivery.
+- **Reasoning — both halves MEASURED at the DEPLOYED SHA `0197923`** *(⭐ `order_reconciler.py` and
+  `drift_handler.py` are byte-identical at `0197923` and HEAD, so the cites hold at both)*:
+  **(1) THE OPERANDS ARE DIFFERENT QUANTITIES.** `expected = snapshot.total` (**total** capital —
+  reservations reduce the *available* buckets, not the total) vs `actual = margins.net` (Kite's
+  `equity.net`, **net of blocked margin**; `available.cash` is parsed **separately**)
+  ⇒ **the delta IS the deployed capital.** `order_reconciler.py:3590-3591`, `zerodha_adapter.py:1452-1453`.
+  **(2) IT CANNOT ESCALATE.** Published as `source_module="order_reconciler"` (`:3667`);
+  `drift_handler._ESCALATING_SOURCES` (`:66-70`) contains only `fund_manager`,
+  `fund_manager_self_check`, `fund_manager_bucket_overflow`; a non-escalating source logs **one INFO
+  line and returns** (`:147-161`) — before any tier, counter, `soft_kill` or `hard_kill`.
+  ⭐ **The tolerance is `max(₹50, 10% of expected)`, and FIX-190 (Bug I) added that band to silence
+  exactly this noise FOR A LEVERED INTRADAY BOOK.** Delivery is 1× ⇒ **a delivery book deploying more
+  than ~10% of capital breaches it by construction**, and the bucket is 30% of total.
+- **Accepted by:** the bridge, 05-Aug-2026, on the measurement above. **Rama has not been asked to
+  ratify a tolerance and must not be, on this evidence base.**
+- ⛔⛔ **THE EVIDENCE BASE IS ONE SESSION. That is explicitly NOT enough to justify changing a
+  money-path governor.** ⭐ **What would move it is RECURRENCE ACROSS MULTIPLE DELIVERY SESSIONS**,
+  not a louder single day. ⇒ **no tolerance value is proposed here or anywhere.**
+
+> ### 🔴 REOPEN CONDITIONS — **any ONE of these ends the acceptance**
+> 1. **Any of the six `THIS IS REAL IF` discriminators trips** (`docs/expected_alarms.md` §3a) —
+>    the broker's own books not balancing, the gap not matching `used margin` read at the same
+>    instant, the local-vs-opening difference not matching booked P&L, a non-empty `human_orders`,
+>    an out-of-hours fire with a non-zero `actual`, or a `kill_switch_state` that is not `INACTIVE`
+>    today.
+> 2. **The alert appears from an ESCALATING source** (`fund_manager`, `fund_manager_self_check`,
+>    `fund_manager_bucket_overflow`) — ⛔ **that is a different event entirely and CAN kill.**
+> 3. **`_ESCALATING_SOURCES` is modified** — the acceptance rests on the reconciler being outside it.
+> 4. ⭐ **The delivery configuration surface sets a tolerance** (§A-DEC-3 order item 5) — **at which
+>    point this stops being a closed thread and becomes a LIVE DESIGN INPUT.**
+
+⚠️ **Recorded because an accepted risk with no reopen condition is not accepted — it is abandoned.**
+📌 Registered: `MASTER_PENDING` **§B#7** (fourth two-pipeline coupling member, and the first that did
+not wait to be predicted) · **§B#5** (DH1's third instance, first with real delivery on the book).
+Worksheet: `docs/audit/ADDENDUM_capital_drift_05-Aug-2026.md`.
