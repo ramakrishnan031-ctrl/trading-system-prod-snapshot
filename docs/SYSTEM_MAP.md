@@ -33,7 +33,7 @@
 **Live mechanisms / gates:**
 - `Circuit-band placeability gate` (NOCIL fix) · `MIS Learned Blocklist` (NO_FILL Mech-B)
 - `Control Tower` — VM operations monitoring
-- `Delivery (Slice 2.5)` — BUILT / DORMANT / awaiting T2 validation (triple-locked)
+- `Delivery (Slice 2.5)` — ~~BUILT / DORMANT / awaiting T2 validation (triple-locked)~~ ⭐ **UPDATED 05-Aug-2026: `<DEPLOYED — ENTRY PATH VERIFIED LIVE 05-Aug; EXIT PATH UNVERIFIED>`. The three locks are OFF and delivery has traded.**
 
 **Open work / debt:**
 - `Known Duplicates / Issues` · `PENDING CLEANUP` · `Deferred items board`
@@ -1186,11 +1186,56 @@ Everything else is closed / deployed / dormant / awaiting normal production evid
 | 1 | **S&R V1 calibration** | DEFERRED — collecting (V1 shadow LIVE; Phase A/B dormant) | **DATA-gated**: ~50 FILLED + ~8–10 BIR-FILLED W/L (checkpoint ≈14-Jul; verdict ~3–4 wk) | zone-accuracy review (watch TSFINV too-wide-zone) + BIR W/L → PASS→Phase A per `SR_V2_MERGE_VALIDATION_RUNBOOK` / RECALIBRATE→zone params only. Backfill cron `sr_detector_backfill`@15:58 feeds it nightly. Memory `sr_v1_calibration_deferred_30jun` |
 | 2 | **Delivery Slice 2.5 (T2)** | **DEFERRED (02-Jul attempt — live NEVER run; proof script bit-rotted)** | **off-market whole-script repair first** (never run since the API evolved) | Pre-checks PASSED 02-Jul (deploy both fixes live HEAD 59f83b5; delivery-lock gate GREEN — T2 adapter `delivery_enabled=True`, `force_intraday_only` off the direct path, reconciler CHECK2 non-destructive for the untracked CNC). Drift in `t2_cnc_gtt_realtest.py`: L71 `core.`→`broker.order_state_machine`, L83 `RateLimiter(cfg.broker_limits.rate_limits)`→`RateLimiter(cfg.broker_limits)`, L319 `store=None`→wire store (else NO `gtt_state` row = lifecycle unvalidatable). REPAIR whole script + full static audit of construction/live-order path vs main.py (a dry-run can't exercise the live path) → tests → clean dry-run → commit → Rama pushes OFF-MARKET → run COMPLETE T2 (mid-session, not open 30 min / not after 14:45, flat book). Parked branch `fix-t2-import-02jul`@`b826ae0` (L71 only, unpushed, superseded by the full repair). Memory `t2_attempt_02jul` / `delivery_slice25_status_30jun` |
 
-## Delivery (Slice 2.5) — STATUS: BUILT / DORMANT / AWAITING_T2_VALIDATION (30-Jun)
-The CNC/delivery lifecycle is **built + deployed to main but DORMANT and never exercised**
+## Delivery (Slice 2.5) — ~~STATUS: BUILT / DORMANT / AWAITING_T2_VALIDATION (30-Jun)~~
+## ⭐⭐ STATUS **UPDATED 05-Aug-2026: `<DEPLOYED — ENTRY PATH VERIFIED LIVE 05-Aug; EXIT PATH UNVERIFIED>`**
+
+> ### 🔄 CURRENCY — read this before the 30-Jun text below, which is **superseded, not deleted**
+> ⛔⛔ **THE THREE LOCKS ARE OFF AND DELIVERY HAS TRADED.** Flags pushed **04-Aug 19:08:09** (`0197923`)
+> and first **LOADED at the 05-Aug 08:15 boot**: `force_intraday_only: true→false` ·
+> **`trade_type: INTRADAY→BOTH`** · `delivery_enabled: false→true`. *(⛔ **NOT**
+> `conditional_allocation_enabled` — measured a behavioural no-op under `BOTH`; it remains `false` and
+> Rama's call on it remains open.)* The boot published `delivery_lock.status → cnc_orders_possible:
+> true` and `strategy_control.summary → will_trade_count: 15`, including all three positional
+> strategies.
+>
+> ⛔⛔ **USE THE COMPOUND LABEL. DO NOT WRITE "LIVE".** A filled CNC position proves **screening ·
+> sizing · affordability · placement · FILL** — the whole ENTRY path. ⛔ **The GTT TRIGGER, T+1
+> HANDLING and the CARRY are UNPROVEN**, and the 05-Aug evening operator card
+> (`docs/audit/EVENING_OPERATOR_CARD_05-Aug-2026.md`) exists precisely because of that. **`will_trade`
+> is a permission, not an order; a fill is not an exit.**
+>
+> ⚠️ **OPERATOR-REPORTED, ⛔ NOT MEASURED — and no count or value is written here on purpose.** The
+> held-position figures have never been read from the DB or the broker by this bridge; the PC's DB copy
+> is two days stale and no VM read has occurred. ⛔ **Do not copy a position count or a rupee value
+> into this map from conversation.** Tonight's card is what measures it.
+>
+> ⭐ **WHY THE STRUCK TEXT STAYS LEGIBLE HERE, WHEN THE OPERATOR CARD FORBIDS STRIKETHROUGH — the two
+> rules are different and this is the distinction:** **§G4 (supersede-but-keep-legible) governs
+> REGISTER-CLASS documents, which are read for history. NOBODY EXECUTES `SYSTEM_MAP.md`, so legible
+> history is safe here.** An operator CHECKLIST is the opposite: a struck-out command is a command
+> someone might still run, so that document is revised cleanly and its history lives in a revision
+> table. ⛔ **Do not apply the checklist rule to this file, or the map loses its history.**
+>
+> 🔴 **WHY THIS WAS CORRECTED THE SAME DAY, recorded so the urgency is understood:** `campaign_practices.md`
+> **§M8** (written 05-Aug) makes reading this file **mandatory pre-reading for every future session**.
+> ⇒ **A rule that mandates reading a document raises the cost of that document being wrong.** Before
+> M8 a stale entry here was a trap someone might walk into; after M8 it is a trap **every session walks
+> into first, by rule.** Shipping M8 while leaving this section stale would have armed the exact
+> failure M8 exists to prevent — with the campaign's own authority behind it.
+>
+> ⛔ **SCOPE OF THIS EDIT, stated so the sweep is falsifiable:** only **CURRENT-STATE** delivery claims
+> were changed — this section and the INDEX line at the top. **Width:** a sweep of this file for
+> `DORMANT|never exercised|delivery_enabled=false|trade_type=INTRADAY|force_intraday_only=true|gtt_state = 0 rows`
+> returns hits at **`:36`** (INDEX — fixed), **this section** (fixed), and **~14 lines in the
+> Changelog and dated banners** (`:162`, `:1213`, `:1244`, `:1255-1271`, `:1289`) — ⛔ **those are
+> DATED HISTORY and were deliberately NOT touched: they were true when written, and rewriting them
+> would destroy the record.** *(Other `dormant` hits — `:1132` MIS blocklist, `:1183-1186` S&R
+> phases — are unrelated to delivery and out of scope.)*
+
+~~The CNC/delivery lifecycle is **built + deployed to main but DORMANT and never exercised**
 (`gtt_state` = 0 rows ever; flags OFF: `delivery_enabled=false`, `conditional_allocation_enabled=false`,
-`trade_type=INTRADAY`, `force_intraday_only=true`). Architecture validated (30-Jun read-only assessment),
-**NOT production-proven**. Components: P1 GTT placer (`orders/cnc_gtt.py`), P2 durable `gtt_state` v36 +
+`trade_type=INTRADAY`, `force_intraday_only=true`).~~ Architecture validated (30-Jun read-only assessment),
+~~**NOT production-proven**~~ **ENTRY path now production-proven; EXIT path not.** Components: P1 GTT placer (`orders/cnc_gtt.py`), P2 durable `gtt_state` v36 +
 monitor (`orders/cnc_gtt_monitor.py`) wired into the reconciler, FIX-183 orphan-GTT adoption, P3 delivery
 caps + conditional capital (`risk_engine`/`fund_manager`), P4 trade_type gate. Square-off paths exempt CNC
 in LIVE (`eod_squareoff` MIS/CO-only; `order_monitor` 15:15 delegates to EOD; reconciler skips ACTIVE-gtt_state trades).
@@ -1198,7 +1243,34 @@ in LIVE (`eod_squareoff` MIS/CO-only; `order_monitor` 15:15 delegates to EOD; re
 REAL money — direct-API, does NOT flip live flags). **REOPEN: 02-Jul ATTEMPTED → DEFERRED** (proof script bit-rotted; needs an off-market whole-script repair — see deferred-board row 2 above + memory `t2_attempt_02jul`. The original 1-Jul reopen prereq was the
 ensure-flat safety fix to the proof script — the `finally` must square the held position, not just delete
 the GTT). Then: optional paper rehearsal → supervised ~11:30 IST run → verify PASS → harden/defer the §4
-edges → paper-carry → supervised live-carry pilot → mark CLOSED. **Residual risks before go-live:** config foot-gun
+edges → paper-carry → supervised live-carry pilot → mark CLOSED.
+
+> ### ⭐ THE SEQUENCE ABOVE IS **SUPERSEDED AND KEPT** (05-Aug, §G4) — ⛔ do not read it as the current plan
+> **`Next gate = T2` is DISCHARGED:** T2 was **armed live 29-Jul** (5 CNC held overnight, broker == system
+> on every field) and its basket is **fully closed** (holdings 0 / GTTs 0 / positions 0, re-confirmed
+> 04-Aug). The flags then flipped 04-Aug and delivery traded 05-Aug. ⇒ **the ladder above ran; what
+> remains of it is the CARRY PILOT, which is separately gated and NOT authorised.**
+> ⛔⛔ **AND `scripts/t2_cnc_gtt_realtest.py` PLACES REAL ORDERS WITH REAL MONEY** (its own header says
+> so; `place_order` BUY/SELL + `delete_gtt`). **It is NOT a GTT lister and must never be put on an
+> operator card as one.** ⚠️ **There is no read-only GTT-listing script in this repo** — width:
+> `git ls-files | grep -i gtt` → 10 files, one script, and that is it.
+>
+> ### 🔴 THE RESIDUAL RISKS ARE NOW **LIVE**, NOT "BEFORE GO-LIVE" — and one of them is tonight's gate
+> **(1) ⭐⭐ THE GTT-LINKAGE-LOSS RECONCILER EDGE IS THE 05-Aug EVENING GATE.** *"Carried CNC mis-closed
+> if both `gtt_state` row + broker GTT vanish"* — **named here on 30-Jun, five weeks before it mattered.**
+> Measured 05-Aug: CHECK1's skip is keyed on an **`ACTIVE` `gtt_state` row whose `trade_id` equals the
+> trade's** (`order_reconciler.py:855,858,871-872`), so a broker-side GTT with no matching row does
+> **not** skip; on T+1 the holding leaves `positions()` and CHECK1 fires MANUAL_CLOSE, **cancelling
+> broker orders and releasing capital on shares still held.** ⛔ **It does NOT place a sell.** Full
+> measurement: `docs/audit/check1_product_skip_step1_05aug2026.md`.
+> **(2)** the `conditional_allocation_enabled` foot-gun — **measured a behavioural no-op under
+> `trade_type: BOTH`**, so the 70%-stranded premise assumes a delivery-ONLY book, which is not what is
+> deployed. **Rama's call remains open; it is not urgent.**
+> **(3)** paper-mode EOD mis-square and **(4)** DDPI broker-account-only: **unchanged.** ⚠️ **(3) is the
+> V1 rule in miniature — paper nets by SYMBOL, live Kite per (symbol, product) ⇒ a paper drill of any
+> product-keyed behaviour is vacuously green.**
+
+**Residual risks ~~before go-live~~ (see the block above — they are now LIVE):** config foot-gun
 (enable delivery without `conditional_allocation_enabled=true` → 70% capital stranded), GTT-linkage-loss
 reconciler edge (carried CNC mis-closed if both gtt_state row + broker GTT vanish), paper-mode EOD mis-square
 (paper adapter mislabels CNC as MIS), DDPI is broker-account-only. Detail: memory `delivery_slice25_status_30jun`.
