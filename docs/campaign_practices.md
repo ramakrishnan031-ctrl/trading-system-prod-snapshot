@@ -458,6 +458,59 @@ currency block, the composite-verdict finding · `docs/SYSTEM_MAP.md` BATCH-4 ba
 
 ---
 
+### M9 · ⭐⭐ LABEL EVERY CLAIM WITH ITS EVIDENCE CLASS — **(P) · (S) · (I)**
+
+> **Every factual claim carries one of three classes, and the class is written next to the claim:**
+> - **(P) PRODUCTION EVIDENCE** — *it happened.* A row, a log line, an artifact you saw.
+> - **(S) SOURCE EVIDENCE** — *the code says so.* A **SHA-pinned** `file:line` cite.
+> - **(I) ARCHITECTURAL INFERENCE** — *it follows from the code, but has never been observed.*
+>
+> ⛔ **The three fail differently and must NEVER be mixed inside one sentence.**
+
+**How each fails — which is the whole reason the labels are not decoration:**
+| class | how it goes wrong | what protects it |
+|---|---|---|
+| **(P)** | the artifact is misread, or is an *absence* that was never wide enough to be one | §M1 width · §M6 · `feedback_absence_needs_wide_check` |
+| **(S)** | **the cite ROTS** — line numbers hold only at their measured SHA (§M3) | pin the SHA; re-measure at HEAD |
+| **(I)** | ⭐⭐ **it is INDISTINGUISHABLE from (P) once written into prose**, and it is the class most likely to be *both* the strongest-sounding and the least verified | say the words *"never observed"* in the same sentence |
+
+**Adopted 05-Aug-2026 on the delivery flip day, which supplied all three and several near-misses:**
+
+- **(I) — and it is the day's biggest finding, in its weakest class.** *"Without FIX-133's floor the
+  system would have ordered zero and no delivery trade would have happened at all"*
+  (`capital/position_sizer.py:527-530`: `raw_qty 1 × 0.5` floors to **0**, `max(1, …)` lifts it back).
+  ⭐⭐ **TRUE BY ARITHMETIC AND NEVER OBSERVED — no run has ever exercised the counterfactual.**
+  ⛔ **Both facts must travel together**, or a later reader takes an inference for a measurement and
+  removes the floor as a rounding nicety. **Its failure mode is silence** (*"no signals qualified
+  today"*), which is precisely why the class label has to survive the retelling.
+- **(S) — the cost model branches on `product`** at `broker/cost_calculator.py:169-174`, `:190-198`,
+  `:224-228`. Source, not observation.
+- **(P) — the same claim then earned a second class independently:** ASKAUTOLTD's recorded costs of
+  **₹1.53** reproduce from the CNC rate table to the paisa (MIS rates give ≈ ₹0.63). ⭐ **(S) said the
+  branch exists; only (P) says it RAN.** Two classes, two different facts, one conclusion.
+- **(P)/(I) confusion caught live:** `gtt_state` reads **`CLEANED`**. That the row was transitioned
+  is **(P)**. That *"`cnc_gtt_monitor` observed the trigger"* would be **(I)** — ⛔ **and it is not
+  established**; only the shutdown census can raise it to (P).
+- **⚠️ A NEAR-MISS, recorded because it is the cheapest instance to learn from:** a repo-wide grep
+  run with `files_with_matches` **and a 15-file display limit** omitted `capital/fund_manager.py`,
+  and was one step from being written up as **(S)** *"the module producing the day figure has no
+  mark-to-market concept."* **It has 19 such hits.** ⇒ **a truncated list is not evidence of any
+  class at all** — it was about to be promoted straight from *display artifact* to *source fact*.
+
+⭐ **Why this earns a rule rather than a note:** the campaign's recurring failure is a zero that
+means *unexercised* being read as a zero that means *passed*. **(P)/(S)/(I) is that same distinction
+generalised from zeros to every claim** — and unlike *"be precise"*, it is checkable: *"which class
+is this, and does the sentence say so?"* is answerable yes or no.
+
+⛔ **Held back deliberately, one instance each and their triggers already written: the
+three-identity-fields rule and the conflict taxonomy.** ⭐ **A rule promoted on one instance is a
+generalisation, not a practice.**
+
+(Records: `docs/audit/HANDOFF_05-Aug-EVENING.md` §0b–§6 · `capital/position_sizer.py:527-530` ·
+`broker/cost_calculator.py:169-228` · `capital/fund_manager.py:386-392`, `:1809-1847`.)
+
+---
+
 ## V. VALIDATION
 
 ### V1 · PAPER CANNOT VALIDATE PRODUCT SEMANTICS
