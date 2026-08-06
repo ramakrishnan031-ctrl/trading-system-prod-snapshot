@@ -4,6 +4,16 @@
 ⛔ **MEASUREMENT + CLASSIFICATION ONLY. No design · no proposed value · no proposed key · nothing changed.**
 Citations at deployed SHA `0197923`. Production read ~15:2x IST.
 
+> # ⛔⛔ STATUS: **WORKING DOCUMENT. NOT AN AUTHORITY. NOT AN INVENTORY.**
+> **This file is an INPUT to item 4, not a control inventory and not a third one.** It is keyed on
+> the dotted config key — **the same key as inventory #2** — which is precisely why it must say so.
+> ⛔ **It does not extend, annotate, supersede or reconcile either existing inventory**, and nothing
+> here may be cited as an authority for a control's scope or status.
+> 🔴 **Item 4's authority ruling is Rama's and has not been given.** Until it is, this document is
+> evidence *about* item 4, not a performance *of* it.
+> ⭐ **Recorded here because a working document that does not declare itself becomes an authority by
+> being useful.**
+
 > ## 🔴 HEADLINE — **THE ISOLATION IS BETTER THAN ASSUMED IN ONE PLACE AND WORSE IN ANOTHER**
 > ✅ **Rama's own example is REFUTED by the source.** *"Max trades per day = 6 is consumed by BOTH
 > pipelines"* — **it is not.** Both count caps are a clean `if/else` on the bucket: a delivery entry
