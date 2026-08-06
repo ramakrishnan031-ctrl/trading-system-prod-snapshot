@@ -6,9 +6,14 @@
 > recorded before, it is a decision.* The same ordering rule applies to a gate that **passes**:
 > the basis is written first, and the outcome is appended afterwards.
 >
-> ## 🔴 **HEADLINE — THE GATE DOES NOT REFUSE. THERE IS NOTHING TO OVERRIDE.**
+> ## 🔴 **HEADLINE 1 — THE GATE DOES NOT REFUSE. THERE IS NOTHING TO OVERRIDE.**
 > Re-measured fresh at **19:08:44 IST**: **all five pre-flight checks PASS** under the corrected
 > rule-based gate. ⇒ **No override is required, and none is being taken.** See §2.
+>
+> ## 🔴🔴 **HEADLINE 2 — NOT STOPPING COSTS A TRADING DAY. MEASURED, NOT ARGUED.**
+> **Today's 15:15 breaker FIRED. The kill is ACTIVE right now. Both clearers are BOOT-ONLY.**
+> ⇒ **no stop ⇒ no boot ⇒ Friday opens in `SOFT_KILL` ⇒ NO NEW ENTRIES ALL DAY FRIDAY.** See §4b.
+> ⭐ **This is the residue of §4 arriving as a consequence — and it is the decisive argument.**
 
 **Clocks (`Get-Date` / VM `date`):** PC **2026-08-06 19:03:25 IST Thursday** · VM **19:08:44 IST**.
 **Ahead-count:** `git rev-list --count origin/main..main` → **91**, run 19:03:25 IST.
@@ -125,6 +130,66 @@ for the date-scoping. ⇒ *"nobody knows"* was **too strong**; the counters were
 direction"* but **"the counters roll correctly; what is boot-bound simply never re-runs — a stale
 kill that cannot self-clear, and a stale capital seed."** ⛔ **This does not make not-stopping safe
 — it makes the cost NAMEABLE, which is what §0 asked for.**
+
+---
+
+## §4b — 🔴🔴 THE RESIDUE HAS A PRICE: **NOT STOPPING COSTS FRIDAY**
+
+**The chain, every link measured. ⛔ No inference carries it.**
+
+| # | link | evidence |
+|---|---|---|
+| 1 | **today's 15:15 breaker FIRED** | **(P)** `15:15:01.115` `order_monitor.force_close_triggered` → `KillSwitchActivated: INACTIVE -> SOFT_KILL reason=circuit_breaker_force_close_15:15` |
+| 2 | **the kill is ACTIVE right now** | **(P)** `kill_switch_state` id=1 → `SOFT_KILL │ circuit_breaker_force_close_15:15 │ 2026-08-06T15:15:01.115826+05:30 │ order_monitor` |
+| 3 | **both clearers are BOOT-ONLY** | **(S)** repo-wide, all file types, no filter: `clear_stale_state` → **one** production site `main.py:1914`; `auto_clear_scheduled_kill` → **one**, `main.py:1919`. ⭐ Every other hit is tests, docs, or a comment/log string in `deploy/token_watcher.sh` |
+| 4 | **no stop ⇒ no boot** | **(P)** service `active` at **19:08:44**, long past the 17:35 self-exit — the carried delivery position defers it (A6, already measured) |
+| 5 | ⇒ **Friday opens in `SOFT_KILL`** | **no new entries all day Friday** |
+
+> ### ⭐⭐ **AND THE PROOF IS IN TODAY'S OWN LOG — the same event, one day earlier**
+> ```
+> 2026-08-06T08:15:02.876 WARNING kill_switch: "Kill switch auto-cleared: prior SOFT_KILL from
+> 2026-08-05 (reason=circuit_breaker_force_close_15:15 by=order_monitor) -- new day 2026-08-06
+> starts clean (HEADLESS)"
+> ```
+> ⇒ **Yesterday's 15:15 kill — byte-identical reason string — was cleared by TODAY'S 08:15 boot.**
+> 🏷️ **This is not a mechanism I inferred from source; it is the mechanism OBSERVED IN PRODUCTION,
+> on the same reason, one day before.**
+
+⭐ **AND IT DISPOSES OF THE OBVIOUS OBJECTION — *"we hold open positions, so it wouldn't clear
+anyway."*** **ATULAUTO was OPEN at 08:15:02.876 and the prior-day kill cleared regardless.**
+**(S)** why: a **prior-day** kill is handled by `clear_stale_state`, which **ignores open
+positions**; the no-open-positions condition belongs to `auto_clear_scheduled_kill`, the **same-day
+restart** path. Friday's boot is a new day ⇒ `:1914` fires first. ⇒ ✅ **Friday's boot WOULD clear
+it. There just isn't one without a stop.**
+
+⇒ 🏷️ **VERDICT: the trading-day argument is LIVE, not speculative. Not stopping costs Friday's
+entries.** ⛔ **The stop remains Rama's to authorise and Rama's to run** — this is a cost, not an
+authorisation.
+
+---
+
+## §4c — THE EVIDENCE SNAPSHOT *(ChatGPT's #4, adopted)*
+
+⭐ **Record the evidence WITH the decision, so a later review audits the snapshot rather than
+reconstructing it.** Frozen at **19:08:44 IST, 06-Aug-2026**:
+
+| view | value |
+|---|---|
+| service | `active` (`ExecMainStart` 08:15:02) |
+| broker `positions()` | **2** — stamped 19:08:38 |
+| broker `holdings()` | **0** — stamped 15:23:40 |
+| non-terminal trades | **2** — `trd_e66ee17b…│ATULAUTO│OPEN`, `trd_010f8e21…│DIFFNKG│OPEN` |
+| ACTIVE `gtt_state` | **2** — `330657774→ATULAUTO`, `330658430→DIFFNKG`, both `trade_id`-matched |
+| non-terminal orders | **0** |
+| kill switch | `SOFT_KILL │ circuit_breaker_force_close_15:15 │ 15:15:01.115826 │ order_monitor` |
+| reservations, un-released | ATULAUTO **₹587.40** `ee9af41eae554c35` · DIFFNKG **₹446.10** `0184b66d4c214416` |
+| ahead / `origin/main` | **92** / `0197923` unmoved |
+
+> ### ⚠️⚠️ **THE CAVEAT THAT MUST TRAVEL WITH THIS SNAPSHOT — ⛔ DO NOT READ THE EQUALITY AS HEALTH**
+> **`2 positions == 2 rows` is arithmetically clean, but it holds BECAUSE THE PHANTOM EXISTS ON BOTH
+> SIDES** — a phantom broker position row *and* a phantom `OPEN` trade row. ⭐⭐ **An equality that
+> holds for the wrong reason is exactly the shape a snapshot must capture**, or the next reader
+> reads a matched count as a healthy book. 🏷️ **One of these two positions does not exist.**
 
 ---
 

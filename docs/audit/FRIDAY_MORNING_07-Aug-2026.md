@@ -10,8 +10,20 @@
 
 ## 1. 🔴 THE MEASUREMENT OF THE WEEK — AND IT IS FREE
 
-**At the first `cnc_gtt_monitor` cycle after boot: does the CNC `−1` positions row for ATULAUTO
-still exist?**
+**At the first `cnc_gtt_monitor` cycle after boot — compare ALL THREE VIEWS BEFORE any corrective
+action.** ⭐ The `−1` row is **one input**, not the question; the **convergence** is the question.
+
+| view | read it from | Friday's value |
+|---|---|---|
+| **① BROKER TRUTH** | `get_positions` / `get_holdings` in today's log | |
+| **② RESERVATION REPLAY** | `fm_ledger` by `reservation_id` (see §2) | |
+| **③ INTERNAL STATE** | `trades.status` + `gtt_state.status` | |
+
+- ✅ **ALL THREE AGREE ⇒ the replay is EXPECTED BEHAVIOUR.** Record and move on.
+- 🔴 **THEY DIVERGE ⇒ DIAGNOSE BEFORE REMEDIATING.** ⛔ **No corrective action on a surprising
+  reading** — the reflex to "fix" a divergence is exactly what this ordering forbids.
+
+**The ATULAUTO sub-question, as one input into ①:**
 
 | outcome | mechanism | what follows |
 |---|---|---|
@@ -20,6 +32,8 @@ still exist?**
 
 ⭐⭐ **It settles a broker-behaviour fact nobody could establish from source, and it decides how
 urgent F6's build is.** ⛔ **Record it either way. DO NOT act on it.**
+⚠️ **And do not read a matched count as health:** on 06-Aug `2 positions == 2 rows` held **because
+the phantom exists on BOTH sides.** **An equality can be arithmetically clean and still wrong.**
 
 **Baseline to compare against (P, measured 06-Aug 19:08:38):** `get_positions` → **`2 positions`**;
 `get_holdings` → **`0 holdings`** (15:23:40). Both trades still `OPEN`, both `gtt_state` `ACTIVE`.
@@ -51,9 +65,15 @@ grep -E "cnc_gtt_monitor|healthy:ATULAUTO" logs/system_$(date +%F).log | head -2
 entirely, so **no stale P&L state exists to go wrong.**
 
 ⛔ **What IS boot-bound simply never re-runs — check these two, in this order:**
-1. 🔴 **The kill switch did not auto-clear** (`main.py:1914`, boot-only). A prior-day kill is still
-   sitting there with nothing to clear it. ⭐ Direction is **restrictive — entries blocked**, i.e.
-   fail-safe, not permissive. **Check it before reading "no trades today" as anything else.**
+1. 🔴🔴 **THE KILL IS STILL `SOFT_KILL` AND THERE ARE NO ENTRIES TODAY.** Not a risk — a
+   **certainty**, if there was no boot. **(P) 06-Aug 15:15:01.115** the breaker fired
+   (`circuit_breaker_force_close_15:15`, `order_monitor`) and **(S)** *both* clearers are
+   **boot-only** (`main.py:1914` / `:1919`). ⭐ **Direction is RESTRICTIVE — entries blocked =
+   fail-safe, ⛔ not permissive.** ⇒ **Read "no trades today" as THIS, not as a signal drought.**
+   ✅ **If the boot DID happen, expect the mirror of today's 08:15 line** — *"Kill switch
+   auto-cleared: prior SOFT_KILL from 2026-08-06 … new day starts clean (HEADLESS)"* — and
+   ⭐ **it clears even with positions open** (`clear_stale_state` ignores them; the no-open-position
+   condition belongs to the *same-day* path). **Confirm that line before anything else.**
 2. **The capital seed is Thursday's** (`initialize()`, FM13 *"once at startup"*) — never re-seeded
    from `broker.net`. ⚠️ The SU6 holiday guard (`main.py:1754`) is also stale but **inert today**
    (Friday is a trading day).
