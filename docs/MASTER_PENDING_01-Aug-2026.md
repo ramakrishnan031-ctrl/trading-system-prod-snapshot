@@ -15,28 +15,30 @@ or the live gate buries the fix campaign.
 **Clock-read:** 01-Aug-2026, **Saturday**, session start **14:44 IST**. ~~Deployed SHA
 `297b587`; `main` **21 ahead**, all docs-only, unpushed by design.~~
 
-> # ▶️▶️ **RESUME — WEDNESDAY 05-Aug CLOSED AT 23:4x. ⭐ WRITTEN FOR A FRESH SESSION AT 08:30 WITH NO MEMORY OF LAST NIGHT.**
-> **N = 233** *(231 → 232 A6, → 233 A7; A1 discharged to §D — reconciliation in §1)*. ⛔ **DEPLOYED SHA `0197923`, UNMOVED. NOTHING FROM 05-Aug IS DEPLOYED.**
-> **AHEAD-COUNT — ⛔ BY COMMAND, NEVER FROM PROSE:** `git rev-list --count origin/main..main` → **77 at 23:37:35 IST**, and **that number is already stale** *(this block's own commit increments it — the fixed point §A5 names)*. ⭐ **RE-RUN IT. Its authority is the memory ledger's top block, not this line.**
+> # ▶️▶️ **RESUME — ~~WEDNESDAY 05-Aug CLOSED AT 23:4x~~ THURSDAY 06-Aug CLOSED AT 22:2x. ⭐ WRITTEN FOR A FRESH SESSION AT 08:30 WITH NO MEMORY OF LAST NIGHT.**
+> **N = 233** *(231 → 232 A6, → 233 A7; A1 discharged to §D — reconciliation in §1)*. ⛔ **N UNCHANGED 06-Aug on BOTH axes — but the ROW-CANDIDATE SET is now SIX; if all are admitted N → 239. ⛔ RAMA'S RULING, not the thread's.** *(06-Aug evening addendum, below the close-out.)*
+> 🚀 **~~DEPLOYED SHA `0197923`, UNMOVED. NOTHING FROM 05-Aug IS DEPLOYED.~~** ⇒ ✅ **SUPERSEDED 06-Aug 21:4x–22:2x: PUSHED `0197923 → 26b6ecb` (100 commits). `ahead 0`; PC == VM VERIFIED BY MD5, ⛔ not by `ahead 0`.** ⭐ **The behavioural surface was FOUR non-docs files and only TWO Python — `c5c1926` (`main.py`, proven **AST-IDENTICAL**) and `0087d3a`** — and **both first execute at FRIDAY 08:15 on an ordinary boot.**
+> **AHEAD-COUNT — ⛔ BY COMMAND, NEVER FROM PROSE:** `git rev-list --count origin/main..main` → **0 at 22:27:13 IST 06-Aug** — ⭐ **the first zero of this campaign.** ⚠️ **It goes stale the moment anything is committed** *(the fixed point §A5 names)*. ⭐ **RE-RUN IT. Its authority is the memory ledger's top block, not this line.**
 >
-> ## 🔴 THE STATE, COLD — FIVE FACTS AND ONE OWED MEASUREMENT
-> **1.** 🌙 **THE SERVICE IS DOWN, DELIBERATELY AND CLEANLY.** Stopped **22:46:36** on Rama's explicit GO: `inactive · dead · Result=success · ExecMainStatus=0`, `NRestarts=0`, **did not return after 142 s**. ⇒ **Thursday's 08:15 boot is the ORDINARY path and Thursday is BRANCH A.** Record: `docs/audit/STOP_PROCEDURE_05-Aug-2026.md` §(i).
-> **2.** 🏁 **THE FACT WITH NO PRIOR INSTANCE:** `_shutdown()` ran to completion **with a real CNC delivery position held** — squared off nothing, cancelled nothing, released no capital, closed no position. ⭐ **The safety argument was read from source all evening; at 22:46:36 it held in production.**
-> **3.** **Delivery label = `<ROUND TRIP VERIFIED 05-Aug; CLEAN SHUTDOWN WITH POSITION HELD VERIFIED 05-Aug; T+1 CARRY UNVERIFIED>`.** ⛔ **Nothing wider.**
-> **4.** ✅ **The census was RECOVERED — 55 lines, `mismatches=0`** (it was ABSENT all evening because a carried position defers `eod_self_exit`). ⛔ **`acted` counts rows EXAMINED, not actions TAKEN** ⇒ **artifact recovered, question NOT answered.**
-> **5.** ✅ **The 08:15 token refresh is PC-INDEPENDENT** (S, width stated) — Rama's PC is off **07:55–08:25** and that does **not** affect the boot. ⚠️ **Mechanism verified, OBSERVATION not: Thursday is the first run with the PC off** ⇒ **check the token file first at 08:25** (a failed refresh is SILENT).
+> ## 🔴 THE STATE, COLD — ⭐ **REWRITTEN 06-Aug 22:2x. The five facts below are FRIDAY's, not Wednesday's.**
+> **1.** 🌙 **THE SERVICE IS DOWN, DELIBERATELY AND CLEANLY — stopped THURSDAY 20:32:19** on Rama's authorisation in his own words: `inactive · dead · Result=success · ExecMainStatus=0 · NRestarts=0`, still down at 104 s, and `token_watcher.log`'s last line is still **08:15:02** ⇒ **no start attempt.** ⇒ **FRIDAY's 08:15 boot is the ORDINARY path.** Record: `docs/audit/STOP_PROCEDURE_06-Aug-2026.md`.
+> **2.** 🏁 **CLEAN IS *MEASURED*, NOT ASSUMED — ⛔ `ActiveState` ALONE IS NOT THE CHECK.** Shutdown window = **100 lines, ALL `INFO`** (zero ERROR/CRITICAL/WARNING) · `gtt_state` **unchanged** · both trades still `OPEN` with closure fields **empty** · **NO `RELEASE` row** · nothing written after 20:32. ⇒ **`_shutdown()` completed with a real CNC position AND A PHANTOM held — 2nd time ever, 1st with a phantom.**
+> **3.** 🔴 **THE T+1 CARRY RAN END TO END — AND THE EXIT PATH IS BROKEN.** `cnc_gtt_monitor.py:464` `abs()` ⇒ `held=1` ⇒ the trade **never closes** and a GTT **respawns**. ⭐ **The book holds TWO positions and ONE OF THEM DOES NOT EXIST:** DIFFNKG = a **real** carry (`330658430 → trd_010f8e21…`), ATULAUTO = a **PHANTOM** (`330657774 → trd_e66ee17b…`). ⛔ **DO NOT MANUALLY BUY ATULAUTO while that GTT rests** — the system cannot re-enter, so a manual buy is the only path by which the stale sell fires on real shares.
+> **4.** 💰 **AND THE PHANTOM'S LOSS IS MISSING FROM THE DAY'S BOOKS.** Reported **−7.20 gross**; real **≈−19.10** ⇒ ⭐ **the error is 165 % of the reported figure**, and it feeds the daily-loss limit, the 483-trade expectancy corpus and strategy win-rate. ⛔ **Not a display problem.** *(`docs/audit/eod_email_findings_06aug2026.md`.)*
+> **5.** 🔑 **THE KILL IS `SOFT_KILL` (`circuit_breaker_force_close_15:15`) AND FRIDAY'S BOOT CLEARS IT.** **(S)** both clearers are **boot-only** (`main.py:1914`/`:1919`) ⇒ **no boot ⇒ no entries all day**; ✅ **the boot DOES clear it and it ignores open positions — proven by Thursday's own `08:15:02.876` auto-clear line.** ⇒ 🌙 **A MANUAL STOP IS NOW REQUIRED EVERY TRADING NIGHT UNTIL F6 LANDS** — ⚠️ **a missed FRIDAY stop costs MONDAY**, silently, presenting as *"no signals today"*.
 >
-> ## 🔴🔴 THE ONE THING OWED THURSDAY — **THE T+1 CARRY, THREE READINGS**
-> ➡️ **START AT `docs/audit/THURSDAY_MORNING_06-Aug-2026.md`** → `THURSDAY_CONTINGENCY_06-Aug-2026.md` → **BRANCH A CONTINUED**.
-> | when | what |
+> ## 🔴🔴 THE ONE THING OWED FRIDAY — **THE FREE MEASUREMENT, AND IT DECIDES AN OPERATIONAL BURDEN**
+> ➡️ **START AT `docs/audit/FRIDAY_MORNING_07-Aug-2026.md`** — ⛔ one screen, and **the ATULAUTO DO-NOT is at the very top.**
+> ⭐⭐ **AT THE FIRST MONITOR CYCLE AFTER BOOT, COMPARE ALL THREE VIEWS BEFORE ANY CORRECTIVE ACTION:** **broker truth · reservation replay · internal state.** ✅ **All three agree ⇒ expected.** 🔴 **They DIVERGE ⇒ DIAGNOSE BEFORE REMEDIATING.** ⛔ The `−1` row is **one input**, not the question.
+> | outcome | ⇒ |
 > |---|---|
-> | **08:30** | the boot · the kill actually cleared · **step 3 the carry** · **step 4 validates it** · the opening balance · the boot seed |
-> | **10:45** | mid-session: has anything moved the trade, the GTT row, or the reserved capital |
-> | **17:15** | end-of-day: the carry's final state before the second overnight |
-> ⭐⭐ **STEP 3 IS THE MEASUREMENT OF THE WEEK AND IT SITS BEHIND TWO STEPS THAT WILL BOTH LOOK FINE.** Its expectation and Wednesday's baseline were written **before** the fact, so it is scoreable either way. ⛔ **If step 4 says T+1 has not happened, step 3 measured NOTHING — say that; do not record a pass.**
-> 🔇 **AND A PREDICTION OF SILENCE:** the capital-drift CRITICAL should **not fire at all** Thursday. **If it fires without a new CNC purchase, the delivery-only characterisation is WRONG** — a real finding, ⛔ not "the usual one".
+> | ATULAUTO's CNC `−1` row **GONE** | `held = 0` ⇒ branch 4 fires ⇒ trade closes · **₹587.40 released** · GTT deleted · slot freed · ⭐ **the nightly-stop obligation ENDS** |
+> | it **SURVIVES** | `abs()` ⇒ `held = 1` ⇒ `healthy:ATULAUTO`, nothing changes ⇒ ⛔ **the obligation stands INDEFINITELY** |
+> ⭐⭐ **It settles a broker-behaviour fact nobody could establish from source, and it decides how urgent F6's build is.** ⛔ **Record it either way. DO NOT act on it.**
+> 💰 **The boot replays ₹1,033.50** — ATULAUTO **₹587.40** (`ee9af41eae554c35`, the phantom) + DIFFNKG **₹446.10** (`0184b66d4c214416`). ⛔ **KEY ON `reservation_id`, NEVER `trade_id`** — only 1.9 % of `fm_ledger` rows carry one, so a `trade_id` query returns EMPTY and reads as *"capital released"*: **a certain false alarm on the one morning it matters.**
+> ⚠️ **AND CHECK THE TOKEN FILE FIRST** — a failed 08:15 refresh is **SILENT** (no token ⇒ no watcher start ⇒ no boot, no error, no alert).
 >
-> ⛔ **STANDING:** no push (D3) · **no code changed 05-Aug — every commit is `.md`** · **no implementation authorised** (needs evidence CONFIRMED **and** Rama's approval in his own words) · ⛔ **the register-design-thread card is HELD until after the T+1 measurement.**
+> ⛔ **STANDING:** ✅ **the push is DONE (`ahead 0`, PC == VM by md5)** · **no code changed 06-Aug except the two Python commits that rode the push**, one of them **AST-IDENTICAL** · **no implementation authorised** (needs evidence CONFIRMED **and** Rama's approval in his own words) · ⛔ **THE SIZING THREAD IS FROZEN** (values · YAML keys · code · the inventory-authority and pipeline-ownership rulings) · ⛔ **six row candidates await Rama; N stays 233.**
 >
 > ## 🔄 CURRENCY BLOCK — **BROUGHT CURRENT 04-Aug-2026 ~23:xx IST · ⭐ RE-MEASURED 05-Aug-2026 00:15 IST (the clock was READ, not recalled — `date` on the PC, offset `+0530`, cross-checked against `date -u`) · ⭐⭐ BROUGHT CURRENT AGAIN 05-Aug-2026 POST-BOOT — see the BOOT PASS below.** ⛔ THE FILENAME STILL SAYS 01-AUG AND MUST NOT BE RENAMED — it is cited by SHA-pinned references across the audit records. **The date in the title is the file's IDENTITY, not its currency; this block is its currency.**
 >
@@ -165,6 +167,91 @@ authority to move it.
 identity needs a new persisted marker ⇒ **schema**, and an **evening schema push** trips
 `_refuse_migration` on every heartbeat cron until the next 08:15 boot. ⭐ **A deadline meetable
 only by breaking a rule is a deadline that should be missed.**
+
+---
+
+## 🌙 06-AUG **EVENING** ADDENDUM *(20:00 → 22:2x)* — ⛔ **N STILL 233. THE CANDIDATE SET GREW 3 → 6.**
+
+> ⛔ **Everything below POSTDATES the close-out above, which was written ~18:4x.**
+> ⛔ **EVERY ITEM IS A POINTER TO A COMMITTED RECORD** — `docs/audit/STOP_PROCEDURE_06-Aug-2026.md` ·
+> `docs/audit/eod_email_findings_06aug2026.md` · `docs/audit/FRIDAY_MORNING_07-Aug-2026.md` ·
+> `docs/design/classification_leakage_06aug2026.md` · `docs/design/sizing/dependency_map_06aug2026.md` ·
+> `docs/expected_alarms.md` §§8–10 · `campaign_practices.md` G6·M12·M13·M14·D2(renamed)·D5·D6·D6.1.
+> 🏷️ **M9 classes on every claim.**
+
+### ✅ OPERATIONAL — CLOSED TONIGHT, no row implications
+
+- **THE STOP RAN CLEAN, and it is MEASURED not assumed.** **(P)** `inactive · dead · Result=success ·
+  ExecMainStatus=0 · NRestarts=0`, ran 08:15:02 → **20:32:19**. **(P)** shutdown window = **100 lines,
+  ALL `INFO`** — zero ERROR/CRITICAL/WARNING; `gtt_state` unchanged; both trades still `OPEN` with
+  closure fields empty; **no `RELEASE` row**; nothing written after 20:32. ⇒ 🏁 **`_shutdown()`
+  completed with a real CNC position AND A PHANTOM held — 2nd time ever, 1st with a phantom.**
+- **CENSUS RECOVERED.** `BEGIN … entries=70` @20:32:15, 55 lines, `END … mismatches=0`.
+  **(P)** `cnc_gtt_monitor: acted 50` (05-Aug: 24) — the expectation **scored, not refuted**.
+  ⛔ **`acted` counts rows EXAMINED, not actions TAKEN.**
+- **A5 — THE DEPLOY SLOT: `ahead 0`, `origin/main == 26b6ecb`, PC == VM verified by md5.**
+  ⛔ **ROW NOT MOVED, deliberately.** It was discharged on 04-Aug and **re-opened the same night**;
+  the row is the *ongoing discipline*, not a one-time state. ⭐ **Banking it would lose it.**
+
+### 🔴 NEW MATERIAL — **THREE NEW ROW CANDIDATES. ⛔ NOT ADMITTED.**
+
+| # | candidate | why it may be a row | why it may NOT be |
+|---|---|---|---|
+| **4** | 🔴🔴 **THE MEASUREMENT LAYER PUBLISHES NUMBERS IT CANNOT VOUCH FOR** *(F6 cost #7)* | **(P)** the day's P&L was **−7.20 gross reported vs ≈−19.10 real** — ATULAUTO's ≈₹11.90 loss is **ABSENT**, not mis-priced (`status=OPEN`, all closure fields empty). ⭐ **The error is 165 % of the reported figure**, and it feeds the daily-loss limit, the **483-trade expectancy corpus** and strategy win-rate | it is a **consequence** of the F6 predicate defect (candidate 1) and may be a sub-entry rather than a row |
+| **5** | 🔴 **CLASSIFICATION LEAKAGE** — runtime vs business vs execution vs reporting state | ⭐⭐ **three of today's defects are one shape**: F6 (runtime→business), the tree diff (healthy→violation), `reconcile_positions` exit 2 (finding→execution failure). **One review may close several future cases** | it is **cross-cutting**, and the register may prefer it as a `§E` governance entry rather than a debt row |
+| **6** | **A CHECK FOR AN ARTIFACT NOBODY PRODUCES** — `watchman.md` / `flow_trace.md` | **(S)** `system_manager.py:409-410` checks both; **repo-wide, all file types: NO producer for either**. Corroborated by the record — `SYSTEM_MAP:1293` logged the same MISSING lines 22/23/24-Jul | it is one line of a daily report; may be a **§C** housekeeping item, not a debt row |
+
+> **⇒ IF ALL SIX ARE ADMITTED, N 233 → 239.** *(the earlier three: F6 predicate · DH1 doc/code
+> divergence · absent operator recovery path.)* ⛔ **N STAYS 233 UNTIL RAMA RULES.**
+> ⭐ **Same reason as this morning's block: N is a governed number and this thread had no authority
+> to move it.** ⛔ **Do not read six candidates as six rows.**
+
+### 📌 RECORDED, NOT CANDIDATES — no row sought
+
+- **`reconcile_positions` exit 2 — BOTH PREMISES REFUTED; IT DID NOT FAIL.** **(S) `:428-434`**
+  `has_mismatch ⇒ 2`, `has_error ⇒ 1` ⇒ **2 is a FINDING code.** **(P)** 38 runs = 33 SUCCESS/4
+  FAILED/1 SKIPPED, with exit-2s on **29-Jul and 31-Jul — no T+1 holding** ⇒ ⛔ **not a T+1
+  signature.** ⭐ The defect is the **heartbeat wrapper mapping any non-zero to `FAILED`** — folded
+  into candidate 5, ⛔ not sought as its own row.
+- **ALERT DEBT opened** (`expected_alarms.md` §10) — AD-1 the daily tree-diff CRITICAL *(an A7
+  instance)*, AD-2 the exit-2 mapping. ⭐ **Each carries the condition that RETIRES it.**
+- **THE NIGHTLY-STOP OBLIGATION + its RETIREMENT TEST** (F6 §15.1/§15.2/§15.3). ⭐ Written **now,
+  while the workaround is new** — *"one authored by someone tired of the workaround is a different
+  document."* 🏷️ **A temporary compensating control, ⛔ not steady-state design.**
+- **SIZING — the recount, and it is a `M12` instance.** **(P)** the four existing delivery twins
+  **ARE inside the 113** (`system_config.yaml:190·191·205·206`, neither family excluded) ⇒
+  ⛔ **`31+34+6+42 = 113` RECONCILES BY ACCIDENT**: the DELIVERY-ONLY 6 **are not keys at all**
+  (*"no key exists for any of them"*) and ≥4 real keys sit in **no bucket** — **two offsetting
+  errors.** Classified existing = **107**. ⚠️ Residual 6 = 4 named + **2 UNIDENTIFIED**, inheriting
+  the corpus's own ±1 (301 vs 302). **A 4th miscount found while recounting: the semantic filter's
+  destination line accounts for 17 of 25 drops.** ⛔ **The last 2 unassigned (`risk_per_trade_pct` ·
+  `max_position_value_pct`) are the PARENTS of two unclassified twins — their destination IS the
+  twin-retirement RULING, owed to Rama.** ⛔ **No bucket percentage may be quoted until ruled.**
+
+### 🔢 THE COUNT — ⛔ **NOTHING MOVED. BOTH AXES RESTATED IN FULL ANYWAY**
+
+*⭐ Per this file's own rule — **silence about a count is how it rots** — and per `M12`: a numbered
+list states its own count, re-verified when the list changes. ⛔ No item was added, closed,
+re-graded, discharged or re-banded tonight.*
+
+```
+  BAND                                          from A   from B   from C   TOTAL
+  §A  LIVE-TRADING THREAD                            4        0        2       6
+  §B  THE AUDIT FIX CAMPAIGN                         0       95        1      96
+  §C  PRE-AUDIT ITEMS STILL OPEN                   104        0        0     104
+  §D  SETTLED / DECIDED / KEPT FOR RECORD           23        0        2      25
+  §E  GOVERNANCE (6112791; +A7 05-Aug eve)           1        0        1       2
+                                                 -----    -----    -----   -----
+                                                   132       95        6     233  ✅
+```
+**COLUMN CHECK, independently re-added:** `from A` = 4+0+104+23+1 = **132** ✅ ·
+`from B` = **95** ✅ · `from C` = 2+1+0+2+1 = **6** ✅ · rows = 6+96+104+25+2 = **233** ✅ ·
+N = 132+95+6 = **233** ✅ ⇒ **UNCHANGED on both axes.**
+
+⚠️ **A2 STILL NOT MOVED — and tonight strengthens the reason rather than weakening it.** The T+1
+carry is no longer *unobserved*: it ran, **and the exit path is BROKEN**. ⭐ **Discharging the easy
+half of an item is how a register loses the hard half** — and here the hard half turned out to be
+the defect.
 
 ---
 
