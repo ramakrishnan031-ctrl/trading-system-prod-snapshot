@@ -255,6 +255,57 @@ the defect.
 
 ---
 
+# 🔴🔴 THE DECISION LEDGER — **THE NINE RULINGS OWED, IN ONE PLACE** *(built 06-Aug-2026 evening)*
+
+> ⭐⭐ **PURPOSE: nine decisions in ONE SITTING instead of nine document hunts.** What is already
+> **MEASURED** is recorded against each, so a ruling can be taken **from this table alone.**
+> **SCHEMA:** `Decision → Evidence → Authority → Residual Risk → Reopen Trigger → DATE/VERSION`.
+> ⭐ **The DATE/VERSION column answers what this campaign has repeatedly had to reconstruct: WHICH
+> EVIDENCE SET produced the ruling.** ⛔ **06-Aug alone: AR9 needed TWO scope corrections, the DH1
+> conclusion was extended past its evidence, and *"will exit once flat"* nearly became folklore —
+> all three are one failure: A CONCLUSION OUTLIVING ITS EVIDENCE.**
+>
+> 🏷️ **EACH ROW IS MARKED `[ENG]` or `[PREF]`** — ⭐ **so Rama knows where the thinking is actually
+> needed.** `[ENG]` = architectural, a recommendation is reasonable to want. `[PREF]` = a preference
+> only he can hold; ⛔ **a recommendation there would be me deciding.**
+
+## ⭐ ORDERED BY WHAT EACH BLOCKS — ⛔ **NOT by age**
+
+> 🔴🔴 **#1 and #2 TOGETHER BLOCK THE ENTIRE DELIVERY SURFACE. The other seven block one item each.**
+> ⇒ ⭐ **If only two rulings are taken, take these two.**
+
+| # | DECISION | 🏷️ | EVIDENCE ALREADY MEASURED | RESIDUAL RISK if unruled | REOPEN TRIGGER | DATE / VERSION |
+|---|---|---|---|---|---|---|
+| **1** | 🔴 **Which CONTROL INVENTORY survives** — *and, separately, WHERE it lives* | `[ENG]` | two inventories exist keyed on the same dotted config key; `config_surface_review` is explicitly **an INPUT, not a third inventory** | ⛔ **blocks the whole delivery config surface** — item 5 cannot start; any value set first is exactly the *"blind settings"* being refused | ⚠️ **EMPTY** | `0197923`, 01→06-Aug |
+| **2** | 🔴 **May BOTH pipelines hold the same symbol on the same day?** *(all **THREE** product-blind gates, ⛔ not just the named key)* | `[ENG]` | **(S)** three gates, not one — `one_trade_per_symbol_direction_per_day` is **NOT** the binding one; **(P)** a held CNC blocks intraday on that symbol, reported as `DUPLICATE_SYMBOL`; **(P)** the ATULAUTO phantom is blocking a symbol **right now** | ⛔ **blocks the delivery surface AND F6's slot/symbol costs**; the phantom's symbol block has no expiry | ⚠️ **EMPTY** | `0197923`, §7 05-Aug |
+| **3** | **N: how many of the SIX row candidates are admitted?** | `[PREF]` | candidates: F6 predicate · DH1 doc/code divergence · absent operator recovery · **the measurement layer** · **classification leakage** · **the watchman/flow_trace check** | N is a governed number; the register cannot self-serve | ⚠️ **EMPTY** | 06-Aug evening |
+| **4** | **The TWO TWIN PARENTS** — retire `delivery_risk_per_trade_pct` / `delivery_max_position_value_pct`, or keep them? | `[ENG]` | **(P)** both twins exist and are **`null`**; **(P)** neither parent has **ever** bound — `binding_constraint='concentration'` on **483/483**, zero `REJECTED_SIZING_RISK`; the 1:1 rule **rejects both** | the last **2 of §6's 8** unassigned drops cannot be placed; the sizing partition stays unclosed | ⚠️ **EMPTY** | 06-Aug, `dependency_map` §1.3 |
+| **5** | **Retire the `watchman.md`/`flow_trace.md` CHECK, or restore a producer?** | `[PREF]` | **(S)** `system_manager.py:409-410` checks both; **repo-wide, all file types: NO producer for either**; `SYSTEM_MAP:1293` logged the same MISSING lines 22/23/24-Jul; `watchman` **never scheduled** (11 manual runs) | a daily WARNING for an artifact nobody produces — ⭐ **alert-debt that is currently unlisted** | ⚠️ **EMPTY** | 06-Aug, `eod_email_findings` §4 |
+| **6** | **Should a DAILY-REWRITTEN file stay tracked in git?** *(`strategy_direction_registry.yaml`)* | `[PREF]` | **(P)** rewritten daily 16:22 by `strategy_registry_officer`; `checkout -f` reverts it to all-PENDING (18); **(S)** `registered_direction` has **zero callers**; makes the EOD report **CRITICAL every single day** | **AD-1 alert debt** — the report that summarises everything else is CRITICAL daily ⇒ ⭐ **its severity line is trained to be skipped, and on 06-Aug it was** | ⚠️ **EMPTY** | 06-Aug, A7 · `expected_alarms` §9 |
+| **7** | **Segment halt = an ENTRY GATE, not a kill-state?** | `[ENG]` | **(S)** Q4 — HARD_KILL flattens only MIS/CO; **delivery survives it** ⇒ the invariant already narrows to *"no live INTRADAY position"* | delivery halt semantics stay undefined; #8 depends on this | ⚠️ **EMPTY** | 30-Jul (Q4) |
+| **8** | **What happens to CARRIED positions when delivery halts?** | `[ENG]` | **(S)** EOD6/FIX-015 CNC exemption; **(P)** `_shutdown()` has now completed **twice** with a carry held, releasing nothing | **depends on #7** — cannot be ruled before it | ⚠️ **EMPTY** | 05/06-Aug, measured |
+| **9** | **The STANDING SIX** — `R10 · R9 · R11 · R12 · R14 · G4` | `[PREF]` ×5 `[ENG]` ×1 | each carries its own record; **R12** is the one with an engineering half *(the allowlist narrowing — **(S)** it addresses **1 of 3** independent surfaces)* | each blocks one item | ⚠️ **R12 has one; the other five EMPTY** | various, ≤04-Aug |
+
+### 🔴 THE LEDGER'S FIRST USEFUL OUTPUT — **AND IT IS THE EMPTY COLUMN**
+
+> **8 of 9 rows have an EMPTY reopen-trigger cell.**
+> ⛔⛔ **AN ENTRY WITH NO REOPEN CONDITION IS NOT AN ACCEPTED RISK — IT IS AN ABANDONED ONE.**
+> ⭐⭐ **That emptiness is the ledger's first output, NOT a defect in the ledger.** It is the
+> difference between *"we decided to live with this, and here is what would change our mind"* and
+> *"we stopped talking about it."* ⭐ **`AR1–AR9` all carry reopen triggers; these nine do not — and
+> until tonight nothing made that visible.**
+
+⚠️ **ONE DISAGREEMENT WITH THE CARD, STATED RATHER THAN SMOOTHED:** the commissioning card lists
+ruling 1 as **"N: 233 → 235?"**. ⛔ **The register records SIX candidates, not two** — three from the
+18:4x close-out *(F6 predicate · DH1 divergence · absent recovery path)* and three from the evening
+addendum *(the measurement layer · classification leakage · the watchman check)*. ⇒ **the range is
+`233 → 233…239`, not `→ 235`.** ⭐ **Recorded as measured; the card's number is not adopted.**
+
+⛔ **NOTHING IN THIS TABLE IS RULED. N STAYS 233.** ⭐ **The ledger's job is to make nine rulings
+takeable in one sitting — ⛔ not to take any of them.**
+
+---
+
 # 🔒 THE **MUST-LAND-BEFORE** TABLE — every ordering constraint in one place *(built 06-Aug-2026)*
 
 > ⭐⭐ **WHY THIS EXISTS:** the register already contained several ordering constraints, **each
@@ -302,6 +353,20 @@ the defect.
 co-requirement: **the later work is what makes the latent defect live**, so the defect must be closed
 *as part of* that work rather than before or after it. ⛔ **Recorded as a distinct shape rather than
 forced into one of the other two.**
+
+### 🆕 ADDED 06-Aug-2026 EVENING — **SHAPE 1, constraint 9**
+
+| # | must land FIRST | blocks | ⚠️ the concrete failure if violated | recorded at |
+|---|---|---|---|---|
+| **9** | 🔴 **VALIDATION OF THE SOURCE a snapshot reads** | **ANY snapshot-at-boot design** *(a delivery baseline, a capital snapshot, a cached inventory)* | **the snapshot preserves stale truth for longer.** ⭐ **Worked example, live tomorrow:** the 08:15 boot replays **₹1,033.50**, of which **₹587.40 is the PHANTOM** ⇒ a delivery baseline snapshotted at boot would hold that error **for the whole session** instead of re-deriving it each cycle | `f6_…design_06aug2026.md` §15 · `eod_email_findings_06aug2026.md` §1 |
+
+> ### ⭐⭐ THE GENERAL FORM, WORTH STATING ONCE AND CITING AFTERWARDS
+> **A SNAPSHOT CONVERTS A SELF-CORRECTING ERROR INTO A DURABLE ONE.**
+> ⭐ **That is its COST, and it is the price of the determinism it buys** — a per-cycle re-derivation
+> is noisy and *self-healing*; a snapshot is stable and *self-perpetuating*. ⛔ **Neither is free, and
+> the choice must be made knowing which failure mode is being bought.**
+> ⇒ 🏷️ **The generalisation is what belongs here — ⛔ NOT "validate the source after F6."** F6 is
+> one instance; **the constraint binds every future snapshot design regardless of F6.**
 
 ---
 

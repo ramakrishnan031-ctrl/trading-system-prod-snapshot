@@ -93,6 +93,17 @@ This document defines the foundational engineering rules and standards for build
 
 > **Origin (06‑Aug‑2026):** an `OPEN` delivery trade whose broker position is gone had **no supported closure path at all**. Width searched: all of `scripts/`, `system_manager.py`'s entire argument surface, every `CLOSED_MANUAL` reference outside the reconciler — every hit was a reader or a backfill of already‑closed rows. All three `OPEN → CLOSED` transitions were shut: CHECK1 by the delivery skip, `_finalize_gtt_exit` by its `held == 0` gate, EOD square‑off by CNC exemption. **Both doors were held by the two halves of one defect, and the `gtt_state` row keeping CHECK1's skip armed had been created by the defect itself.** The reservation was therefore re‑reserved at every 08:15 boot — ~21 % of the delivery bucket, daily, for a position that did not exist.
 
+### 1.13 Isolate the Policy, Never the Purse
+
+* **There is ONE broker account and ONE real balance. That is a BUSINESS CONSTRAINT and it is not negotiable.**
+* **Pipeline independence is an IMPLEMENTATION CHOICE.** It is negotiable, and it may be pursued only in the layer where it is safe: **policy** — limits, caps, windows, thresholds, vocabularies.
+* ⛔ **Never isolate the purse.** Two pipelines may hold two *policies*; they may never hold two *balances*, because the second balance does not exist.
+* **THE CONCRETE INVARIANT (Rama's, and it is the testable form of this rule):** the **sum of all reservations across BOTH pipelines can never exceed real capital — whatever leverage says.** Leverage changes purchasing power at the broker; it does not create rupees the account does not hold, and the system is unaware of leverage by design.
+* **A design that gives a pipeline its own capital figure must FAIL REVIEW** unless that figure is provably a *view* of the one balance rather than a second source of truth.
+* ⭐ **The discriminator to apply at design time: "if both pipelines acted at their limit simultaneously, could the account go short?"** If yes, the purse has been split.
+
+> **Origin (06‑Aug‑2026):** the delivery config-surface review found that the two keys with existing delivery twins (`risk_per_trade_pct`, `max_position_value_pct`) have **never bound**, while the two that decide every quantity (`max_concentration_pct` 483/483, `tier_multipliers` 372/483) have **no delivery control at all** — so a review that mirrored the existing surface would have reproduced exactly the wrong two knobs. Separately, the bucket split (`intraday_bucket_pct` / `positional_bucket_pct`) **cannot be made per-pipeline without circularity**: the split is computed FROM total capital (`fund_manager.py:2290`), so a per-pipeline split would have to know the capital it defines. See `docs/design/sizing/delivery_config_surface_06aug2026.md` and `docs/design/sizing/dependency_map_06aug2026.md` §3.1. ⚠️ **T2 already demonstrated the failure mode in production: an isolated DATABASE is not an isolated ACCOUNT — it blocked ₹643.98 of shared broker cash.**
+
 \---
 
 ## 2\. Python Coding Standards

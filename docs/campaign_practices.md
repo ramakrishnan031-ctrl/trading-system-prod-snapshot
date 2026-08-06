@@ -654,6 +654,34 @@ generalisation, not a practice.**
 
 ### M10 · ⭐⭐ THE OWNERSHIP TEST — **"WHAT PROCESS UPDATES THIS FIELD?"**
 
+> ## ⭐⭐⭐ M10 IS ONE PRINCIPLE AT **THREE SCALES** — ⛔ **NOT three rules** *(extended 06-Aug-2026)*
+>
+> ### **A SHARED ARTIFACT MUST DECLARE ITS OWNER, SCOPE, CONSUMERS AND PURPOSE. If it serves MULTIPLE purposes, that coupling must be INTENTIONAL AND DOCUMENTED.**
+>
+> | scale | the artifact | how the campaign already states it | today's worked example |
+> |---|---|---|---|
+> | **FIELDS** | a column / a record field | **M10 below** — *what process updates this?* | `trades.closure_source` empty on the first delivery exit |
+> | **CONFIG KEYS** | a tunable | **a twin, or a DECLARED REASON** — the `max_consecutive_losses` template *("deliberately SHARED — no delivery variant")* | the 34 → 9 semantic filter |
+> | **SHARED ARTIFACTS** | state · representation/channel · namespace | **this extension** | **state:** `_total`, `held` · **channel:** the exit code carrying *process health* AND *a business finding* · **namespace:** the classification corpus, the symbol namespace |
+>
+> ⭐⭐ **`OWNER` IS THE LOAD-BEARING WORD, and it is what "declare its purposes" misses.**
+> ⛔ **The exit code's defect is precisely that NOBODY OWNS IT:** `reconcile_positions.py:428-434`
+> writes a **business** meaning (`2 = mismatches found`), the heartbeat wrapper reads a **health**
+> meaning (`non-zero ⇒ FAILED`), **and neither declared the claim.** ⭐ Not a disagreement — **an
+> unowned channel**, so both readings are locally reasonable and jointly wrong.
+>
+> ### ⭐⭐⭐ **WHY THIS IS FILED AS A CONVERGENCE AND NOT AS A NEW RULE**
+> **The campaign now holds the same rule at three scales, each derived INDEPENDENTLY** — M10 from
+> stale fields, the twin-or-declare rule from config isolation, this from tonight's shared artifacts.
+> ⇒ ⭐⭐ **A campaign that keeps DERIVING the same rule from different directions has found something
+> STRUCTURAL. One that keeps ADDING rules has not.** ⛔ **Resist filing scale four as `M15`.**
+>
+> ### ⛔⛔ THE GUARD — **THIS MUST NEVER READ AS "SPLIT SHARED THINGS"**
+> **`max_consecutive_losses` and the kill switch are SHARED AND CORRECT**, and both are correct
+> *because the sharing is declared at the check itself.* ⭐ **The rule asks for a DECLARATION, not a
+> split.** ⛔ **A shared artifact with a written reason is a DECISION; the defect is the undeclared
+> one.**
+
 > **For every field in every record, the question is NOT *"does it exist"* but **"WHAT PROCESS
 > UPDATES IT?"** ⇒ **Name the process, or mark the field `INFORMATIONAL` — not authoritative.**
 > - **nothing updates it** ⇒ **decoration.** Say so.
@@ -809,6 +837,26 @@ make counting reliable:**
 ⚠️ **AND THE HONEST NOTE ABOUT HOW THESE WERE FOUND: three of the four were caught by the AUTHOR
 RE-READING, not by any check.** ⛔ **That is LUCK, NOT PROCESS** — which is precisely the argument
 for the stated-count rule: it converts a re-read into a check that can fail.
+
+#### M12.1 · 🔴 VALIDATING A **PARTITION** — FOUR TESTS, AND **THE TOTAL GOES LAST**
+
+*Folded in 06-Aug-2026 rather than filed as a fifth rule, per M10's convergence discipline.*
+
+| # | test | asks |
+|---|---|---|
+| **①** | **membership validity** | is every listed member actually a member of the corpus? |
+| **②** | **completeness** | is every corpus member in exactly one bucket? |
+| **③** | **exclusivity** | is any member in more than one? |
+| **④** | **arithmetic reconciliation** | do the parts sum to the whole? |
+
+> ### ⛔⛔ **RUN ④ LAST. NEVER FIRST.**
+> **Scored against 06-Aug's sizing partition:** **① FAILED** — six "members" of `DELIVERY-ONLY`
+> were **not keys at all** *(the bucket's own heading says so)* · **② FAILED** — four existing keys
+> sat in **no bucket** · **③ untested** · **④ PASSED** *(`31+34+6+42 = 113`)*.
+> ⇒ ⭐⭐⭐ **④ PASSING IS WHAT HID ① AND ②.** The two failures were **near-equal and opposite**, so
+> the total reconciled and closed the question before it was asked.
+> 🏷️ **The general form: a correct total is the strongest available evidence of completeness, and it
+> is evidence of nothing when the errors offset.** ⛔ **Check membership before you check arithmetic.**
 
 ### 🕯️ CANDIDATES — ⛔ **HELD, NOT PROMOTED. ONE INSTANCE EACH.**
 
