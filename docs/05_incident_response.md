@@ -148,6 +148,40 @@ sqlite3 ~/systems/trading-system/data_store/trading_system.db \
 4. If gap is small (< Rs 50): Monitor, it may self-correct at EOD
 5. If gap is large: Stop the system, reconcile manually, restart
 
+## P0: Delivery (CNC) GTT — DO NOT CANCEL
+
+⛔ **DO NOT CANCEL A SYSTEM-PLACED GTT WHILE `cnc_gtt_monitor` IS RUNNING.**
+The monitor treats a missing GTT as damage and repairs it — `orders/cnc_gtt_monitor.py`,
+the *"GTT missing; holding intact"* auto-recreate branch. A cancelled GTT reads as
+missing. **To stop a GTT being replaced, stop the monitor — not the GTT.**
+
+- 🏷️ **(P) OBSERVED for the EXPIRY case** — 06-Aug-2026 10:02:13: GTT `330648138`
+  expired and was auto-recreated as `330657774` in the same cycle.
+- 🏷️ **(I) INFERRED for the CANCEL case** — the branch is identical (both present as
+  "missing"), but no cancel has yet been observed reaching the broker. ⭐ Upgrade this
+  label on the first observed cancel.
+
+⚠️ **You are racing a ~15-minute cycle** (measured 06-Aug: 10:02:13 → 10:17:25 →
+10:32:36 → 10:47:46). A cancel only counts as successful if the *next* cycle still
+shows the GTT gone. ⛔ Verify from `grep -c "place_gtt call_end" logs/system_<date>.log`
+— a recreate increments it — **not from the Kite GTT tab, which never shows GTT ids.**
+
+### The phantom reservation this can leave behind
+
+`_finalize_gtt_exit` is the ONLY path that closes a delivery trade **and** releases its
+reservation, and it is gated on `held == 0`. If `held` is wrong the trade stays `OPEN`
+and its capital stays reserved **permanently** — replayed by `rehydrate_from_open_trades`
+at every 08:15 boot.
+
+- **Symptom:** the delivery bucket opens short, and the failure presents as
+  "no signals qualified" — indistinguishable from a quiet day.
+- **Check:** compare `fund_manager.initialize`'s `positional_avail` in the boot log
+  against the first positional `RESERVE`'s `balance_before` in `fm_ledger`. A gap is a
+  carried reservation. *(06-Aug: 2802.54 vs 2215.14 = exactly one stranded trade.)*
+- ⚠️ **A clean release cannot be keyed to its trade.** The `RELEASE_USED` row carries
+  **neither `trade_id` nor `reservation_id`** (verified 06-Aug, ledger 10222). Match by
+  timestamp + bucket + amount, or you will read a successful release as a missing one.
+
 ## P1: Broker API Down
 
 **Steps:**
