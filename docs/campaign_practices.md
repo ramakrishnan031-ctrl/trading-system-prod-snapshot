@@ -266,7 +266,7 @@ whole surface, and neither is answerable by measurement.
 > |---|---|---|
 > | **`delivery_risk_per_trade_pct`** `:190` | **`null` PLACEHOLDER** | 🔴 **already written** |
 > | **`delivery_max_position_value_pct`** `:191` | **`null` PLACEHOLDER** | 🔴 **already written** |
-> | `max_open_delivery_positions` `:205` · `max_daily_delivery_trades` `:206` | **real values** (3 / 5) | ⚠️ ruled, not placeholders |
+> | `max_open_delivery_positions` `:205` · `max_daily_delivery_trades` `:206` | **real values** (3 / 5), `SLICE2.5-PHASE-3 (A)`, *"inert while `force_intraday_only=true`"* | ⚠️ **a DIFFERENT case — they carry a value and a stated lock, ⛔ not an empty slot awaiting one.** 🏷️ **Whether they were RULED is `(I)`, not established here** |
 > | **concentration · tier · bucket loss-limit · carry-days · entry-cutoff** | **ZERO keys, all five** | ✅ **line uncrossed — this is where it still is** |
 >
 > ⛔ **The `:185-189` comment is the invitation IN WRITING:** *"The V3 delivery path sets these when
