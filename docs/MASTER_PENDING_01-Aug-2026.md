@@ -246,6 +246,20 @@ only by breaking a rule is a deadline that should be missed.**
 > ⛔ **This does NOT fire `(E)`** — it contradicts no registered conclusion and reverses no ruling;
 > it **sharpens a ruling already owed.** ⭐ Recorded here so the ruling is taken against the real
 > state rather than the assumed one.
+>
+> ### ⚠️⚠️ **AND THE HONEST PROVENANCE — `M8`, AND IT IS A GOVERNANCE-DEBT INSTANCE**
+> ⛔ **This was NOT a discovery. THE DECISION LEDGER ALREADY HELD IT:** row **4**'s evidence cell,
+> written 06-Aug evening, reads *"**(P)** both twins exist and are **`null`**"*. ⭐ **The record was
+> right and the draft rule was wrong** — `G5.1`'s first draft asserted the step was *"one step
+> away"*, and a `config/` grep then contradicted it.
+> ⇒ 🏷️ **The failure was not a missing measurement. It was NOT READING THE RECORD** — the exact
+> shape `M8` names, and the exact shape logged as governance debt *(a conclusion carried without
+> the evidence set that produced it, so the next reader re-derives it)*.
+> ⭐ **Worth more than the finding itself: the grep and the ledger AGREED, which is why this cost
+> only a correction. Two sources that disagree are the expensive case.**
+> ⚠️ **Row 4's `Reopen Trigger` cell remains `EMPTY` — ⛔ NOT filled here.** ⭐ It is one of the
+> 8-of-9 empties that are the ledger's own first finding, and filling it is a ruling-adjacent act
+> (`G5.1`).
 
 ### 🔢 THE COUNT — ⛔ **NOTHING MOVED. BOTH AXES RESTATED IN FULL ANYWAY**
 
