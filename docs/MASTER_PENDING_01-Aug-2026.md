@@ -304,6 +304,61 @@ addendum *(the measurement layer · classification leakage · the watchman check
 ⛔ **NOTHING IN THIS TABLE IS RULED. N STAYS 233.** ⭐ **The ledger's job is to make nine rulings
 takeable in one sitting — ⛔ not to take any of them.**
 
+## 🔴 THE LEDGER TESTED AGAINST ITS OWN CRITERION — **and it went RED on one of two rows**
+
+> **THE CRITERION:** *"Would a NEW reviewer reach the SAME conclusion using ONLY the ledger?"*
+> ⭐ **Testable tonight rather than aspirational, because the ledger now exists.** Two rows read
+> cold — ⛔ deliberately the **hardest** and the **easiest**.
+
+| row | verdict | |
+|---|---|---|
+| **#5 · `watchman`/`flow_trace`** `[PREF]` | ✅ **REACHABLE FROM THE ROW ALONE** | it carries the checker's exact site (`system_manager.py:409-410`), the absence **with its search width stated** *(repo-wide, all file types)*, independent corroboration *(`SYSTEM_MAP:1293`, the same MISSING lines on 22/23/24-Jul)*, and the history *(never scheduled, 11 manual runs)*. ⭐ **A reviewer can rule *retire* or *restore* without opening anything.** |
+| **#2 · the three symbol gates** `[ENG]` | 🔴 **NOT REACHABLE — the row is INCOMPLETE** | it says *"(S) three gates, not one"* but ⛔ **never NAMES them, never cites their sites, and omits the two facts that decide the ruling.** |
+
+### 🔴 THE MISSING FACTS ON ROW #2, NAMED PRECISELY *(as §3.2 requires)*
+
+⛔ **A reviewer must open `delivery_config_surface_06aug2026.md` §7.1 to learn:**
+1. **the three gates are** `SYMBOL_DIRECTION_DAILY_LIMIT` (`signal_processor.py:717`) ·
+   **`DUPLICATE_SYMBOL`** (`risk_engine.py:688-693`) · `CONTRARY_POSITION` (`risk_engine.py:~680`);
+2. ⭐⭐ **two of the three NEVER EXPIRE** — gate 1 clears at midnight, **gates 2 and 3 do not clear at
+   all**; and
+3. ⭐⭐⭐ **none can be made product-aware without a join that does not exist** — there is **no
+   `trades.product` column**; product lives on `orders`, reachable only via `LEFT JOIN … leg='ENTRY'`.
+   ⇒ 🏷️ **The ruling is STRUCTURAL, not a config choice** — and the row as written implies the opposite.
+
+### ⭐⭐ THE GAP SHAPE — **A MISSING COLUMN, NOT A PER-ROW DEFECT** *(§3.3's question, answered)*
+
+**The `[PREF]` row passed and the `[ENG]` row failed, and that is the pattern:**
+> **A PREFERENCE ruling needs only the FACTS. An ENGINEERING ruling also needs THE SURFACE A RULING
+> WOULD TOUCH** — *what would have to change, and whether it is a value, a code path, or a schema.*
+⇒ 🔴 **THE LEDGER IS MISSING A COLUMN: `WHAT A RULING WOULD TOUCH`.**
+⭐ **That is the ledger's SECOND useful output, after the eight empty reopen-trigger cells** — and it
+is a **structural** finding rather than a note to fix row #2.
+⛔ **DELIBERATELY NOT FIXED TONIGHT** *(§3.3)*: two rows tested, the pattern recorded. ⭐ **Fixing all
+nine now would have hidden whether it was per-row or systemic — and it is systemic.**
+
+⚠️ **NUMBERING NOTE, so a later reader is not misled:** the commissioning card refers to
+*"#8, `watchman`/`flow_trace`"* using **its own §5 list order**; in this ledger that item is **row 5**,
+because the table is **ordered by what each ruling BLOCKS, not by age.** ⛔ **Cite rows by NAME, not
+by number, across documents.**
+
+## 📋 THE ROW SCHEMA — **TIER A mandatory · TIER B earned** *(adopted 06-Aug)*
+
+🏷️ **Parent (G7): extends this ledger's own schema.**
+
+| tier | fields | when |
+|---|---|---|
+| **A — MANDATORY** | **owner · purpose · evidence expiry** *(on decisions)* · **semantic correctness** *(on partitions)* | always |
+| **B — ACTIVATED ONLY ON REPEATED CROSS-CATEGORY EVIDENCE** | authority · update path · validation point · retirement trigger | ⛔ not by default |
+
+⭐ **Proportional now, expandable when earned** — ⛔ a schema that demands eight fields on day one is
+abandoned by week two.
+⚠️ **AND THE HONEST NOTE, because the stricter bar catches one of our own:** promotion is meant to
+require **recurrence AND cross-category value**, and **"semantic correctness" has ONE instance in ONE
+artifact class.** ⭐⭐ **It survives only because it was FOLDED INTO `M12` as a clause rather than
+promoted as a rule — so it never had to clear the bar.** 🏷️ **The fold was right before there was a
+reason for it; `G7` is that reason, arriving afterwards.**
+
 ---
 
 # 🔒 THE **MUST-LAND-BEFORE** TABLE — every ordering constraint in one place *(built 06-Aug-2026)*

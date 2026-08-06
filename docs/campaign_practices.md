@@ -227,6 +227,42 @@ is the required shape. **Never** *"the ruling was wrong."*
 with its reasoning**, not as a bare instruction. A mechanism whose *why* is recorded can be
 re-scoped by the next person; one that arrives as a bare imperative can only be obeyed or defied.
 
+### G7 · ⭐⭐⭐ **EVERY NEW RULE MUST NAME A PARENT** — the anti-proliferation device
+
+> ### **A NEW GOVERNANCE RULE MUST NAME AN OLDER RULE IT EXTENDS, NARROWS OR REPLACES.**
+> ### ⛔ **If it cannot name that relationship, the default is: DO NOT CREATE IT YET.**
+
+🏷️ **ITS OWN PARENT, stated first because the rule demands it of itself:** it **formalises the
+convergence discipline** written into **`M10`'s three-scale extension** — *"a campaign that keeps
+DERIVING the same rule from different directions has found something structural; one that keeps
+ADDING rules has not."* ⭐ **M10 stated the discipline; G7 makes it a precondition.**
+
+⭐⭐ **Why this and not "be disciplined": it is CHECKABLE.** A reviewer can ask one question and get
+a yes/no, and the answer is visible in the filing itself.
+
+> ### ✅ **RETROACTIVE SELF-TEST — 06-Aug-2026, applied to the four rules filed the same night**
+> ⛔ **A rule that cannot survive its own first application is not ready.**
+>
+> | rule filed tonight | names a parent? | |
+> |---|---|---|
+> | **M12.1** — the four partition tests | **extends M12** | ✅ |
+> | **the shared-artifact principle** | **extends M10** *(as a third scale, ⛔ not as `M15`)* | ✅ |
+> | **§1.13** — isolate the policy, never the purse | **extends `foundation_engineering_rules` §1.11/§1.12** | ✅ |
+> | **Must-Land-Before #9** — validate the snapshot source | **extends the Must-Land-Before table itself** | ✅ |
+>
+> ⭐⭐ **4 of 4 name a parent — and this is a check that COULD have gone red.** Had any been filed as
+> a free-standing new rule, G7 would have blocked it at creation. 🏷️ **The device passes its own
+> first use.**
+
+⛔ **FROM HERE IT IS A PRECONDITION ON FILING, NOT A REVIEW NOTE.** ⭐ The question is asked *before*
+the rule is written, not after.
+
+⚠️ **AND THE CASE IT ALREADY CAUGHT, recorded because it is the honest one:** *"semantic
+correctness"* has **ONE instance in ONE artifact class** and would **fail** a promotion bar requiring
+recurrence **and** cross-category value. ⭐⭐ **It survives only because it was FOLDED INTO M12 as a
+clause rather than promoted as a rule — so it never needed to clear the bar.** 🏷️ **The fold was the
+right call before there was a reason for it; G7 is that reason, arriving afterwards.**
+
 ### G4 · Superseded text is STRUCK THROUGH but kept LEGIBLE
 With an **amendment note and date**. ⛔ Never silently deleted, never quietly reworded. A
 reader must be able to see what the guidance used to say and why it changed — otherwise
@@ -781,6 +817,29 @@ monitoring nicety, and filing it under "noise" is how it keeps recurring in unre
 review, ⛔ **not three defects**, because three items get fixed three ways and the third fix will not
 know it was solving the first problem again.
 
+### M9.1 · ⭐⭐ **FACTS OUTLIVE INTERPRETATIONS — attach EVIDENCE EXPIRY to the INTERPRETATION**
+
+🏷️ **Parent (G7): extends `M9`'s evidence classes and the decision ledger's `DATE/VERSION` column.**
+⛔ Not a new rule — it says **which rows need the field.**
+
+> **Raw observations remain true far longer than the conclusions drawn from them.**
+> ⇒ **Expiry attaches to the INTERPRETATION. ⛔ Leave raw observations UNEXPIRING.**
+
+⭐⭐⭐ **PROVEN INSIDE A SINGLE HOUR, 06-Aug:**
+
+| | | lifetime |
+|---|---|---|
+| **the FACT** | `get_active_gtt_states()` is `WHERE status='ACTIVE'` *(`state_store.py:2250`)* | ⭐ **permanent — still true** |
+| **the INTERPRETATION** | *"therefore the phantom self-clears at tomorrow's boot"* | ⛔ **expired within the hour — refuted BY THE FACT ITSELF** |
+
+⇒ ⭐ **The observation cost nothing to keep. The interpretation cost a decision path.**
+
+> ### 📌 THE PRACTICAL FORM — **the evidence class already tells you which rows need the field**
+> **An `(P)` observation rarely expires. An `(I)` inference almost always does.** `(S)` sits between:
+> a source reading is durable **at its SHA** and expires when the code moves *(which is `M3`)*.
+> ⇒ ⛔ **Do not put an expiry on every row — put it on the `(I)` rows, and on `(S)` rows whose SHA
+> can move.**
+
 ### M13 · ⛔ A LOG WITHOUT TIMESTAMPS CANNOT ANSWER "WAS IT TODAY?" — and it *looks* like it can
 
 **Earned 06-Aug-2026, as a near-miss caught before it was reported.**
@@ -1024,6 +1083,35 @@ the record. These are three different ways to hold a worthless piece of evidence
 
 (Records: `docs/audit/ADDENDUM_capital_drift_05-Aug-2026.md` §3 · the operator card's REVISION 3
 row 12 and REVISION 2 row 13.)
+
+---
+
+## 🧾 GOVERNANCE DEBT — **the category. ⛔ NAMED 06-Aug-2026, DELIBERATELY NOT POPULATED.**
+
+🏷️ **Parent (G7): extends the existing DEBT-LEDGER concept** *(`MASTER_PENDING` §B)* — ⛔ **a second
+axis on it, not a second ledger.**
+
+> **GOVERNANCE DEBT = knowledge repeatedly rediscovered because OWNERSHIP, ASSUMPTIONS or DECISION
+> BOUNDARIES are insufficiently encoded.**
+> ⭐⭐ **Distinct from implementation debt in the way that matters: it raises REVIEW COST, not
+> RUNTIME RISK.** A system carrying only governance debt runs correctly and is expensive to reason
+> about — ⛔ which is exactly why it never gets prioritised against a runtime bug.
+
+**ITS FIRST ENTRIES ARE ALREADY EARNED AND MEASURED — ⛔ NAMED HERE, NOT CHASED:**
+1. **the `M8` re-derivations** — journald *(the census is not there)* · `clear_stale_state`
+   *(boot-only, already recorded 05-Aug and re-derived 06-Aug)* · the **AR9 scope** *(two
+   corrections in one day)*;
+2. **four numbers that had to be RE-MEASURED on 06-Aug** because the record held them without their
+   evidence set — the `438/438` corpus *(actually 483)*, the `44` cron command-lines *(46)*, the
+   `M8` family ceiling in `PATHS.md` *(M14)*, and `G1`'s occurrence count *(5 → 9)*.
+
+⭐ **The pattern in both groups is one thing: a conclusion recorded without the evidence set that
+produced it, so the next reader cannot tell whether it is still true and re-derives it.**
+⇒ 🏷️ **That is precisely what the decision ledger's `DATE/VERSION` column and `M9.1` exist to stop —
+which is why this category is named now and populated later.**
+
+⛔ **DO NOT POPULATE TONIGHT.** ⭐ Populating it is itself review work, and the bottleneck is
+already governance.
 
 ---
 
