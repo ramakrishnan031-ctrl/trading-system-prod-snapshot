@@ -1522,6 +1522,25 @@ to decide whether a push is safe.
 only if it could have been red"* — ⛔ **an exit code that cannot see the failure it is being asked
 about is a vacuous check**, not a lenient one.
 
+> ## 🔄🔴 **AMENDED WITHIN THE HOUR, BY ITS OWN FIRST APPLICATION — `G7.1`**
+> **(P) 07-Aug 01:1x.** The gate was re-run **with no pipe**, exactly as this rule requires, and it
+> reported **`PYTEST_RC=1`** — ✅ **the rule worked.** ⛔ **AND THE WRAPPER AROUND IT STILL REPORTED
+> `exit code 0`**, because the script's *last* command was an `echo`.
+> ⇒ ⭐⭐ **THE RULE AS FIRST WRITTEN WAS TOO NARROW. IT IS NOT ABOUT PIPES.**
+>
+> ### **ANY WRAPPER REPORTS ITS *LAST* COMMAND'S EXIT CODE — pipe, script, task runner, CI step.**
+> ### ⛔ **THE REPORTED CODE ANSWERS "did the wrapper finish?", NEVER "did the work succeed?"**
+>
+> ✅ **The discipline that survives both instances: CAPTURE THE RC OF THE COMMAND YOU CARE ABOUT,
+> IMMEDIATELY, INTO A VARIABLE — and read the tool's own summary line as an independent second
+> source.** *(Both were done here, which is why the amendment is `(P)` and not a near-miss.)*
+> 🏷️ **`G7.1` satisfied: this rule was applied to a real case within the hour and was AMENDED by
+> it** — ⭐ **which is the outcome G7.1 exists to produce, and it is a better result than binding
+> unchanged.**
+> ⚠️ **Same evening, same shape, two layers: `G1 #7` (systemctl's output) → D5.1 v1 (the pipe) →
+> D5.1 v2 (the wrapper).** ⛔ **Do not read the recurrence as three findings — it is ONE principle
+> that keeps being met at a new layer.**
+
 ⛔ **NEVER let `ahead 0` stand for PC == VM.** ⭐ **The VM is not a git checkout** *(it is a
 `checkout -f` target of the bare repo and has no `.git`)*, so `ahead 0` **cannot answer it even in
 principle.** **Keep both, always, and state which one you ran.**
