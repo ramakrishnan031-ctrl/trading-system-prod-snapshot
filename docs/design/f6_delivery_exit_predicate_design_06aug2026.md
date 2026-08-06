@@ -186,6 +186,20 @@ event the settled book has already applied. ⛔ The expression is deliberately n
 fact** rather than a state re-derived each cycle from live quantities. Both consumers (F6 and
 auto-recreate) must consult it. ⭐ This is the part that survives §3's unsampled window.
 
+> ### 🔴 D-2's BINDING PROPERTY — **the marker must not become another replay source**
+> ⭐⭐ **This is today's defect one level up.** A state consulted to decide whether to act, which
+> is itself re-derived or re-written on each pass, **is the exact shape that produced both the
+> loop and the phantom.**
+> **The marker must be WRITE-ONCE, and provably EXACTLY-ONCE across: RESTART · REPLAY ·
+> DUPLICATE MONITOR CYCLES.** ⛔ **Trace every writer before the first line is written** — the
+> §14 map exists for precisely this.
+>
+> **⛔ THE ANTI-PATTERN, NAMED SO IT CANNOT BE REINTRODUCED:** *a marker that can be un-set,
+> recomputed, or written by more than one path is not an identity — it is another quantity
+> wearing an identity's name.*
+> ⭐ `gtt_state.status` fails this test on its face (§12.3.1): three writers, and its value
+> records the response rather than the observation.
+
 **D-3 (addresses RC-3, invariant C, constraint 7).** Carry `reservation_id` onto
 `RELEASE_USED`, and add a reconciliation path that can detect and release an `OPEN` trade whose
 broker position **and** holding are both absent across N consecutive cycles — the second,
@@ -434,17 +448,80 @@ RESERVE ─┬─> COMMIT ─┬─> RELEASE       (fund_manager:606)  keyed res
          │
          ├─> RECONCILE : order_reconciler:3761  _check7_capital_accounting_drift  [§11.1 LATENT]
          │                 └─> publishes CapitalDriftDetected
+         │                        source_module="fund_manager_self_check"   (:3782, measured)
          │                        └─> capital/drift_handler.py:111  on_drift
-         │                               └─> 🔴 TIERED KILL ESCALATION
+         │                               └─> [DH1 GATE]  _ESCALATING_SOURCES (:66-70)
+         │                                      🔴 OPEN — the tag IS in the set
+         │                                      └─> TIERED KILL ESCALATION (single-sample SOFT/HARD)
          │
          └─> REPLAY    : fund_manager:1849  _replay_open_trade (:1900 query)      [§11.2 LATENT]
                           └─> re-reserves at every 08:15 boot
 ```
 
-🔴 **The map terminates at the kill path.** `drift_handler.py:80` is the *"BL-2 subscriber for
-`CapitalDriftDetected` — tiered kill escalation."* ⇒ the guard that §11.1 shows can go **silent**
-is the one feeding escalation. ⛔ Whether that ladder can escalate in practice is bounded by
-existing register findings and is **not re-derived here.**
+### 14.1 · 🔴 DH1 does NOT bar this path — measured, and it is the opposite of the expectation
+
+```python
+# capital/drift_handler.py:66-70
+_ESCALATING_SOURCES: Final[frozenset[str]] = frozenset({
+    "fund_manager",                  # FM9 sync_from_broker
+    "fund_manager_self_check",       # BL-3 OrderReconciler._check7  ← THIS PATH
+    "fund_manager_bucket_overflow",  # H-1 / E.2
+})
+```
+`_check7` publishes with `source_module="fund_manager_self_check"` (`order_reconciler.py:3782`).
+**It is in the set, and the set's own comment names `_check7` explicitly.** ⇒ **the gate is OPEN.**
+
+> ⚠️ **AND THE DOCSTRING IS STALE, WHICH IS HOW THE WRONG RECALL WAS PRODUCED.**
+> `drift_handler.py:17` says *"Today that's `{"fund_manager"}`"* — **one** member. The frozenset
+> at `:66-70` has **three**. ⭐ The prose says the path is barred; the code says it escalates.
+> 🏷️ **Filed: doc/code divergence on a kill-path gate.**
+
+⭐ **The register's "the drift alarm cannot escalate" finding applies to G3, which publishes
+`source_module="order_reconciler"` — a DIFFERENT check with a DIFFERENT tag.** ⛔ It does not
+generalise to `_check7`, and assuming it does is exactly the error this section exists to stop.
+
+### 14.2 · Which direction is dangerous
+
+- **FALSE NEGATIVE (reachable in principle):** `RELEASE_USED` invisible ⇒ `fm_margin` and
+  `ledger_sum` agree spuriously ⇒ **no publish ⇒ no escalation.** ⭐⭐ **A guard going silent on
+  the one drift path that CAN kill** — and silence is indistinguishable from health.
+- **FALSE POSITIVE (unreachable today; armed by Phase E):** a closed reservation over-reports
+  ⇒ an escalating drift published against healthy state. ⛔ Not reachable while `_check7`
+  iterates live reservations only.
+
+---
+
+## 15 · ⚠️ The ATULAUTO phantom's disposition — ⛔ recorded, NOT actioned
+
+`trd_e66ee17b…` is `OPEN` with `margin_reserved=587.4228`, and `_replay_open_trade` re-reserves
+it at **every 08:15 boot** — **~21 % of the delivery bucket, every day, for a position that does
+not exist.**
+
+### 15.1 · Is there a supported way to close it? — **NO. And that is itself a finding.**
+
+**Width:** all of `scripts/` (40+ files), `system_manager.py`'s full argument surface, and every
+`*.py` reference to `CLOSED_MANUAL` / `close_trade` outside the reconciler.
+
+Every hit is a **reader** or a **backfill of already-closed rows** — `backfill_closure_source_w8`
+(rows already `CLOSED_MANUAL`), `check_vm_state`, `eod_cleanup`, `reconstruct_excursions`.
+**`system_manager.py` exposes only `--date`, `--config-dir`, `--db-path`, `--dry-run`,
+`--no-soft-kill`. No script closes an OPEN trade.**
+
+**The only three code paths that transition `OPEN → CLOSED`, and all three are shut:**
+
+| path | why it cannot run |
+|---|---|
+| `_check1_manual_close` → `CLOSED_MANUAL` | ⛔ **excluded by the delivery skip** (`order_reconciler.py:871`) — an ACTIVE `gtt_state` row with a matching `trade_id` exists |
+| `_finalize_gtt_exit` → `CLOSED` | ⛔ **gated on `held == 0`**, which `:464` makes permanently false |
+| EOD squareoff | MIS only; CNC is exempt |
+
+⭐⭐ **Both doors are held shut by the two halves of the same defect** — and the second observation
+is the sharper one: **CHECK1 *would* close this trade. The delivery skip is what prevents it, and
+the ACTIVE `gtt_state` row keeping that skip armed was itself created by the loop.** The defect's
+own artifact is what keeps the trade alive.
+
+⛔ **Not closed, and no closure proposed.** ⛔ Raw DB manipulation remains forbidden. ⭐ Recorded so
+the daily ~21 % cost is a decision taken, not a condition that persists by default.
 
 ⭐ **Today produced TWO latent consumers nobody had named. The map is what stops a third being
 discovered after deployment.** ⛔ Enumerate before building.
