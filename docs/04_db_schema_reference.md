@@ -206,6 +206,23 @@ with neither `RELEASE` nor `COMMIT`* — returns **10**, which reconciles exactl
 independent arithmetic `1327 − 1106 − 211 = 10`. **Two methods agreeing is what makes the 10
 trustworthy; the 221 was a false finding produced by the old comment above.**
 
+> ### 🔴🔴 HARD ORDERING CONSTRAINT — **`reservation_id` on `RELEASE_USED` MUST land BEFORE any change that queries CLOSED reservations** *(06-Aug-2026)*
+> **Phase E's deferred orphan detection — *"rids in ledger but not in `fm._reservations`"*
+> (`order_reconciler.py`, `_check7` docstring) — is exactly such a change.**
+>
+> **(P) MEASURED 06-Aug:** a **fully released** reservation reports its **entire margin as still
+> held** — `sum_fm_ledger_margin_delta('54672bb96d30421d')` → **689.41341**, because the offsetting
+> `RELEASE_USED` row carries no `reservation_id` *(0 of 220; `RELEASE` carries it 1189 of 1189 —
+> **the keys are perfectly disjoint**)*.
+> **(S)** `_check7` publishes with `source_module="fund_manager_self_check"`
+> (`order_reconciler.py:3782`), which **IS** in `_ESCALATING_SOURCES` (`drift_handler.py:66-70`)
+> ⇒ **DH1 does NOT bar it** ⇒ **single-sample SOFT/HARD escalation.**
+>
+> ⇒ ⛔ **Shipping Phase E before this fix would arm a spurious kill on every closed delivery
+> reservation.** ⭐ Today `_check7` iterates live reservations only, so the false positive is
+> unreachable — **that is the only thing holding it, and Phase E removes it.**
+> ➡️ Full analysis: `docs/design/f6_delivery_exit_predicate_design_06aug2026.md` §§11, 13, 14.
+
 #### 🔴 THE LEDGER IS **NOT SELF-CONSISTENT** — the rule for anyone reconstructing capital
 
 > **Capital reconstructed from `fm_ledger` MUST be reconciled against trade status, or must

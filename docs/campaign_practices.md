@@ -1051,6 +1051,26 @@ and had never run.
 > ✅ **What DID close: the delta decomposes exactly** — `632.01 = 587.40 deployed + 44.61 unsettled
 > realised`, both sides to the paisa across two independent subsystems. **No money is missing.**
 >
+> ### 🔴🔴 **SECOND SCOPE CORRECTION — 06-Aug-2026. AR9 COVERS *ONE CHECK*, NOT THE FAMILY.**
+> ⛔ **AR9's subject is the G3 drift alarm, which publishes `source_module="order_reconciler"` —
+> a tag DH1 BARS from escalation** (`drift_handler.py:66-70`). ⭐ **That is why it was acceptable
+> as noise.**
+> ⛔ **It does NOT cover `_check7` / BL-3 `CAPITAL_ACCOUNTING_DRIFT`**, which publishes
+> `source_module="fund_manager_self_check"` (`order_reconciler.py:3782`) — **a tag DH1 does NOT
+> bar** ⇒ **single-sample SOFT/HARD escalation.**
+> ⭐⭐ **TWO CHECKS · ONE FILE · ONE ALARM NAME · TWO DIFFERENT SAFETY POSTURES.** That is the
+> trap, and naming it is the fix. **(P)** A reviewer extended AR9's scoped result to `_check7`
+> from recall on 06-Aug and was wrong **in the direction of false reassurance**; it was caught
+> only by measuring the tag at source.
+>
+> #### 📌 **REOPEN CONDITION THIS EARNS (the fifth):**
+> ⛔ **Any drift publisher whose `source_module` is IN `_ESCALATING_SOURCES` is OUTSIDE AR9 and
+> requires its own assessment.** ⭐ Membership is the discriminator — **not the alarm's name, not
+> the file it lives in, not the check number.**
+> ⚠️ **The trap is documented in the code too:** `drift_handler.py:17` still says *"Today that's
+> `{"fund_manager"}`"* — **one** member — while the frozenset four lines below has **three**.
+> ⛔ **Filed separately; do not fix in passing.**
+
 > #### ✅⭐ **VERIFICATION UPGRADED 05-Aug 23:2x — ⛔ NOT a new instance; the SAME breach, held to a higher standard.**
 > The decomposition above was previously **arithmetic that closed**. It is now **operands measured
 > independently**: opening `9,883.70` **(P)** `fm_ledger` INIT 08:15:15 · realised `44.61` **(P)** by

@@ -109,6 +109,65 @@ DEPLOYED IS NOT EVIDENCE.**
 
 ---
 
+# 🔴🔴 06-AUG-2026 CLOSE-OUT — **THE FIRST T+1 DELIVERY EXIT, AND THE DEFECT IT EXPOSED.** ⛔ **N STAYS 233 — see the row question below.**
+
+> ⛔ **EVERY ITEM IS A POINTER TO A COMMITTED RECORD.** Primary:
+> **`docs/design/f6_delivery_exit_predicate_design_06aug2026.md`** (§§1–15, four commits).
+> Also: `docs/05_incident_response.md` (P0 GTT rule) · `foundation_engineering_rules.md` §1.11,
+> §1.12 · `campaign_practices.md` AR9 second scope correction · `04_db_schema_reference.md`
+> (the Phase E ordering blocker).
+> 🏷️ **M9 classes on every claim. ⛔ No symbol names — totals only.**
+
+**✅ WHAT WORKED, RECORDED FIRST:** the delivery lifecycle ran **end to end in production** —
+entry → GTT → overnight carry → clean shutdown → fresh 08:15 boot → T+1 → GTT trigger → exit.
+**(P)** A same-day round trip also closed **cleanly**: four views converging inside **2 ms**, with
+the reservation **and** realised P&L returned in one row. ⭐ **That trace is adopted as the GOLDEN
+REFERENCE fixture for every future delivery change.**
+
+**🔴 THE DEFECT (LIVE, capital path).** `cnc_gtt_monitor.py:464` takes `abs()` of a same-day CNC
+position quantity. On a **T+1 exit** the sale is already reflected in `holdings()`, so adding the
+`−1` position **double-counts it** and `held` becomes 1. **(S)** `held == 0` is the **sole** door
+to `_finalize_gtt_exit` ⇒ **one line produces BOTH symptoms**: the trade never closes **and** a
+new GTT spawns every cycle. **(P)** md5-identical at the VM, `0197923` and HEAD — established by
+**file identity**, because the VM is not a git checkout.
+⭐ **Bracketed both ways:** a negative control (05-Aug, no F6) and a positive control (06-Aug clean
+exit) — **the defect is exactly one row of the truth table wide, and reachable ONLY on a T+1 exit.**
+⚠️ **Cost:** the reservation is stranded and **replayed at every 08:15 boot** — ~21 % of the
+delivery bucket, daily, for a position that does not exist. ⛔ **No supported closure path exists**
+(§1.12).
+
+**🔴 THE SAFETY FINDING, and it is the one that outranks F6 in the long run.** **(S)** `_check7`
+publishes `source_module="fund_manager_self_check"` — **IN `_ESCALATING_SOURCES`** ⇒ **DH1 does
+NOT bar it** ⇒ single-sample SOFT/HARD escalation. Its ledger read is **blind to `RELEASE_USED`**
+(0 of 220 carry `reservation_id`; `RELEASE` carries it 1189 of 1189 — **perfectly disjoint keys**).
+⇒ **HARD ORDERING CONSTRAINT: `reservation_id` on `RELEASE_USED` must land BEFORE Phase E.**
+
+**⚠️ THREE PROCESS FAILURES, all self-caught, all recorded:**
+1. **A bridge instruction steered a measurement wrong** — *"key on `reservation_id`, not
+   `trade_id`"* is **backwards for `RELEASE_USED`**. It did not merely fail to catch the blind
+   query; **it instructed it.** *(Proof A withdrawn; Proof B — the ledger's running balance, using
+   no key at all — carries the conclusion alone and reconciles to the paisa at every step.)*
+2. **A scoped result was silently generalised** — AR9 covers G3 (`order_reconciler`, barred by
+   DH1), **not** `_check7` (`fund_manager_self_check`, not barred). **Two checks, one file, one
+   alarm name, two safety postures.** ⭐ Caught only by measuring the tag at source.
+3. **A stale docstring on a kill-path gate** — `drift_handler.py:17` says the escalating set has
+   **one** member; the frozenset four lines below has **three**. **The prose says barred; the code
+   says escalates.** ⛔ **Filed separately; not fixed in passing.**
+
+**📌 THE ROW QUESTION — ⛔ OWED TO RAMA, NOT TAKEN HERE.** Three candidates: the **F6 predicate
+defect**, the **DH1 doc/code divergence**, and the **absent operator recovery path**. The
+`RELEASE_USED` key gap is **NOT** a candidate — it is already on record (E4, 17-Jul) and today only
+established its **live consequences**. ⇒ **If all three are admitted, N 233 → 236.** ⛔ **N STAYS
+233 until ruled.** ⭐ Recorded this way because N is a governed number and today's thread had no
+authority to move it.
+
+**⛔ BUILD NOT AUTHORISED. TONIGHT RULED OFF** by two independently sufficient reasons: exit
+identity needs a new persisted marker ⇒ **schema**, and an **evening schema push** trips
+`_refuse_migration` on every heartbeat cron until the next 08:15 boot. ⭐ **A deadline meetable
+only by breaking a rule is a deadline that should be missed.**
+
+---
+
 # 🔴 05-AUG-2026 EVENING CONSOLIDATION — **N 231 → 233.** ⛔ TWO NEW ROWS (**A6**, **A7**); EIGHTEEN SUB-ENTRIES.
 
 > ⏱️ **Written in two passes:** **A6 + its sub-entries** at ~18:00 (the delivery-carry thread);

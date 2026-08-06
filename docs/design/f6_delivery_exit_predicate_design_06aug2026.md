@@ -194,6 +194,12 @@ auto-recreate) must consult it. ⭐ This is the part that survives §3's unsampl
 > DUPLICATE MONITOR CYCLES.** ⛔ **Trace every writer before the first line is written** — the
 > §14 map exists for precisely this.
 >
+> ⭐⭐ **STATED AS A CHECKABLE PROPERTY, NOT AN INTENT — IDEMPOTENCE:** every successful write must
+> be **idempotent**, and **duplicate cycles, retries and restarts must all converge to the
+> IDENTICAL persisted state with no additional side effects.**
+> ⛔ *"Write-once"* describes intent and cannot be tested. **Convergence describes a test, and
+> regression cases 4, 5, 7 and 8 are that test.**
+>
 > **⛔ THE ANTI-PATTERN, NAMED SO IT CANNOT BE REINTRODUCED:** *a marker that can be un-set,
 > recomputed, or written by more than one path is not an identity — it is another quantity
 > wearing an identity's name.*
@@ -525,6 +531,47 @@ the daily ~21 % cost is a decision taken, not a condition that persists by defau
 
 ⭐ **Today produced TWO latent consumers nobody had named. The map is what stops a third being
 discovered after deployment.** ⛔ Enumerate before building.
+
+### 14.3 · Every edge classified — **functional · audit · safety**
+
+| edge | class | why the label matters |
+|---|---|---|
+| `RESERVE → COMMIT → RELEASE` | **functional** | ordinary capital lifecycle |
+| `RELEASE_USED` key gap | **audit** | frees the money correctly; destroys the trail |
+| `_replay_open_trade` | **functional** | wrong value ⇒ wrong capital, no alarm |
+| **`_check7 → DH1 → kill`** | 🔴 **SAFETY** | ⭐ **today proved a reviewer cannot tell this by looking at it** — it reads as one more drift log |
+
+⛔ **Label every edge before touching any single subsystem.** A change that looks local on a
+functional edge is not local on a safety edge, and nothing in the code says which is which.
+
+---
+
+## 14.4 · 🔴🔴 HARD ORDERING CONSTRAINT — **D-3 BEFORE PHASE E**
+
+> ⛔ **`reservation_id` must land on `RELEASE_USED` BEFORE any change that queries CLOSED
+> reservations.** Phase E's deferred orphan detection — *"rids in ledger but not in
+> `fm._reservations`"* — is exactly such a change.
+
+**The chain, every link measured:** a fully-released reservation reports its **entire** margin as
+still held (**689.41341**) ⇒ a large spurious drift ⇒ published on `fund_manager_self_check` ⇒
+**a tag DH1 does NOT bar** ⇒ **single-sample SOFT/HARD escalation.**
+
+⇒ **Shipping Phase E before D-3 would arm a spurious kill on every closed delivery reservation.**
+⭐ **The only thing preventing it today is that `_check7` iterates live reservations only — and
+Phase E is precisely the change that removes that.**
+
+### 14.5 · ⭐⭐ This RE-RANKS (b), and the reason must not be re-derived
+
+(b) auditability was filed as **real work, but not urgent — all consumers LATENT**. ✅ **That
+still holds today.** ⛔ **It stops holding the moment Phase E is scheduled.**
+
+> **(b)'s urgency is not a property of the defect. It is a property of the ROADMAP.**
+
+⚠️ **There is no Phase E work item** in the register or anywhere in `docs/` — the only forward
+reference is the `_check7` docstring. ⭐ **So this constraint has been recorded where the work
+would actually be picked up: `docs/04_db_schema_reference.md` (beside the existing
+`release_used()` key-gap note), not only here.** A rule living solely in a design nobody opens
+is not a rule.
 
 ---
 

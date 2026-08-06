@@ -83,6 +83,15 @@ This document defines the foundational engineering rules and standards for build
 
 > **Origin (06‑Aug‑2026):** `RELEASE_USED` carries `reservation_id` on **0 of 220** rows while `RELEASE` carries it on **1189 of 1189** — the keys are perfectly disjoint. A reservation‑keyed query therefore returns a structurally guaranteed zero for any clean delivery exit. See `docs/design/f6_delivery_exit_predicate_design_06aug2026.md`.
 
+### 1.12 Supported Operator Recovery Path
+
+* **There must always exist ONE SUPPORTED OPERATOR RECOVERY PATH for every persistent business state.**
+* If a state can be entered, a sanctioned way out must exist — a script, a command, or a documented procedure.
+* Raw DB manipulation is **not** a recovery path. Neither is "restart and hope".
+* A state with no supported exit is a **design defect**, not an operational inconvenience — and it must be found at design time, because by the time it is entered it is already too late.
+
+> **Origin (06‑Aug‑2026):** an `OPEN` delivery trade whose broker position is gone had **no supported closure path at all**. Width searched: all of `scripts/`, `system_manager.py`'s entire argument surface, every `CLOSED_MANUAL` reference outside the reconciler — every hit was a reader or a backfill of already‑closed rows. All three `OPEN → CLOSED` transitions were shut: CHECK1 by the delivery skip, `_finalize_gtt_exit` by its `held == 0` gate, EOD square‑off by CNC exemption. **Both doors were held by the two halves of one defect, and the `gtt_state` row keeping CHECK1's skip armed had been created by the defect itself.** The reservation was therefore re‑reserved at every 08:15 boot — ~21 % of the delivery bucket, daily, for a position that did not exist.
+
 \---
 
 ## 2\. Python Coding Standards
