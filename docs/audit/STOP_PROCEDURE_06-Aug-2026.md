@@ -166,6 +166,40 @@ it. There just isn't one without a stop.**
 entries.** ⛔ **The stop remains Rama's to authorise and Rama's to run** — this is a cost, not an
 authorisation.
 
+### 🔒 THE FOUR PRECONDITIONS — ⛔ **THIS CONCLUSION IS VOID IF ANY ONE CHANGES**
+
+⭐ **Attached in the AR9 shape (a conclusion carrying its own reopen conditions), because the
+alternative is folklore:** *"you have to stop it every night"* becoming a habit whose reason nobody
+can name. **Habits outlive their reasons.**
+
+| # | precondition | falsified by | check |
+|---|---|---|---|
+| 1 | **the 15:15 breaker fires daily** | disabling / rescheduling the `force_close` circuit breaker | today's log: `order_monitor.force_close_triggered` |
+| 2 | **BOTH clearers remain boot-only — one production site each** | any scheduled job, loop, route or CLI gaining a call | repo-wide grep, **all file types, no filter**, for `clear_stale_state` **and** `auto_clear_scheduled_kill` — must return `main.py:1914` and `:1919` and nothing else outside tests/docs |
+| 3 | **the self-exit stays blocked by an open row** | F6 landing, or `_eod_self_exit_due` gaining a product/phantom filter | `main.py:1073-1113` |
+| 4 | **no other path clears a prior-day kill** | a new date-rollover handler, a resume route, an operator CLI | as #2, plus `SCHEDULED_KILL_REASONS` consumers |
+
+⛔ **If any of the four changes, DO NOT re-quote this conclusion — re-derive it.**
+
+> ### 📌 §2.1 — **THE PRODUCTION LOG LINE IS PINNED BESIDE THE SOURCE CITATION, DELIBERATELY**
+> The `08:15:02.876` auto-clear line sits **next to** the `main.py:1914`/`:1919` citation above, and
+> must stay there. ⭐⭐ **So a later reader cannot mistake this for source-only reasoning when it has
+> been DEMONSTRATED IN PRODUCTION** — the same event, the byte-identical reason string, one day
+> earlier. 🏷️ **The upgrade this record makes is not a new inference; it is an architectural
+> inference becoming an OBSERVED OPERATIONAL PROPERTY.**
+
+### 🔴 AND IT IS A RECURRING OBLIGATION, NOT A ONE-OFF
+
+**If the stop is taken tonight, Friday boots, Friday's 15:15 breaker fires — and on Friday evening
+the service refuses to self-exit AGAIN**, because DIFFNKG carries and the phantom persists.
+⇒ ⭐⭐ **A MANUAL STOP IS REQUIRED EVERY TRADING NIGHT UNTIL F6 LANDS.**
+⚠️ **Friday's stop matters for MONDAY** — the weekend is not a trading day, so a missed Friday stop
+costs **Monday**, three days after the mistake, when the cause is hardest to see.
+⛔ **No cheaper mitigation exists — cancelling the GTT does NOT work** *(verified at source; the
+`abs()` phantom keeps `held == row_qty`, so `cnc_gtt_monitor.py:513` recreates it, or queues it
+pre-open for the first in-hours cycle)*. **The only levers are the nightly stop, or F6.**
+➡️ **Filed as F6's SIXTH cost and its PRIORITY argument** — `f6_delivery_exit_predicate_design_06aug2026.md` §15.1.
+
 ---
 
 ## §4c — THE EVIDENCE SNAPSHOT *(ChatGPT's #4, adopted)*

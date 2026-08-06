@@ -573,6 +573,43 @@ P&L computed from an unrelated price** into `record_gtt_close_financials` and `f
 > ⭐ **Costs 1–4 end when the trade closes. Cost 5 BEGINS there and persists in the data.**
 > ⇒ **"Correct closure, wrong P&L" is not a clean resolution, and no branch of F6 avoids it.**
 
+### 15.1 · 🔴🔴 THE **SIXTH** COST — ⭐⭐ **AND IT IS THE ONLY ONE THAT ARGUES *WHEN***
+
+> ⚠️ **NUMBERING CORRECTED 06-Aug ~19:4x:** this arrived described as *"the fifth"*, listing the
+> costs as capital · slot · symbol block · fabricated price. **That list omits cost 4 — the three
+> live sell GTTs at the broker** (§15's table). ⛔ **The tree already carries FIVE. This is the
+> SIXTH.** ⭐ Recorded because a mis-numbered cost is how one silently replaces another.
+
+**A MANUAL STOP IS NOW REQUIRED EVERY TRADING NIGHT UNTIL F6 LANDS — and a missed one costs a FULL
+TRADING DAY, SILENTLY.**
+
+**The chain, measured 06-Aug (full working: `docs/audit/STOP_PROCEDURE_06-Aug-2026.md` §4b):**
+a phantom `OPEN` row blocks the 17:35 self-exit → no exit ⇒ **no 08:15 boot** → **both** kill
+clearers are **boot-only** (`main.py:1914` / `:1919`, one production site each) → the day's routine
+15:15 `SOFT_KILL` **never clears** → **the next trading day opens in `SOFT_KILL`: no entries at all.**
+
+| | why this one outranks the other five |
+|---|---|
+| **it RECURS** | costs 1–5 are consequences of *one* phantom. This one **repeats every night the phantom persists** — indefinitely. |
+| **it is OPERATOR-DEPENDENT** | ⛔ the only mitigation is **a human remembering a command**, every trading night. Costs 1–5 need no one to do anything. |
+| **it FAILS SILENTLY** | ⭐⭐ it presents as **"no signals today"** — **indistinguishable from a quiet market.** Nothing alarms; the day simply produces nothing. |
+| **the delay is NON-LOCAL** | ⚠️ **a missed FRIDAY stop costs MONDAY** — the weekend is not a trading day, so the loss lands **three days after the mistake**, when the cause is hardest to see. |
+
+⛔ **AND THERE IS NO CHEAPER MITIGATION — CANCELLING THE GTT DOES NOT WORK. (S), verified at source,
+not cited:** with the GTT cancelled at the broker `bg is None` ⇒ `triggered=False`,
+`present_active=False`; the `abs()` phantom keeps `held=1` and `row_qty=1`, so **branches 1–4 all
+fail** (`:486` no · `:492` no · `:497` `1 != 1` false · `:501` `held==0` false) and **`:513`
+`held == row_qty` fires `_recreate`** — or `_queue_preopen` out-of-hours, which rebuilds it on **the
+first in-hours cycle**. ⇒ 🏷️ **The only levers are the nightly manual stop, or F6.**
+
+> ⭐⭐ **THIS IS THE PRIORITY ARGUMENT. Costs 1–5 argue that F6 MATTERS; cost 6 argues WHEN** — it
+> converts F6 from *"a defect with bounded consequences"* into *"a standing nightly operator
+> obligation with a silent, three-day-delayed failure mode."*
+> 🔴 **AND TOMORROW'S FREE MEASUREMENT (§4.1 of the Friday card) DECIDES WHETHER IT IS ONE NIGHT OR
+> MANY:** the `−1` row **GONE** ⇒ `held = 0` ⇒ branch 4 fires ⇒ the phantom closes ⇒ **the
+> obligation ends** *(DIFFNKG still defers the self-exit — but a real carry is a real reason)*; the
+> row **SURVIVES** ⇒ **the obligation stands indefinitely.**
+
 ---
 
 `trd_e66ee17b…` is `OPEN` with `margin_reserved=587.4228`, and `_replay_open_trade` re-reserves

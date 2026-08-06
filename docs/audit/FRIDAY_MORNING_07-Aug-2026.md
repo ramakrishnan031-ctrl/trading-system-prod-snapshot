@@ -35,6 +35,21 @@ urgent F6's build is.** ⛔ **Record it either way. DO NOT act on it.**
 ⚠️ **And do not read a matched count as health:** on 06-Aug `2 positions == 2 rows` held **because
 the phantom exists on BOTH sides.** **An equality can be arithmetically clean and still wrong.**
 
+> ### 🔴🔴 **IT IS NOT ONLY A DIAGNOSTIC — IT DECIDES AN OPERATIONAL BURDEN**
+> · **`−1` row GONE** ⇒ `held = 0` ⇒ branch 4 fires ⇒ the phantom closes ⇒ ✅ **THE NIGHTLY-STOP
+>   OBLIGATION ENDS** *(DIFFNKG still defers the 17:35 self-exit — but a real carry is a real
+>   reason, and it clears when it sells)*.
+> · **`−1` row SURVIVES** ⇒ ⛔ **THE OBLIGATION STANDS INDEFINITELY: a manual stop EVERY trading
+>   night until F6 lands.**
+> ⭐⭐ **Why it matters this much:** no stop ⇒ no boot ⇒ the day's routine 15:15 `SOFT_KILL` never
+> clears (both clearers are boot-only) ⇒ **the next trading day opens with no entries at all**, and
+> it presents as **"no signals today" — indistinguishable from a quiet market.**
+> ⚠️⚠️ **AND TONIGHT'S STOP IS FRIDAY'S — A MISSED *FRIDAY* STOP COSTS *MONDAY*,** three days after
+> the mistake, because the weekend is not a trading day.
+> ⛔ **Cancelling the GTT is NOT a cheaper fix** — the `abs()` phantom keeps `held == row_qty`, so
+> `cnc_gtt_monitor.py:513` recreates it (or queues it pre-open for the first in-hours cycle).
+> **The only levers are the nightly stop, or F6.**
+
 **Baseline to compare against (P, measured 06-Aug 19:08:38):** `get_positions` → **`2 positions`**;
 `get_holdings` → **`0 holdings`** (15:23:40). Both trades still `OPEN`, both `gtt_state` `ACTIVE`.
 
