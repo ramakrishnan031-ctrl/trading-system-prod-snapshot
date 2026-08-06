@@ -386,6 +386,35 @@ carve-out named) at **both** sites rather than the wording at one.
 
 ---
 
+## 8. 🔤 CONSUMERS OF ALERT **WORDING** — ⭐ a maintained inventory, ⛔ not a one-off gate result
+
+**Opened 06-Aug-2026.** ⭐ **Why this is a LIST and not a paragraph in a commit message: without it,
+the next wording change rediscovers these from scratch — and the rediscovery is only cheap while
+someone remembers to look.**
+
+> ⛔ **CHECK THIS LIST BEFORE CHANGING ANY ALERT STRING.**
+
+| consumer | what it keys on | producer | note |
+|---|---|---|---|
+| `tests/unit/test_signal_alert_capital_vocabulary.py:98` | `re.search(r"Risk: ₹[0-9,.]+ \(([^)]*)\)", body)` — **a regex on the signal alert** | `signals/signal_processor.py:492` | ⭐ **created by `0087d3a` itself**, with the regex written against the **NEW** string — so the 06-Aug wording change shipped with its own consumer updated |
+
+**(S) Width of the 06-Aug sweep, stated:** repo-wide, **all file types, no glob filter**, patterns
+`Risk: ₹` · `Risk: Rs` · `Risk:…%)` · `risk_line`. **Result: no parser, no Telegram automation, no
+script grep, no log-watcher keys on the old form.** The only other hits were the producer itself and
+documentation.
+
+> ### ⛔⛔ 8.1 · **GREP PROVES CODE, NOT HUMAN WORKFLOW** — ⭐ the durable half
+> **An OPERATOR HABIT cannot be enumerated by any search.** Of the four surfaces an alert-wording
+> change can break — *a parser · an automation · a log grep · an operator's reading* — **only the
+> first three are repo-observable.**
+> ⛔ **A clean grep must NEVER be reported as though it covered the fourth.**
+> ⭐ **06-Aug is the case that teaches it:** the operator-reading surface was not merely uncovered by
+> the sweep — **it was the very thing the commit existed to correct** (*"Risk (1.5%)" was the SL
+> distance, not a fraction of capital*). **The one surface grep could not see was the one that
+> mattered.**
+
+---
+
 ## What this document does NOT cover
 
 - Anything not listed above. **An unlisted alarm is an incident until proven otherwise.**
