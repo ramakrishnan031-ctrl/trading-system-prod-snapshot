@@ -44,6 +44,11 @@ unless stated. ⛔ **No value set · no YAML key · no code · no ruling taken.*
 ⭐ **Read the last two rows first.** ⛔ **Everything marked "blocks implementation" is downstream of
 them.**
 
+> 🔒 **AND THEN READ `§9` — THE EXIT CRITERION.** ⛔ **This header tells you to read the matrix
+> *instead of* the sections; §9 is the one section that instruction must not hide.** It states when
+> the thread is **CLOSED** *(A–D)* and — ⭐ **the part that is ours** — **what may REOPEN it (E)**.
+> ⛔ *"Someone had a further idea"* **is not on that list.**
+
 ---
 
 # §1 · THE CONCRETE SIZING FACTS THAT ARE IN NO MEASUREMENT DOC
