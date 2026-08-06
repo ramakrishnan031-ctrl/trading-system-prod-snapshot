@@ -415,6 +415,37 @@ documentation.
 
 ---
 
+## 9. 🔴 THE EOD REPORT IS **CRITICAL EVERY SINGLE DAY**, on one known-benign line
+
+**(P) both 05-Aug and 06-Aug end identically:**
+```
+❌ deployed tree DIFFERS from HEAD in 1 file — config/strategy_direction_registry.yaml
+SUMMARY: 1 violation
+```
+⇒ **`1 violation` ⇒ the whole EOD report is CRITICAL.**
+
+**Why it is benign:** that file is **rewritten daily by `strategy_registry_officer` at 16:22**. It is
+**expected, self-healing, and nothing reads it but its own writer.** The EOD report runs at 18:45,
+i.e. **always after** the 16:22 rewrite ⇒ the diff is present **every single day, by construction.**
+
+> ### ⛔ **THIS IS REAL IF:**
+> - the diff names **ANY file other than** `config/strategy_direction_registry.yaml`; **or**
+> - it names that file **with a different shape** — more than 1 file, or a violation count ≠ 1; **or**
+> - the file is **absent** rather than differing (that means the 16:22 writer did not run).
+
+⛔ **DO NOT SUPPRESS THE CHECK.** ⭐ **The check is right; the CLASSIFICATION is what is missing.**
+A tree-diff detector that goes quiet is worth less than one that is noisy-but-classified.
+
+> ### ⚠️ 9.1 · **THE SECOND-ORDER COST, AND IT IS NOT HYPOTHETICAL — IT LANDED ON 06-Aug**
+> **A report that is CRITICAL every day trains the reader to skip its severity line.** On 06-Aug the
+> same report also carried **a day's P&L understated by more than its own reported value** and a
+> **mislabelled `reconcile_positions` exit** — ⛔ **and neither was noticed from the report.**
+> ⭐⭐ **This is precisely the alarm-fatigue mechanism this whole document exists to prevent, and it
+> is happening to the report that summarises everything else.**
+> ➡️ `docs/audit/eod_email_findings_06aug2026.md`
+
+---
+
 ## What this document does NOT cover
 
 - Anything not listed above. **An unlisted alarm is an incident until proven otherwise.**
