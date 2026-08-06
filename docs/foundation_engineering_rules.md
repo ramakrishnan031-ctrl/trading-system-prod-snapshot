@@ -73,6 +73,16 @@ This document defines the foundational engineering rules and standards for build
 * Avoid clever, complex, or fancy logic.
 * Future‑you must understand the code easily after one year.
 
+### 1.11 Traceable Reservation Lifecycle
+
+* Every reservation must produce exactly **one** matching release, regardless of exit timing — same‑day, T+1, restart, or monitor replay.
+* That release must be **linkable to its reservation by a key that exists on both rows**.
+* **Any future ledger change must FAIL REVIEW if reservation creation and release cannot be linked end to end.**
+* An untraceable release is half a release: it frees the money and destroys the audit path.
+* A predicate error must never be able to strand capital permanently — a single release path gated on one live quantity is a design defect, not an implementation detail.
+
+> **Origin (06‑Aug‑2026):** `RELEASE_USED` carries `reservation_id` on **0 of 220** rows while `RELEASE` carries it on **1189 of 1189** — the keys are perfectly disjoint. A reservation‑keyed query therefore returns a structurally guaranteed zero for any clean delivery exit. See `docs/design/f6_delivery_exit_predicate_design_06aug2026.md`.
+
 \---
 
 ## 2\. Python Coding Standards

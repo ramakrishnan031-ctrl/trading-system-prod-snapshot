@@ -158,7 +158,7 @@ on a `GTT_EXIT` close.
 | 4 | 🔴 **the auto-recreate branch is in scope** — a second, independent consumer of the same `held` (§1.2) |
 | 5 | regression must include a test that goes **RED on current code**, reproducing a T+1 exit — ⛔ not one that merely asserts the new behaviour |
 | 6 | ⭐ **the same-day round-trip path worked in production (§4) and must still work** — a regression here breaks the *common* case to fix the *rare* one |
-| 7 | 🔴 **the release must be traceable to its reservation** (RC-3) |
+| 7 | 🔴 **the release must be traceable to its reservation** (RC-3) — ⭐ promoted to an architecture rule: **`docs/foundation_engineering_rules.md` §1.11 Traceable Reservation Lifecycle**, so it binds every future ledger change, not just this fix |
 
 ## 6 · Invariants (3) — the structural level, which outranks the expression
 
@@ -207,8 +207,20 @@ independent release path Invariant A requires.
 6. **operator manually cancels a system-created GTT while the monitor runs** — does it recreate
    immediately, next cycle, or never? ⭐ the only case sourced from an operator action rather
    than code reading, and 🏷️ **still unobserved** (the 06-Aug attempt never reached the broker)
+7. 🔴 **STEADY STATE.** After a successful T+1 release, run **multiple consecutive monitor
+   cycles** and verify: **no new GTT · trade stays CLOSED · reservation stays released ·
+   available capital stable.** ⭐ Case 4 tests the *first* cycle after an exit; this tests the
+   *tenth*. **Today's loop was a steady-state failure, so this case is shaped exactly like the
+   bug.**
 
 **Gate:** `pytest tests/unit tests/integration` — ⛔ never `run_tests.py`.
+
+> ⚠️ **The existing BL-3 test is VACUOUS and must be fixed FIRST, then re-run on OLD code.**
+> `tests/unit/test_state_store.py:1944` asserts `sum_fm_ledger_margin_delta(rid_closed) == 0.0`
+> — and its fixture **inserts a `RELEASE_USED` row WITH a `reservation_id`**, a shape production
+> has never produced (0 of 220). The test's own comment describes the production failure mode
+> and asserts it cannot happen. ⭐ This is the fixture class: *a fixture asserting what its own
+> data cannot support makes a wrong reader look right.*
 
 ## 9 · Post-deploy convergence checkpoint
 
@@ -236,7 +248,103 @@ a partial deploy** — a push carries everything or nothing.
 inspection, and neither touches the capital or order path — but "low risk by inspection" is not
 the gate, the gate is the gate.
 
-## 11 · What this design does NOT settle
+## 11 · The blind-key callers, traced — ⛔ found, not fixed
+
+**Width:** whole repo, all `*.py`, `venv` excluded. **18 references to
+`sum_fm_ledger_margin_delta`; 4 non-test; exactly ONE production call site.**
+
+### 11.1 · `order_reconciler.py:3761` — `_check7_capital_accounting_drift` (BL-3)
+
+It compares `_Reservation.margin` against `sum_fm_ledger_margin_delta(rid)`, and on breach
+**logs `BL-3 CAPITAL_ACCOUNTING_DRIFT` and publishes `CapitalDriftDetected`**. ⇒ **it alarms,
+so it is on the capital path.**
+
+⭐⭐ **But it iterates `fund_manager.get_live_reservations()`** — and a released reservation is
+no longer live. ⇒ **it never asks the function about a closed reservation**, which is the only
+case where the blindness produces a wrong number.
+
+🏷️ **Revised classification: (b) LATENT, not live.** My earlier "CONFIRMED LIVE" was about the
+*function*, which is measurably wrong (689.41341 for a fully-released reservation); the *live
+consumer* is not affected. ⛔ **Recording the downgrade rather than leaving the stronger claim
+standing.**
+
+**Two ways it becomes live, both named:**
+- **False negative — the direction that matters.** If a trade is live in `fm._reservations`
+  while the ledger *has* released it, `ledger_sum` omits the `RELEASE_USED` and the two sides
+  agree spuriously ⇒ **`_check7` fails to detect the exact inconsistency it exists to detect.**
+- **Phase E.** The docstring defers orphan detection — *"rids in ledger but not in
+  `fm._reservations`"* — to Phase E. **That is precisely the change that would start querying
+  closed reservations and arm the false positive.**
+
+### 11.2 · `fund_manager.py:1900` — inside `_replay_open_trade` (`:1849`)
+
+Fetches the reservation's full ledger chain at boot to replay it; **blind to `RELEASE_USED`**.
+For a correctly-`OPEN` trade no `RELEASE_USED` exists, so it is harmless today.
+🔴 **It bites if a trade is `OPEN` while its reservation has been released** — the replay would
+re-reserve capital that was already freed, a **double-reserve**.
+🏷️ **(b) LATENT.** ⛔ An earlier note said *"rehydrate keys on trade status, so it does not
+drive the replay."* **That established it does not drive the selection; it did not establish
+the query is harmless.** Corrected here.
+
+### 11.3 · The three qualified sites are safe
+
+`fund_manager.py:2144` (`entry_type='RESERVE'`, 1422/1422) · `fund_manager.py:2113`
+(`entry_type='COMMIT'`, 223/223) · `state_store.py:2575` (`entry_type='COMMIT'`).
+**Hit count: 2 blind of 5 production sites; 0 live; 2 latent.**
+
+---
+
+## 12 · 🔴 THE TENSION IN TONIGHT'S PLAN — named now, not at 18:15
+
+**The bundle is the problem.** D-3 mixes the root-cause lifecycle fix with ledger auditability:
+
+- **D-3** (carry `reservation_id` onto `RELEASE_USED`) is a **schema + write-path change on the
+  capital ledger**, plus a backfill question for 220 existing rows. ⛔ **Not a same-evening
+  change under any honest reading of the careful loop.**
+- **D-2** (exit identity) must **survive a restart** (regression case 5) ⇒ **persistence** ⇒
+  **schema again.**
+- **D-1 alone** is forbidden by this document's own binding rejection criterion.
+
+### 12.1 · The proposed split — ⛔ PROPOSED, NOT CHOSEN
+
+- **(a) LIFECYCLE** — D-1 + D-2 — the fix, with its own gate and regression set.
+- **(b) AUDITABILITY** — D-3's `reservation_id` + the second release path + §11's two latent
+  blind callers. **Independently testable, no deadline, and it now has two named instances.**
+
+### 12.2 · Does (a) alone satisfy the rejection criterion? — **YES**
+
+Answered from the criterion, not the clock. The criterion rejects **D-1 alone**, for two stated
+reasons: constraint 3 (the obvious edit fails) and Invariant B + §3 (a correct `held` leaves the
+structure intact). **(a) = D-1 + D-2, and D-2 *is* Invariant B.** Both reasons are addressed.
+⇒ **(a) is not excluded by the criterion.**
+
+### 12.3 · ⛔ But the criterion is not what binds tonight — schema is
+
+**D-2 needs persistence to survive a restart.** An evening schema push has a measured,
+documented consequence: **every heartbeat-writing cron trips `_refuse_migration` until the next
+08:15 boot migrates** — a full night of CRITICALs.
+
+⇒ 🔴 **Tonight is only possible if D-2 can be satisfied WITHOUT a schema change.** ⭐ **Open
+question for the next revision, not answered here:** `gtt_state.status` already carries terminal
+states and already transitioned `ACTIVE → CLEANED` on today's clean exit — **can exit identity
+be expressed on the existing column?** ⛔ If not, tonight is off, and that is the answer.
+
+### 12.4 · Pricing the miss, so the choice is made on numbers
+
+Cost is incurred **only if DIFFNKG's GTT triggers tomorrow**. Measured at 11:2x today:
+`last_price 446.60` · `sl_trigger 437.20` (**−2.10 %**) · `tgt_trigger 459.45` (**+2.88 %**).
+Neither is near. ⛔ I am not converting that to a probability.
+
+- **If it triggers:** one phantom, **~16 % of the delivery bucket**, cumulative stranding ~37 %.
+- ⭐ **And it is RECOVERABLE by hand.** A bad deploy to the only path that releases capital is not.
+
+⇒ **expected cost ≈ P(trigger) × one recoverable phantom**, against **a rushed change to the
+capital-release path.** ⭐⭐ **A deadline that can only be met by breaking a rule is a deadline
+that should be missed.**
+
+---
+
+## 13 · What this design does NOT settle
 
 - The **expression** for D-1 (deliberately — see the rejection criterion).
 - Whether §3's transient window exists. 🏷️ **UNVERIFIED.**
