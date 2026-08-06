@@ -633,12 +633,50 @@ DATA instead of to logic.**
    unowned field is a rule that silently stops working when a new writer appears.**
 5. ⚠️ **And a fifth, caught the same day:** `SYSTEM_MAP.md`'s Delivery section still read *"DORMANT /
    never exercised"* **on the day delivery traded** — a field whose only updater was human attention.
+6. 🔴🔴 **06-Aug, and it is the worst of the six because it is on a KILL PATH:**
+   `capital/drift_handler.py:17`'s docstring says the escalating set is *"`{"fund_manager"}`"* — **one
+   member.** The frozenset **four lines below** (`:66-70`) has **three**, and one of them is the very
+   tag `_check7` publishes. ⛔ **Nothing updates that docstring.** ⭐ **The prose says the path is
+   barred; the code says it escalates** — and it **demonstrably misled a reviewer, on 06-Aug, in the
+   direction of FALSE REASSURANCE about a kill.**
+   ⭐⭐ **This is M10's failure mode at its sharpest: the unowned field was not merely stale, it was a
+   SAFETY CLAIM.** ⛔ Filed; **not fixed in passing.**
 
 ⭐ **The cheapest form of compliance:** when adding a column or a record field, write the writer's
 `file:line` beside it in the schema comment. **If you cannot, that is the finding.**
 
 (Records: `docs/audit/item4_partA_inventory_survey_05aug2026.md` ·
 `docs/audit/HANDOFF_05-Aug-EVENING.md` §0b · `docs/MASTER_PENDING_01-Aug-2026.md` item-4 sub-entry.)
+
+---
+
+### M11 · ⛔⛔ NEVER CLASSIFY A DRIFT ALARM BY ITS **NAME** — classify it by its published `source_module`
+
+> **A drift check's safety posture is decided by ONE thing: whether its published `source_module`
+> is a member of `_ESCALATING_SOURCES` (`capital/drift_handler.py:66-70`).**
+> ⛔ **NOT its alarm name. NOT the file it lives in. NOT its check number.**
+
+**THE FAILURE IT PREVENTS, in one line:**
+> ⭐⭐ **a scoped SAFETY result being extended to a family that shares only its LABEL.**
+
+**(P) THE INSTANCE, 06-Aug-2026 — two checks, one file, one alarm name, two safety postures:**
+
+| check | `source_module` | in `_ESCALATING_SOURCES`? | posture |
+|---|---|---|---|
+| **G3** `CAPITAL_DRIFT` | `order_reconciler` | ❌ no | **barred by DH1** — advisory. This is AR9's subject |
+| **`_check7`** `CAPITAL_ACCOUNTING_DRIFT` (BL-3) | `fund_manager_self_check` | ✅ **YES** | **escalates** — single-sample SOFT/HARD |
+
+**Both live in `orders/order_reconciler.py`. Both are called "capital drift".** A reviewer extended
+AR9's acceptance from the first to the second **from recall**, and was wrong **in the direction of
+false reassurance**. ⭐ It was caught only by reading the tag at source.
+
+#### 📋 PERMANENT REVIEW CHECKLIST — run for **every** drift check, existing and future:
+1. **What `source_module` does it publish?** ⛔ Read it at the `publish(` call, not from the module name.
+2. **Is that string in `_ESCALATING_SOURCES`?** ⛔ Read the frozenset, **not the docstring above it** —
+   `:17` is stale and says one member where the code has three (**M10 instance 6**).
+3. **If YES ⇒ it is a SAFETY edge.** Any acceptance, tolerance or noise ruling needs its own
+   assessment and **cannot inherit one written for a different tag.**
+4. **If NO ⇒ advisory** — and say so explicitly, so the next reader does not have to re-derive it.
 
 ---
 
@@ -655,6 +693,17 @@ ground**:
 
 ⛔ **On the conflict taxonomy specifically: it is the FOUR FINDING-BUCKETS specialised to a
 migration — ⛔ NOT a new scheme.** Recorded here so nobody later adopts it as one.
+
+> #### ⏳ **RE-TESTED 06-Aug — ⛔ BOTH STAY HELD. Neither trigger fired.**
+> **The three-identity-fields rule** was proposed for promotion on the grounds that
+> `gtt_state.status` "fails it on its face — three writers, recording response not observation."
+> ⛔ **REFUSED. That is ADJACENT, NOT THE SAME RULE.** The candidate is about **identity vs
+> display** — *Row ID immutable · dotted key · display name; nothing joins on the display name.*
+> Today's finding is about a **state field recording the wrong subject** (response, not
+> observation) **with multiple writers** — which belongs to **M10** and to the marker/identity
+> discussion in the F6 design, **not** to the three-identity-fields shape.
+> ⭐ **The campaign's own standard applied to itself: a second instance must be the SAME rule, not
+> a neighbouring one.** ⛔ **The conflict taxonomy is unchanged at one instance.**
 📌 **Both are written in full at `docs/MASTER_PENDING_01-Aug-2026.md`, item-4 sub-entry** — ⭐ **held
 as candidates does NOT mean unrecorded; it means not yet general.**
 

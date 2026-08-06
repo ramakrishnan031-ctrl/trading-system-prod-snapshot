@@ -168,6 +168,56 @@ only by breaking a rule is a deadline that should be missed.**
 
 ---
 
+# 🔒 THE **MUST-LAND-BEFORE** TABLE — every ordering constraint in one place *(built 06-Aug-2026)*
+
+> ⭐⭐ **WHY THIS EXISTS:** the register already contained several ordering constraints, **each
+> discovered independently and each living inside the row that found it.** ⛔ **An ordering rule that
+> lives only inside one row is INVISIBLE to the refactor that violates it.**
+
+### ⚠️ SWEEP WIDTH AND ITS LIMIT — ⛔ **READ BEFORE TRUSTING THIS TABLE**
+**Corpus:** `MASTER_PENDING_01-Aug-2026.md` (2024 lines) · `campaign_practices.md` ·
+`foundation_engineering_rules.md` · all `docs/design/*.md`.
+**Patterns (8):** `MUST LAND BEFORE` · `hard prerequisite` · `HARD ORDERING` · `must ship with` ·
+`gated on` · `sequencing-critical` · `BEFORE item N` · `co-requirement`.
+**Raw hits 21 ⇒ 8 distinct constraints, each read in full and verified.**
+
+> 🔴🔴 **THIS TABLE IS NOT COMPLETE, AND SAYING SO IS THE POINT.** The sweep is **phrase-based**:
+> any constraint expressed without one of those eight phrases is **invisible to it**. `gated on`
+> alone returned **10** hits not individually resolved. ⛔ **A "complete" ordering table that is not
+> complete is more dangerous than none — it invites the reader to stop looking.**
+
+### ⭐ THREE SHAPES, NOT ONE — the sweep's own finding
+
+**SHAPE 1 · A BEFORE B** *(true ordering)*
+
+| # | must land FIRST | blocks | ⚠️ the concrete failure if violated | recorded at |
+|---|---|---|---|---|
+| 1 | **A4 — the buy-day product filter** (+CRITICAL-on-NULL) | **anything making the kill holdings-aware** | a HARD_KILL flatten reaches delivery shares the filter exists to spare | `:1032`, `:1159` |
+| 2 | **`#2e`** — the local-pass flatten product filter | **A3, the carry pilot** *(Rama's ruling, 03-Aug ~10:30)* | **(P) measured:** `place_order('SYM','SELL',15,…)` on a `(MIS 10)+(CNC 5)` book ⇒ **5 shares come out of the delivery position** | `:1025` |
+| 3 | **item 4** — the inventory reconciliation | **item 5** — the delivery config surface | any delivery value set first is exactly the *"blind settings"* being refused | `:794` |
+| 4 | **D-3** — `reservation_id` on `RELEASE_USED` | **Phase E** orphan detection | a released reservation reports its **whole** margin held ⇒ spurious drift on a tag **DH1 does not bar** ⇒ **spurious kill** | `:143` · `04_db_schema_reference.md` · design §14.4 |
+| 5 | **G3** — sector resolution | **any sizing increase** (blocks R2/D1) | *"hard prerequisite of any sizing increase"* | `:1386` |
+
+**SHAPE 2 · A **WITH** B** *(co-requirement — ⛔ not ordering; shipping either alone is the failure)*
+
+| # | must ship TOGETHER | ⚠️ the failure if split | recorded at |
+|---|---|---|---|
+| 6 | **G2** ↔ **a tier decision** | *"G2 MUST SHIP WITH A TIER DECISION OR IT SHIPS A DOUBLING"* | `:1385` |
+| 7 | **G3 resolution** ↔ **the unit mismatch** | *"fixing G3 ALONE changes nothing"* — the stacked defect | `:1386` |
+
+**SHAPE 3 · A must be CLOSED **BY** B** *(a trap that the later work would spring)*
+
+| # | the trap | must be closed BY | ⚠️ the failure | recorded at |
+|---|---|---|---|---|
+| 8 | `position_sizer.py:585` **enforces** `eff_max_position_value_pct` while `:596`/`:609` **report the GLOBAL** | **item 5** — *"BY item 5, not after it"* | identical today (override `null`); **the moment `delivery_max_position_value_pct` is set, the operator-facing CRITICAL states a percentage that was NOT enforced** | `:973` |
+
+⭐ **Shape 3 was not anticipated when this table was commissioned.** It is neither ordering nor
+co-requirement: **the later work is what makes the latent defect live**, so the defect must be closed
+*as part of* that work rather than before or after it. ⛔ **Recorded as a distinct shape rather than
+forced into one of the other two.**
+
+---
+
 # 🔴 05-AUG-2026 EVENING CONSOLIDATION — **N 231 → 233.** ⛔ TWO NEW ROWS (**A6**, **A7**); EIGHTEEN SUB-ENTRIES.
 
 > ⏱️ **Written in two passes:** **A6 + its sub-entries** at ~18:00 (the delivery-carry thread);

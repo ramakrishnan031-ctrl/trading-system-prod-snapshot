@@ -200,6 +200,11 @@ auto-recreate) must consult it. ⭐ This is the part that survives §3's unsampl
 > ⛔ *"Write-once"* describes intent and cannot be tested. **Convergence describes a test, and
 > regression cases 4, 5, 7 and 8 are that test.**
 >
+> 🔴 **"NO SIDE EFFECTS" INCLUDES NOTIFICATIONS, NOT ONLY LEDGER ROWS.** Today produced duplicate
+> **GTTs** *and* duplicate **CRITICAL alerts** — ⭐ **and the second is the one an operator actually
+> experiences.** A fix that stops the duplicate ledger effect while still emitting a CRITICAL every
+> cycle has not converged. **Assert on the alert count as well as on the state.**
+>
 > **⛔ THE ANTI-PATTERN, NAMED SO IT CANNOT BE REINTRODUCED:** *a marker that can be un-set,
 > recomputed, or written by more than one path is not an identity — it is another quantity
 > wearing an identity's name.*
@@ -543,6 +548,13 @@ discovered after deployment.** ⛔ Enumerate before building.
 
 ⛔ **Label every edge before touching any single subsystem.** A change that looks local on a
 functional edge is not local on a safety edge, and nothing in the code says which is which.
+
+> ### 📋 STANDING REQUIREMENT — **every future dependency diagram carries at least one explicit SAFETY review**
+> ⭐ **Today's map read as "one more drift log" until the edge was classified.** The classification
+> is what made the kill path visible — nothing in the code, the alarm's name, or the module it lives
+> in would have shown it. ⛔ **A dependency map with no safety pass is a map of the functional
+> system only, and it will be trusted as if it were the whole one.**
+> ➡️ Run `campaign_practices.md` **M11**'s checklist against every drift edge the map contains.
 
 ---
 
