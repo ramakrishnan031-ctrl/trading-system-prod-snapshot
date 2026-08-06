@@ -72,12 +72,23 @@ observation**, not a ruling and not another document.
 > ⇒ ⭐⭐ **It decides whether the intraday divisor is 1 or 2 — a FACTOR OF TWO on every intraday
 > position.**
 
-**THE OBSERVATION IS PASSIVE — ⛔ NO TRADE IS TO BE PLACED FOR IT:**
-1. Kite **Funds → `used margin`** *before* the first MIS entry fills;
-2. **again after both exits are resting** *(i.e. the deferred `place_exits` has run)*;
-3. **the position's own value**, for the comparison.
-⭐ **Record all three with clock times.** ⛔ **If no MIS trade fires, the question simply ROLLS — do
-NOT manufacture one.**
+**THE OBSERVATION IS PASSIVE — ⛔ NO TRADE IS TO BE PLACED FOR IT.**
+
+> 🔄 **AMENDED 07-Aug-2026 00:3x — THE OPERATIVE PROCEDURE NOW LIVES IN
+> `docs/audit/FRIDAY_MORNING_07-Aug-2026.md` §4**, upgraded from *"record three numbers"* to a
+> **CALIBRATION TEST**: **FOUR clock-stamped readings** *(used margin before · used margin after both
+> exits rest · position value · available funds)* **then FOUR documented fields** *(observed divisor ·
+> confidence · broker conditions · is a repeat required)*. ⛔ **Follow §4, not the struck text below.**
+> ⭐ **Why it is amended and not rewritten (`G4`):** the three-number form is what the thread actually
+> decided on 06-Aug; a reader must be able to see that the procedure was **strengthened**, not that it
+> was always this.
+
+~~1. Kite **Funds → `used margin`** *before* the first MIS entry fills;~~
+~~2. **again after both exits are resting** *(i.e. the deferred `place_exits` has run)*;~~
+~~3. **the position's own value**, for the comparison. Record all three with clock times.~~
+
+⛔ **If no MIS trade fires, the question simply ROLLS — do NOT manufacture one.** ⭐ **A roll is a
+legitimate outcome under `§9`'s exit criterion (B), ⛔ not a miss — but it must be RECORDED as one.**
 
 > ### ⚠️ THE ASYMMETRY — **and it is what decides how much this matters**
 > **If the divisor is 2 and we assume 1 ⇒ positions are DOUBLE-SIZED against the intended cap.**
