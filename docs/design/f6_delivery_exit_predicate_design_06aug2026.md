@@ -213,6 +213,12 @@ independent release path Invariant A requires.
    *tenth*. **Today's loop was a steady-state failure, so this case is shaped exactly like the
    bug.**
 
+8. 🔴 **COMBINED, production-like.** Restart **immediately** after a successful T+1 release ·
+   allow **multiple** monitor cycles · verify **no replay · no duplicate reservation · no
+   recreated GTT · no drift alert.** ⭐ It composes 5 and 7 and exercises **both** latent callers
+   at once — `_replay_open_trade` on the restart, `_check7` on the cycles.
+   ⛔ **Keep 5 and 7 as well: a composite that fails does not tell you which half broke.**
+
 **Gate:** `pytest tests/unit tests/integration` — ⛔ never `run_tests.py`.
 
 > ⚠️ **The existing BL-3 test is VACUOUS and must be fixed FIRST, then re-run on OLD code.**
@@ -324,10 +330,48 @@ structure intact). **(a) = D-1 + D-2, and D-2 *is* Invariant B.** Both reasons a
 documented consequence: **every heartbeat-writing cron trips `_refuse_migration` until the next
 08:15 boot migrates** — a full night of CRITICALs.
 
-⇒ 🔴 **Tonight is only possible if D-2 can be satisfied WITHOUT a schema change.** ⭐ **Open
-question for the next revision, not answered here:** `gtt_state.status` already carries terminal
-states and already transitioned `ACTIVE → CLEANED` on today's clean exit — **can exit identity
-be expressed on the existing column?** ⛔ If not, tonight is off, and that is the answer.
+⇒ 🔴 **Tonight is only possible if D-2 can be satisfied WITHOUT a schema change.**
+
+### 12.3.1 · ⛔ ANSWERED — **NO. Measured from the schema, the writers, and the data.**
+
+**The domain** (`core/schema.sql:1227-1228`, CHECK constraint, confirmed identical on the live DB):
+`ACTIVE · TRIGGERED · CANCELLED · EXPIRED · REJECTED · CLEANED`
+
+**Every production writer** — width: all `*.py`, `venv` and tests excluded. `set_gtt_state_status`
+(`state_store.py:2262`) is the **only** mutator, and it has **three** production call sites, all
+inside `cnc_gtt_monitor`:
+
+| site | writes | when |
+|---|---|---|
+| `:537` | `CLEANED` | inside a handler |
+| `:587` | `CLEANED` | inside `_finalize_gtt_exit` — **the gated function** |
+| `:613` | `old_status` | inside `_recreate` — reached only via `_reprotect` (`TRIGGERED`) or auto-recreate (`EXPIRED`) |
+
+⇒ 🔴 **No status is written when a GTT is merely OBSERVED triggered.** The row stays `ACTIVE`
+until a handler *acts*, and the status then records **what the handler did**, not what was seen.
+
+**Confirmed three ways in the live data:**
+- `330456580` and `330638484` have `updated_at` **exactly equal** to the two F6 alert timestamps
+  (09:31:56.410156 · 09:47:04.871690) — they became `TRIGGERED` *at the moment F6 acted*.
+- `330648138` became `EXPIRED` at 10:02:13.675916, 34 ms before its replacement was created —
+  the same `_recreate` call.
+- ⭐⭐ **`330660310` (ASKAUTOLTD, the clean exit) went `ACTIVE → CLEANED` and NEVER passed
+  through `TRIGGERED` at all.**
+
+⇒ **The circularity is real and worse than suspected.** `CLEANED` is written by the gated
+function, and `TRIGGERED` is written by the *failure* branch. On the clean path the row never
+becomes `TRIGGERED`. **`gtt_state.status` cannot express "this exit was observed" — only "this
+is what was done about it."** An identity marker written by the gated function cannot guard it.
+
+⇒ 🔴 **D-2 requires a new persisted marker ⇒ schema ⇒ TONIGHT IS OFF.** ⛔ Answered from the
+schema and the writers, not from what would be convenient.
+
+### 12.3.2 · And the schema route is independently ruled out tonight
+
+Even if a marker existed, an **evening schema push makes every heartbeat-writing cron trip
+`_refuse_migration` until the next 08:15 boot migrates — a full night of CRITICALs.**
+⭐ **That rules out a schema change tonight on its own, independently of the careful loop.**
+⇒ **Two independent reasons, either sufficient.**
 
 ### 12.4 · Pricing the miss, so the choice is made on numbers
 
@@ -344,7 +388,70 @@ that should be missed.**
 
 ---
 
-## 13 · What this design does NOT settle
+## 13 · ⭐⭐ THE D-3 CONVERGENCE — one change closes four things
+
+**The inversion, and it changes what the fix is:** the function is **not** wrong. Its contract
+is right and **the DATA violates it.** The BL-3 test's fixture is what production *should* be
+writing. ⇒ **the defect is in the WRITER, not the reader.**
+
+**D-3 — carrying `reservation_id` onto `RELEASE_USED` — closes four things at once:**
+
+1. the **blind query** that voided Proof A;
+2. **`_check7`'s latent false negative** (§11.1) — the guard that goes silent;
+3. **`_replay_open_trade`'s latent double-reserve** (§11.2);
+4. it makes the **BL-3 test non-vacuous by making its fixture true.**
+
+⭐ **That is the strongest argument for (b) auditability being real work rather than tidying.**
+⛔ **And it does NOT make it urgent** — all three consumers are 🏷️ **LATENT**.
+
+### 13.1 · The durable lesson: **the fixture is a specification**
+
+The author wrote `reservation_id` on a `RELEASE_USED` row because they **believed** that is what
+production writes. ⇒ **the test is evidence that the divergence was never noticed — not evidence
+that it does not exist.**
+
+🏷️ **Filed as a V4 instance** *(a test asserting what its own fixture guarantees cannot be
+observed)* — ⭐ **and the strongest one yet: the author understood the failure mode, named it in
+the comment, and still built a fixture that could not exercise it.**
+
+### 13.2 · The corrected fixture must go RED on old code — ✅ confirmed
+
+Rewriting the fixture to production shape (a `RELEASE_USED` row with **no** `reservation_id`)
+leaves only the `+500` RESERVE visible ⇒ `sum_fm_ledger_margin_delta(rid_closed)` returns
+`500.0`, and `assert … == 0.0` **fails**. ⭐ Corroborated against live production data:
+**689.41341** for ASKAUTOLTD's fully-released reservation. ⛔ **If a corrected fixture does not
+go red, the correction is wrong.**
+
+---
+
+## 14 · The reservation-lifecycle dependency map
+
+⛔ **Map only — no fixes.** Width: all `*.py`, `venv` and tests excluded.
+
+```
+RESERVE ─┬─> COMMIT ─┬─> RELEASE       (fund_manager:606)  keyed reservation_id  1189/1189 ✅
+         │           └─> RELEASE_USED  (release_used)      keyed reservation_id     0/220  🔴
+         │
+         ├─> RECONCILE : order_reconciler:3761  _check7_capital_accounting_drift  [§11.1 LATENT]
+         │                 └─> publishes CapitalDriftDetected
+         │                        └─> capital/drift_handler.py:111  on_drift
+         │                               └─> 🔴 TIERED KILL ESCALATION
+         │
+         └─> REPLAY    : fund_manager:1849  _replay_open_trade (:1900 query)      [§11.2 LATENT]
+                          └─> re-reserves at every 08:15 boot
+```
+
+🔴 **The map terminates at the kill path.** `drift_handler.py:80` is the *"BL-2 subscriber for
+`CapitalDriftDetected` — tiered kill escalation."* ⇒ the guard that §11.1 shows can go **silent**
+is the one feeding escalation. ⛔ Whether that ladder can escalate in practice is bounded by
+existing register findings and is **not re-derived here.**
+
+⭐ **Today produced TWO latent consumers nobody had named. The map is what stops a third being
+discovered after deployment.** ⛔ Enumerate before building.
+
+---
+
+## 15 · What this design does NOT settle
 
 - The **expression** for D-1 (deliberately — see the rejection criterion).
 - Whether §3's transient window exists. 🏷️ **UNVERIFIED.**
