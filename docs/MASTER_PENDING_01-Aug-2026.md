@@ -423,6 +423,26 @@ forced into one of the other two.**
 > ⇒ 🏷️ **The generalisation is what belongs here — ⛔ NOT "validate the source after F6."** F6 is
 > one instance; **the constraint binds every future snapshot design regardless of F6.**
 
+#### 🆕 07-Aug-2026 00:2x — **CONSTRAINT 9's F6 INSTANCE, RESTATED AS A MECHANISM RATHER THAN A RULE**
+
+> ### **F6 AFFECTS THE CORRECTNESS OF PERSISTENT CAPITAL STATE.**
+> ### **Any snapshot-based accounting introduced BEFOREHAND preserves an already-incorrect state ACROSS SESSIONS.**
+
+⭐ **Concretely, and it is measurable this morning:** the **07-Aug 08:15 boot replays ₹1,033.50**, of
+which **₹587.40 is the ATULAUTO PHANTOM** (`ee9af41eae554c35`) and ₹446.10 is DIFFNKG's real carry
+(`0184b66d4c214416`). ⇒ **A delivery baseline snapshotted at that boot would carry the ₹587.40 error
+for the whole session** — and, being persistent, **into the next one.**
+
+⛔⛔ **WHY THE RESTATEMENT IS THE POINT, not a rewording:** *"F6 must land before the snapshot"* is a
+**row in a table**; *"a snapshot freezes whatever the capital state is wrong about"* is a
+**mechanism**. ⭐ **AN ORDERING RULE WHOSE REASON IS RECORDED SURVIVES A REFACTOR; ONE THAT IS ONLY A
+ROW IN A TABLE DOES NOT** — the refactor that renames the item, splits it, or reorders the register
+carries the row away and leaves nothing that explains why the order mattered.
+
+🏷️ **Same shape as the table's own general form above** *(a snapshot converts a self-correcting error
+into a durable one)* — ⭐ **this is that principle instantiated on the one case that is LIVE**, so the
+next reader meets both the rule and a worked example that can be checked against production.
+
 ---
 
 # 🔴 05-AUG-2026 EVENING CONSOLIDATION — **N 231 → 233.** ⛔ TWO NEW ROWS (**A6**, **A7**); EIGHTEEN SUB-ENTRIES.

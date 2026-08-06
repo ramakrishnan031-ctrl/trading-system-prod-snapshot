@@ -227,6 +227,78 @@ is the required shape. **Never** *"the ruling was wrong."*
 with its reasoning**, not as a bare instruction. A mechanism whose *why* is recorded can be
 re-scoped by the next person; one that arrives as a bare imperative can only be obeyed or defied.
 
+#### 🛑 G5.1 · ⭐⭐ **THE GOVERNANCE BOUNDARY — the last legitimate sentence** — 🏷️ **PROVISIONAL**
+
+🏷️ **Parent (G7): EXTENDS G5.** G5 fixes the required **closing shape AFTER a ruling exists**
+(*"mechanism refuted, intent intact, returned for a ruling on the mechanism only"*). **G5.1 fixes the
+required closing shape BEFORE one exists.** Same discipline, the other side of the ruling.
+🏷️ Authority basis: **G1/G2** — the ruling is Rama's. **Sibling: G3** *(disclose, don't expand)* —
+G3 forbids **fixing** out of scope; G5.1 forbids **ruling, or pre-building toward a ruling**, in
+scope.
+
+> ### **FOR A GOVERNANCE-DEPENDENT ITEM, THE LAST LEGITIMATE SENTENCE IS:**
+> ### ***"the evidence is sufficient for a ruling."***
+> ### ⛔ **EVERYTHING AFTER IT IS EITHER THE RULING, OR NOISE WEARING THE RULING'S CLOTHES.**
+
+⭐⭐ **The second half is the operative one.** Analysis produced past sufficiency does not read as
+overreach — it reads as **thoroughness**, and it arrives in the same voice, the same format and the
+same document as the work that was owed. ⛔ **That is precisely why the line has to be written down
+rather than felt.**
+
+### ⭐ AND NAME WHERE THE LINE ACTUALLY IS — ⛔ **a rule with no worked edge is unenforceable**
+
+**The live case (07-Aug-2026): the delivery config surface** *(`sizing_thread_conclusions_06aug2026.md`
+§5, §7.1)*. Two governance rulings — **inventory authority** and **pipeline ownership** — block the
+whole surface, and neither is answerable by measurement.
+
+> 🔴 **WRITING THE DELIVERY KEYS — EVEN AS PLACEHOLDERS, EVEN COMMENTED OUT, EVEN AS `null` —
+> WOULD CROSS IT.**
+> ⭐ **Why a placeholder is not a lesser act:** *"a key's existence is an INVITATION"* (§5.3). It
+> pre-commits the **shape** of the surface, which is the substance of the pending ruling; and it
+> converts *"should this control exist?"* into *"what value should this control have?"* — ⛔ **a
+> different question, asked of a different person, with the first one silently answered.**
+
+> ## ⚠️⚠️ **AND THE CHECK WENT RED — ⛔ THE STEP IS NOT HYPOTHETICAL. IT HAS ALREADY BEEN TAKEN ONCE.**
+> **Measured 07-Aug-2026 00:3x, `config/system_config.yaml`, and it corrects this rule's own first
+> draft** *(which said the step was "one step away" — true for some keys, ⛔ false for others)*:
+>
+> | | state | |
+> |---|---|---|
+> | **`delivery_risk_per_trade_pct`** `:190` | **`null` PLACEHOLDER** | 🔴 **already written** |
+> | **`delivery_max_position_value_pct`** `:191` | **`null` PLACEHOLDER** | 🔴 **already written** |
+> | `max_open_delivery_positions` `:205` · `max_daily_delivery_trades` `:206` | **real values** (3 / 5) | ⚠️ ruled, not placeholders |
+> | **concentration · tier · bucket loss-limit · carry-days · entry-cutoff** | **ZERO keys, all five** | ✅ **line uncrossed — this is where it still is** |
+>
+> ⛔ **The `:185-189` comment is the invitation IN WRITING:** *"The V3 delivery path sets these when
+> delivery is activated (a later step)."*
+
+⭐⭐ **THAT PRECEDENT IS THE RULE'S EVIDENCE, not an embarrassment to it — and the cost is measured
+twice over:**
+1. **Both placeholders are twins of controls that NEVER BIND** (§5.2) ⇒ their destination is the
+   **pending twin-retirement ruling** — 🔴 **the placeholders MANUFACTURED a ruling that would not
+   otherwise be owed.**
+2. **Must-Land-Before constraint 8, verified at source tonight** *(⚠️ `capital/position_sizer.py`,
+   ⛔ **not** `core/` — my first grep was a FALSE ZERO on the wrong path)*: `:585` **enforces**
+   `eff_max_position_value_pct` while `:596`/`:609` **report the GLOBAL** ⇒ **the moment
+   `delivery_max_position_value_pct` is given a value, the operator-facing CRITICAL states a
+   percentage that was NOT enforced.** 🏷️ **A latent defect that exists BECAUSE THE KEY EXISTS.**
+
+⇒ 🏷️ **The honest form of the boundary: it is one step away for the FIVE that have no key, and it
+was already crossed for the TWO that do** *(at the `V3 03.06` "DELIVERY-scoped sizing scaffold
+(INERT)" — ⛔ date not established here, and not chased tonight: `G3`)*. ⭐ **A boundary is cheap to write while
+nobody is standing on it and contested the moment someone is mid-step** — ⛔ and this one already has
+a body of evidence for what the far side costs.
+
+### ⚠️ STATUS — **PROVISIONAL, and the honest reason** *(G7.1)*
+
+⛔ **G5.1 has NOT yet bound.** The sizing thread **did** stop at sufficiency and the keys were **not**
+written — but the rule did not exist then, so **the behaviour occurred WITHOUT it**; that is a
+**retrospective instance, ⛔ not an application.** 🏷️ **Per G7.1, promote it the first time it BINDS
+or is AMENDED against a real case — and if it never does, that is the answer too.**
+⭐ **`§8`'s own result forbids scoring it any higher:** *every explanation constructed AFTER the fact
+failed; only predictions written BEFORE held.* **G5.1 is written before its case. It gets to be
+tested, not credited.**
+
 ### G7 · ⭐⭐⭐ **EVERY NEW RULE MUST NAME A PARENT** — the anti-proliferation device
 
 > ### **A NEW GOVERNANCE RULE MUST NAME AN OLDER RULE IT EXTENDS, NARROWS OR REPLACES.**

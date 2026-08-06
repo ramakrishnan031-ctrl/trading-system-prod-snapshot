@@ -334,5 +334,59 @@ validated by being RUN against a real case that could embarrass it.**
 
 ---
 
+# §9 · 🔒 THE EXIT CRITERION — ⛔ **IT HAS FIVE PARTS, NOT FOUR**
+
+> ## **THE THREAD IS CLOSED WHEN ALL OF (A)–(D) HOLD:**
+>
+> **(A)** **both governance rulings taken** — the **inventory authority**, and **pipeline
+> ownership** *(§7.1)*;
+> **(B)** the **intraday margin observation COMPLETED, or explicitly ROLLED** *(§1.1a)*;
+> **(C)** implementation **preserves every accepted invariant** — ⭐ **and this is the TESTABLE one:**
+> **CAP never enlarges · MODIFIER never bypasses CAP · FLOOR rescues only MODIFIER rounding · the
+> shared-capital invariant holds** *(§2, §6.4)*;
+> **(D)** **replay confirms no unintended behavioural change.**
+>
+> ## ⭐⭐⭐ **(E) — AND IT REOPENS IF, AND ONLY IF:**
+> · a **taken ruling is REVERSED**;
+> · **production evidence CONTRADICTS a registered conclusion**;
+> · an **OPEN measurement resolves DIFFERENTLY from its recorded prediction**.
+>
+> ⛔⛔ **IT DOES NOT REOPEN FOR:** a better rule · a cleaner taxonomy · a governance refinement ·
+> **or anyone having a further idea.**
+
+## 9.1 · ⭐⭐ WHY (E) EXISTS — **and it is ours, not ChatGPT's**
+
+**(E) is not a fifth item appended for symmetry.** It exists because this campaign insisted, all
+night and against its own output, that **an entry with no reopen condition is ABANDONED, not
+closed** — the decision ledger's first useful output was its **EMPTY reopen-trigger column, 8 of 9
+rows** *(`MASTER_PENDING_01-Aug-2026.md` → THE DECISION LEDGER)*.
+
+⛔⛔ **A closure definition without a reopen condition would have been THAT EXACT DEFECT, committed
+in the one document whose subject is closure.** ⭐ **That is the whole argument for (E): the rule
+had to survive being applied to itself.**
+
+🏷️ **⛔ NOT a new governance rule — no `G`/`M` number is claimed here** *(G7)*. It is the **ledger's
+own reopen-trigger requirement, applied to this thread**; the parent is the ledger row schema, and
+(E) is that schema's `Reopen Trigger` field filled in.
+
+## 9.2 · ⚠️ THE RATIO THAT MAKES (E) NECESSARY — **record it, because it is the evidence**
+
+> **Of THIRTEEN rounds in this thread: ELEVEN were refining each other's rules. TWO produced
+> measurements.** *(11 + 2 = 13 — `M12`: the list states its own count and it reconciles.)*
+
+⭐⭐ **That ratio is not a criticism of the eleven** — several produced the taxonomy, the
+semantic-difference rule, and the methodological result in §8, all of which are kept. **It is a
+statement about what the thread's DEFAULT motion was**, and the default was refinement.
+
+⇒ 🔴 **(E) is the thing that makes that ratio impossible to repeat BY ACCIDENT.** ⛔ Without it,
+*"one more governance round"* is always locally justifiable and never has to argue against a written
+condition. ⭐ **With it, a proposed reopen must name which of the three triggers it fires — and
+"someone had a further idea" is not one of them.**
+
+⚠️ **Read (E) beside §7.2:** the bottleneck is **GOVERNANCE, NOT DISCOVERY** — ⭐ the one state in
+which producing more analysis **feels** like progress and is not. **(E) is §7.2 made checkable.**
+
+---
+
 *⛔ No value set · no YAML key created · no ruling taken · no code changed. Every measurement cited
 here lives in one of the five documents named at the top.*

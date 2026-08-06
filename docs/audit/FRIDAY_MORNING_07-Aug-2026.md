@@ -93,7 +93,7 @@ entirely, so **no stale P&L state exists to go wrong.**
    from `broker.net`. ⚠️ The SU6 holiday guard (`main.py:1754`) is also stale but **inert today**
    (Friday is a trading day).
 
-## 4. 📐 A FREE MEASUREMENT IF — **and only if** — an MIS trade fires today
+## 4. 📐 A CALIBRATION TEST IF — **and only if** — an MIS trade fires today
 
 ⛔ **PASSIVE. NO TRADE IS TO BE PLACED FOR THIS.** ⭐ **If no MIS trade fires, the question ROLLS.**
 
@@ -101,14 +101,39 @@ entirely, so **no stale P&L state exists to go wrong.**
 second?** ⇒ ⭐⭐ **it decides whether the intraday divisor is 1 or 2 — a FACTOR OF TWO on every
 intraday position.**
 
-**Record three numbers, each with its clock time:**
-1. Kite **Funds → `used margin`** *before* the first MIS entry fills;
-2. **again after both exits are resting** *(the deferred `place_exits` has run)*;
-3. **the position's own value**, for the comparison.
+> ⭐⭐ **THIS IS A CALIBRATION TEST, ⛔ NOT "record three numbers."** The upgrade is deliberate: a
+> reading with no stated confidence and no recorded conditions **cannot be re-used and cannot be
+> challenged** — it becomes a number someone later quotes without knowing what it was worth.
 
-> ⚠️ **THE ASYMMETRY, and it is why this is worth a glance:** **divisor 2 assumed as 1 ⇒ positions
-> DOUBLE-SIZED against the intended cap. Divisor 1 assumed as 2 ⇒ merely half-sized.**
-> 🔴 **The dangerous direction is the one currently assumed.**
+### 4.1 · CAPTURE — **FOUR readings, each with its clock time**
+
+1. Kite **Funds → `used margin`** *before* the first MIS entry fills;
+2. **`used margin` again after BOTH exits are resting** *(i.e. the deferred `place_exits` has run —
+   ⛔ not merely after the entry fills)*;
+3. **the position's own value**, for the comparison;
+4. **available funds**, at the same two moments as (1) and (2).
+
+### 4.2 · THEN DOCUMENT — **FOUR fields, as permanent evidence rather than a note**
+
+| field | what it must say |
+|---|---|
+| **the observed divisor** | **1** or **2** — the arithmetic, not the impression |
+| **the confidence** | ⭐ what the reading *cannot* settle, stated in the same breath as what it does |
+| **the broker conditions at the time** | segment, product, whether any other position was open, time of day — ⛔ **a margin reading is a reading of the WHOLE account, not of one order** |
+| **is a REPEAT verification required?** | ✅ **yes/no with the reason.** ⭐ A single observation on a single symbol on a single day is a **calibration point**, ⛔ not a broker rule |
+
+### 4.3 · ⛔ STILL PASSIVE, AND A ROLL IS AN OUTCOME
+
+⛔ **No trade is placed for it.** ⭐ **If no MIS trade fires today it ROLLS — and a roll is a
+LEGITIMATE OUTCOME under the sizing thread's exit criterion (B)** *("the intraday margin observation
+completed, **or explicitly ROLLED**")*, ⛔ **not a miss.** 🏷️ **Record the roll explicitly; an
+unrecorded roll is indistinguishable from forgetting.**
+
+### 4.4 · ⚠️ THE ASYMMETRY — **kept here, where it will actually be read**
+
+> **Divisor 2 assumed as 1 ⇒ positions DOUBLE-SIZED against the intended cap.**
+> **Divisor 1 assumed as 2 ⇒ merely HALF-sized.**
+> 🔴 **THE DANGEROUS DIRECTION IS THE ONE CURRENTLY ASSUMED.**
 
 ⛔ **Record only. No sizing change follows without the full loop.** ➡️ `docs/design/sizing/sizing_thread_conclusions_06aug2026.md` §1.1a
 
