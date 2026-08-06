@@ -72,6 +72,19 @@ identity, not symbol. *(The performance weight is separate and per-strategy.)*
 
 ### §1.3 · 🔴 WHY 0.5 ON EVERY TRADE — **a GENUINE COMPUTATION, not a default and not a clamp**
 
+> ### ⛔ SEPARATE THE ADAPTIVE **ALGORITHM** FROM THE ADAPTIVE **CONFIGURATION**
+> **The code is correct.** The band logic runs on every signal and assigns the right grade for the
+> score it is given. ⛔ **It is the CONFIGURATION — a threshold set above the attainable ceiling —
+> that keeps the output constant.** *"A multiplier with one value is not a multiplier"* is an
+> indictment of the **surface**, not of the code, and stating it the other way would send a design
+> round after the wrong thing.
+>
+> ⭐⭐ **AND THE DISTINCTION SHARPENS THE HAZARD RATHER THAN SOFTENING IT:** precisely **because the
+> algorithm is sound**, raising the scorer's ceiling (**G2**) brings the multiplier alive **with no
+> code change at all** — which is exactly why **77 % of trades would change size** (§3). A dormant
+> algorithm with a live wiring path is more dangerous than a broken one, because nothing has to be
+> deployed for it to start acting.
+
 The band logic is correct and live. **The bands are simply set above what the scorer can produce.**
 
 **(P) The raw pre-band input, whole `screener_results` table — 72,755 rows:**
