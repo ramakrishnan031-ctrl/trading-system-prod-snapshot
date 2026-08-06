@@ -228,6 +228,25 @@ only by breaking a rule is a deadline that should be missed.**
   `max_position_value_pct`) are the PARENTS of two unclassified twins — their destination IS the
   twin-retirement RULING, owed to Rama.** ⛔ **No bucket percentage may be quoted until ruled.**
 
+> ### 🔴 **07-Aug-2026 00:3x — THE RULING IS SHARPENED, ⛔ NOT REOPENED. Measured, not reasoned.**
+> **The two twins are not awaiting keys — THEIR KEYS ALREADY EXIST**, as `null` placeholders:
+> `config/system_config.yaml:190` `delivery_risk_per_trade_pct` · `:191`
+> `delivery_max_position_value_pct`, under a `:185-189` comment that states the invitation in
+> writing — *"The V3 delivery path sets these when delivery is activated (a later step)."*
+> ⭐⭐ **SO THE RULING IS NOT "should these twins exist?" — IT IS "RETIRE TWO KEYS THAT ALREADY
+> EXIST", which is a different act with a different risk.** ⛔ Retiring a written key is a config
+> change with a deploy; declining to create one is free.
+> 🔴 **AND THE INVITATION CREATED THE DECISION:** both are twins of controls the thread measured as
+> **NEVER BINDING** (§5.2) ⇒ **the placeholders MANUFACTURED a ruling that would not otherwise be
+> owed.** 🏷️ **Registered as the worked case under `G5.1`** *(`campaign_practices.md`)*.
+> ⚠️ **A second cost is already latent, and it is Must-Land-Before constraint 8:**
+> `capital/position_sizer.py:585` **enforces** `eff_max_position_value_pct` while `:596`/`:609`
+> **report the GLOBAL** ⇒ **the moment `delivery_max_position_value_pct` is given a value, the
+> operator-facing CRITICAL states a percentage that was NOT enforced.**
+> ⛔ **This does NOT fire `(E)`** — it contradicts no registered conclusion and reverses no ruling;
+> it **sharpens a ruling already owed.** ⭐ Recorded here so the ruling is taken against the real
+> state rather than the assumed one.
+
 ### 🔢 THE COUNT — ⛔ **NOTHING MOVED. BOTH AXES RESTATED IN FULL ANYWAY**
 
 *⭐ Per this file's own rule — **silence about a count is how it rots** — and per `M12`: a numbered

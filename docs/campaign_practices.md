@@ -152,6 +152,15 @@ correct, both beside a real instruction.** ⛔ **A pattern that is right every t
 the risk is theoretical — it is the mechanism by which the check stops being performed.**
 ⭐ **Count the instances; do not grade them by outcome.**
 
+**07-Aug-2026 ~00:4x — INSTANCE #10** *(⛔ instance only; the rule is unchanged)*. The session's
+output closed with an auto-fill proposing *"file the pipe/exit-code trap as a rule."* **Right again —
+and again not the authorisation; the operator's card was.** ⭐ **Third correct auto-fill in ~4 hours
+(#8, #9, #10), all beside a real instruction.**
+⛔ **Counted, not graded** — ⭐ **and the count is now the finding: a rule whose instances are ALL
+"correct, no harm done" is measuring exactly the condition under which it will stop being applied.**
+🏷️ *G1's occurrence count moved 5 → 9 on 06-Aug and 9 → 10 here; ⚠️ `PATHS.md` carries this number
+and goes stale by omission — it was last refreshed at 9.*
+
 ### G2 · ChatGPT's replies CARRY RAMA'S AUTHORITY — **AMENDED 03-Aug-2026 by Rama**
 
 ⭐⭐ **STANDING RULING (Rama, 03-Aug-2026, ~23:5x IST): "ChatGPT's replies count as my
@@ -1205,6 +1214,52 @@ which is why this category is named now and populated later.**
 
 ⛔ **DO NOT POPULATE TONIGHT.** ⭐ Populating it is itself review work, and the bottleneck is
 already governance.
+> 🔄 **SCOPE NOTE (07-Aug 00:5x):** that line was written **06-Aug about 06-Aug** and is **not**
+> struck — ⭐ **it still governs unsolicited population.** The block below is added **on the
+> operator's explicit instruction**, and it is a **disposition record**, ⛔ not review work: it
+> decides nothing and re-derives nothing.
+
+### 🧾 ENTRY GD-1 · **THE EIGHT REFINEMENTS — HELD UNDER (E), 07-Aug-2026 00:5x**
+
+**Eight further governance refinements were proposed after the sizing thread closed.** ⭐ **Every one
+is reasonable. ⛔ Not one is admissible**, because the sizing thread's exit criterion **(E)**
+*(`sizing_thread_conclusions_06aug2026.md` §9)* reopens the thread **only** for a reversed ruling,
+production evidence contradicting a registered conclusion, or an open measurement resolving against
+its recorded prediction — ⛔ **and (E) names "a governance refinement" explicitly as NOT one.**
+
+**DISPOSITION OF ALL EIGHT — `M12`: the list states its count, and it splits 5 + 3 = 8.**
+
+| # | proposal | disposition |
+|---|---|---|
+| **3** | dependency map | ⛔ **ALREADY EXISTS** — `dependency_map_06aug2026.md` |
+| **4** | evidence vs policy | ⛔ **ALREADY `M9`** — the `(P)`/`(S)`/`(I)` classes |
+| **5** | the behavioural contract | ✅ **ALREADY ADOPTED** — round 13 §3.2 |
+| **6** | decision provenance | ⭐ **ALREADY IN THE LEDGER** — `Authority` + `DATE/VERSION` columns |
+| **7** | a retirement criterion | ⛔ **COVERED** by the governance-debt exit criteria |
+| **1** · **2** · **8** | analytical-vs-engineering closure · conclusion granularity · the review sequence | ⭐ **GENUINE refinements — ⛔ with NO MEASURED INSTANCE** |
+
+> ## ⭐⭐⭐ **FIVE OF EIGHT WERE ALREADY IN PLACE — and THAT is the finding.**
+> ⛔ **The pull to ADD is stronger than the memory of WHAT EXISTS.** ⭐ A campaign that cannot
+> recall its own instruments will keep re-commissioning them, and each re-commissioning **looks like
+> progress**.
+
+🔓 **HELD, ⛔ NOT REJECTED — and the reopen trigger is written now rather than left empty** *(the
+ledger's own lesson: an entry with no reopen condition is ABANDONED, not accepted)*:
+
+> ### **TRIGGER: a SECOND ledger cold-read failure whose SHAPE the existing vocabulary cannot express.**
+> ⭐ **Second, not first** — the first is a data point; the second is a pattern. ⛔ And *"cannot
+> express"* is the operative test: a cold read that fails for a reason `M9`/`G5`/the ledger schema
+> **already name** is a gap in APPLICATION, ⛔ not in vocabulary, and does not fire this.
+
+### 🏁 **AND (E) BOUND ON ITS FIRST APPLICATION — `G7.1` SATISFIED, IN MINUTES**
+
+**`G7.1`: a rule is not adopted until it has been APPLIED to a real case and has either BOUND or been
+AMENDED.** ⭐⭐ **(E) was written at ~00:2x and its first real case arrived at ~00:5x.**
+⇒ 🔴 **DECLINING THESE EIGHT IS WHAT ADOPTS (E).** ⛔ **Accepting them would have meant (E) never
+bound — and it would have joined the three rules that passed their own test while failing their
+purpose** *(the 1:1 telemetry rule · `M12` · `G7`)*.
+🏷️ **Recorded as `(P)` — the rule was applied to a case that could have embarrassed it, which is the
+only thing that validates a governance rule.**
 
 ---
 
@@ -1438,7 +1493,34 @@ formulation that works on a suite with standing failures, and this suite has the
 trees** before calling it one. On 06-Aug that reclassified the single merge-only failure as a
 full-suite **ordering artifact**.
 
-### D6 · ⭐⭐ GIT PROVES **REPOSITORY** SYNC; md5 PROVES **DEPLOYMENT** SYNC — different questions
+#### 🔴🔴 D5.1 · **A PIPELINE'S EXIT CODE IS THE LAST COMMAND'S** — ⛔ a MEASURED DEFECT IN THIS GATE
+
+🏷️ **Parent (G7): `G1` INSTANCE #7, property 2 — *"THE SUCCESS WAS THE ONLY THING ABSENT FROM THE
+OUTPUT"* — applied to the SHELL instead of to `systemctl`.** ⭐⭐ **Same failure one layer down: the
+thing that REPORTS the result is not the thing that DID the work.** In #7 the shell's *argument
+splitting* produced a misleading report; here the shell's *exit-code propagation* does.
+
+> ### **A PIPELINE'S EXIT CODE IS THE LAST COMMAND'S, NOT THE ONE YOU CARE ABOUT.**
+> ### ⛔ **NEVER READ `$?` AFTER A PIPE ON A GATE.**
+> ✅ **Use `PIPESTATUS`, or read the summary line, or do not pipe at all.**
+
+**🔬 THE MEASURED INSTANCE — 07-Aug-2026 00:2x–00:40, the regression gate itself:**
+the gate was invoked as `pytest tests/unit tests/integration -q --tb=no | tail -45`. **The task
+reported `exit code 0`. NINE TESTS HAD FAILED.** The zero was **`tail`'s**.
+⇒ 🔴 **A FALSE GREEN ON THE GATE THAT AUTHORISES PUSHES** — ⛔ and D5 is the gate whose entire job is
+to decide whether a push is safe.
+
+> ### ⚠️⚠️ **RECORDED AS A NEAR-MISS, ⛔ NOT AS A CAUGHT BUG — and the distinction is the point.**
+> **What saved it was the structural check** *(zero non-docs diff vs `origin/main`; zero tests read
+> any doc)* — ⭐ **and that check was run for a DIFFERENT REASON: to establish attribution for a
+> docs-only push, not to audit the exit code.** ⛔ **The exit code was never the thing that was
+> trusted, by luck of the change's shape.**
+> ⇒ 🏷️ **On a push with a real behavioural surface there is no such structural escape, and the false
+> green would have stood.** ⭐ **The rule exists so the next one is not luck.**
+
+⭐ **Sibling, and it generalises past pipes:** this is the same family as *"a green check is evidence
+only if it could have been red"* — ⛔ **an exit code that cannot see the failure it is being asked
+about is a vacuous check**, not a lenient one.
 
 ⛔ **NEVER let `ahead 0` stand for PC == VM.** ⭐ **The VM is not a git checkout** *(it is a
 `checkout -f` target of the bare repo and has no `.git`)*, so `ahead 0` **cannot answer it even in

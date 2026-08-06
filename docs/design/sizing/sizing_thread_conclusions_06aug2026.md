@@ -402,6 +402,24 @@ condition. ⭐ **With it, a proposed reopen must name which of the three trigger
 ⚠️ **Read (E) beside §7.2:** the bottleneck is **GOVERNANCE, NOT DISCOVERY** — ⭐ the one state in
 which producing more analysis **feels** like progress and is not. **(E) is §7.2 made checkable.**
 
+## 9.3 · 🏁 **(E) HAS BOUND — first application, ~30 minutes after it was written**
+
+**(P) 07-Aug-2026 00:5x.** Eight further governance refinements were proposed. **All eight were
+DECLINED under (E)**, which names a governance refinement explicitly as **not** a reopen condition.
+⭐⭐ **Five of the eight already existed** *(the dependency map · `M9`'s evidence classes · the
+behavioural contract · the ledger's provenance columns · the retirement criterion)* — 🏷️ **the pull
+to ADD is stronger than the memory of what exists.**
+
+⇒ 🔴 **DECLINING IS WHAT ADOPTED (E)** *(`G7.1`: a rule is not adopted until applied to a real case
+and BOUND or AMENDED)*. ⛔ **Had the eight been accepted, (E) would never have bound — and it would
+have joined the three rules in §8.1 that passed their own test while failing their purpose.**
+🔓 **The eight are HELD, ⛔ not rejected**, with a written trigger — **a SECOND ledger cold-read
+failure whose SHAPE the existing vocabulary cannot express.** *(Disposition in full:
+`campaign_practices.md` → GOVERNANCE DEBT → `GD-1`.)*
+
+⚠️ **⛔ THIS SECTION IS NOT A REOPENING.** It records that the criterion was **exercised**; ⭐ §1–§8
+are untouched, and no sizing conclusion moved.
+
 ---
 
 *⛔ No value set · no YAML key created · no ruling taken · no code changed. Every measurement cited
