@@ -446,6 +446,24 @@ A tree-diff detector that goes quiet is worth less than one that is noisy-but-cl
 
 ---
 
+## 10. 💳 **ALERT DEBT** — expected alarms that **should eventually DISAPPEAR**
+
+> ⛔⛔ **WHY THIS SECTION EXISTS:** every other section here classifies an alarm as *expected*, which
+> is honest **and load-bearing in the wrong direction if left alone**. ⭐⭐ **Without an explicit
+> debt list, today's honest classification becomes tomorrow's PERMANENT ACCEPTANCE OF NOISE.**
+> ⭐ An entry here means: *"correctly classified, still a defect, and here is what retires it."*
+
+| # | the alarm | why it is debt, not design | what RETIRES it | opened |
+|---|---|---|---|---|
+| **AD-1** | **§9 — the daily tree-diff CRITICAL** | a **healthy, self-healing** daily rewrite is reported as a **violation**, making the EOD report CRITICAL every single day | the diff-check learns to exempt a file whose **only writer is the system itself**, ⛔ **not by suppressing the check** — see `classification_leakage_06aug2026.md` defect 2 | 06-Aug-2026 |
+| **AD-2** | **`reconcile_positions` `FAILED — exit code 2`** | exit 2 is a **business finding** (*mismatches detected*, `:428-434`); the heartbeat wrapper maps any non-zero to `FAILED` ⇒ **a correct job reports as broken** | the project-wide **exit-code convention**: exit codes for process health, findings in structured status fields — `classification_leakage_06aug2026.md` §3 | 06-Aug-2026 |
+
+⚠️ **REVIEW RULE:** ⛔ **an entry may only be removed when its RETIRES condition is MET — never
+because the alarm stopped being noticed.** ⭐ **An alarm nobody notices is the failure this list
+exists to prevent, not evidence the debt was paid.**
+
+---
+
 ## What this document does NOT cover
 
 - Anything not listed above. **An unlisted alarm is an incident until proven otherwise.**

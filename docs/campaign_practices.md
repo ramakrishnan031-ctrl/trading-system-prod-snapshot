@@ -125,6 +125,25 @@ position held. ⇒ ⭐⭐ **The escalation ladder is now complete and should be 
 own two attempts to run the same command were **denied at the permission layer**, that it stopped
 rather than trying a third form, and that it verified the resulting state independently.)*
 
+🔴 **06-Aug-2026 ~21:0x — INSTANCE #8: A CORRECT AUTO-FILL ARRIVING *ONE LINE FROM* A GENUINE RULING.**
+**The real authorisation was Rama's own words:** *"if any pending commit/push/pull etc make pc=vm
+100%."* **In the same exchange the console carried `❯ ok push it now [auto-filled by Claude]`.**
+
+⭐⭐ **THIS IS THE HARDEST CASE THE LADDER HAS PRODUCED, and it is a new rung — not because the
+auto-fill was wrong, but because it AGREED WITH A REAL RULING AND SAT BESIDE IT.**
+- ⛔ **The auto-fill was NOT the authorisation** and must never be counted as one, **even when it is
+  indistinguishable in content from the ruling next to it.**
+- ⭐ **Instance #7 taught that a *right* suggestion trains you to stop reading. #8 is the limit of
+  that: a right suggestion arriving beside a right ruling, where reading only one of the two still
+  produces the correct action** — so the habit is reinforced **and** nothing visibly goes wrong.
+- 🏷️ **The discriminator is PROVENANCE, never CONTENT.** ⛔ *"It matches what Rama said"* is not a
+  test — the two can agree and only one of them is authority. **Cite the human sentence; never the
+  console line.**
+
+> ⭐ **Corollary worth stating: the safe habit is to name the authorising sentence VERBATIM when
+> acting on it.** A ruling you can quote is one you actually read; a ruling you paraphrase may have
+> been the auto-fill all along.
+
 ### G2 · ChatGPT's replies CARRY RAMA'S AUTHORITY — **AMENDED 03-Aug-2026 by Rama**
 
 ⭐⭐ **STANDING RULING (Rama, 03-Aug-2026, ~23:5x IST): "ChatGPT's replies count as my
@@ -704,6 +723,32 @@ false reassurance**. ⭐ It was caught only by reading the tag at source.
 4. **If NO ⇒ advisory** — and say so explicitly, so the next reader does not have to re-derive it.
 
 ---
+
+### M13 · ⛔ A LOG WITHOUT TIMESTAMPS CANNOT ANSWER "WAS IT TODAY?" — and it *looks* like it can
+
+**Earned 06-Aug-2026, as a near-miss caught before it was reported.**
+
+`logs/cron-reconcile-positions.log` carries **no per-line timestamps**. Investigating a 15:45
+`FAILED — exit code 2`, the file contained a line that explained a failure perfectly:
+`reconcile_positions.broker_fetch_failed: ZERODHA_API_KEY and ZERODHA_ACCESS_TOKEN must be set`.
+
+⛔ **It was not today's line.** It occurs **exactly once in the whole file** (width stated), and
+today's run reached the **mismatch** branch — which is unreachable without a *successful* fetch.
+
+> ⭐⭐ **THE MECHANISM, AND IT IS THE REUSABLE PART: an append-only log invites you to read the
+> NEAREST MATCHING LINE as the most recent one.** The file's `mtime` is today, the line is plausible,
+> and the reasoning completes itself. ⛔ **Nothing about the query looks wrong** — the same shape as
+> `M1`'s Group 3.
+> ⇒ **RULE: when a log has no timestamps, it cannot establish WHEN. Go to a source that carries
+> time** — here `cron_heartbeat` (`executed_at`, `status`, `message`), which settled it in one query.
+> ⭐ **And prefer a source that would DISAGREE if you were wrong**: the heartbeat gave the exit code
+> *and* the duration, both of which contradicted the crash hypothesis.
+
+⚠️ **Sibling, same incident:** the *finding itself* was built on a **date coincidence** — *"it failed
+on the first day a T+1 holding existed."* **Both halves were false**: it was not the first time
+(4 exit-2s, incl. 29-Jul and 31-Jul with no T+1 holding), and it had not failed at all. ⭐ **A
+correlation with today's date is the weakest possible evidence and the most tempting**
+(`feedback_verify_the_finding_premise`).
 
 ### M12 · ⭐⭐ A REASONING ARTIFACT IS A CONFIGURATION ITEM — **and any numbered list carries its own count**
 
