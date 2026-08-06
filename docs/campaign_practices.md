@@ -144,6 +144,14 @@ auto-fill was wrong, but because it AGREED WITH A REAL RULING AND SAT BESIDE IT.
 > acting on it.** A ruling you can quote is one you actually read; a ruling you paraphrase may have
 > been the auto-fill all along.
 
+**06-Aug-2026 ~21:5x — INSTANCE #9** *(⛔ instance only; the rule is unchanged and needs no new text)*.
+The session's output closed with `❯ update the ledger and close for the night [auto-filled by
+Claude]`. **Right again — and again not the authorisation; the operator's card was.**
+⭐⭐ **The reason #9 is filed rather than waved through: #8 and #9 fell in the SAME EVENING, both
+correct, both beside a real instruction.** ⛔ **A pattern that is right every time is not evidence
+the risk is theoretical — it is the mechanism by which the check stops being performed.**
+⭐ **Count the instances; do not grade them by outcome.**
+
 ### G2 · ChatGPT's replies CARRY RAMA'S AUTHORITY — **AMENDED 03-Aug-2026 by Rama**
 
 ⭐⭐ **STANDING RULING (Rama, 03-Aug-2026, ~23:5x IST): "ChatGPT's replies count as my
@@ -724,6 +732,27 @@ false reassurance**. ⭐ It was caught only by reading the tag at source.
 
 ---
 
+### M14 · ⭐⭐ CLASSIFICATION LEAKAGE — a CROSS-CUTTING design principle, ⛔ not an alert-fatigue topic
+
+**Adopted 06-Aug-2026. It has the same standing as *single source of truth*** — ⛔ **it is not a
+monitoring nicety, and filing it under "noise" is how it keeps recurring in unrelated subsystems.**
+
+> ### 📋 **THE FOUR-QUESTION CHECKLIST — run it in DESIGN REVIEW, on every value that crosses a boundary:**
+> **Is this ① RUNTIME state · ② BUSINESS state · ③ EXECUTION health · ④ REPORTING state?**
+> ⛔ **A value that answers one must never be read as another.**
+
+⭐⭐ **THREE OF 06-Aug's DEFECTS WOULD HAVE BEEN CAUGHT BY THAT ONE QUESTION:**
+
+| defect | leaked | into |
+|---|---|---|
+| **F6** (`cnc_gtt_monitor.py:464` `abs()`) | ① a **runtime** reading (`held`) | ② a **business** state (*trade open*) |
+| **the daily tree diff** | a **healthy, self-healing** condition | ③ a **violation** ⇒ EOD CRITICAL every day |
+| **`reconcile_positions` exit 2** | ② a **business finding** (*mismatches detected*) | ③ **execution failure** (`status=FAILED`) |
+
+📄 Full item: `docs/design/classification_leakage_06aug2026.md` — filed as **ONE** architectural
+review, ⛔ **not three defects**, because three items get fixed three ways and the third fix will not
+know it was solving the first problem again.
+
 ### M13 · ⛔ A LOG WITHOUT TIMESTAMPS CANNOT ANSWER "WAS IT TODAY?" — and it *looks* like it can
 
 **Earned 06-Aug-2026, as a near-miss caught before it was reported.**
@@ -1146,11 +1175,74 @@ push rides that push.**
 "build it now, decide later" is not available, and why docs-only work is the safe thing to
 land next to a gated item.
 
-### D2 · The SHA inventory gate runs before EVERY deploy window
-Every commit in `297b587..HEAD` must be **named in the unpushed ledger**.
-⭐ **It has already caught its own stamp commits twice** — trailing docs/stamp commits are
-exactly what escapes a SHA-keyed inventory, because they are the ones nobody thinks of as
-"a change".
+### D2 · The **BEHAVIOURAL SURFACE INVENTORY** runs before EVERY deploy window
+> ⚠️ **RENAMED 06-Aug-2026 from "the SHA inventory gate" — ⛔ and the old name is what BROKE it.**
+> **(P)** run literally on 06-Aug it asked *"does each short SHA appear in the ledger?"* → **49
+> named / 48 unnamed**, which reads as a catastrophic gate failure. ⛔⛔ **The check is
+> STRUCTURALLY BROKEN: A COMMIT CANNOT CONTAIN ITS OWN SHA**, and the 48 "unnamed" were the docs
+> commits that **are** the record. ⭐ **The name made a reviewer test the wrong predicate, and the
+> wrong predicate produced a confident false FAIL.**
+
+**THE INTENT, stated at the gate so a future reviewer does not revert to literal SHA counting:**
+**WHICH COMMITS CHANGE BEHAVIOUR, and is each of those named?** ⭐ Re-run that way on 06-Aug:
+**4 of 97 touched non-docs (2 were `PATHS.md`); only 2 were Python; both named.**
+⭐ **It has already caught its own stamp commits twice** — trailing docs/stamp commits are exactly
+what escapes an inventory, because they are the ones nobody thinks of as "a change".
+
+### D5 · ⭐⭐ THE REGRESSION GATE IS A **BEHAVIOURAL EQUIVALENCE** GATE, not an "all tests pass" gate
+
+**It proves NO NEW behavioural failures — ⛔ not that the suite is green.** ⭐ **This is the only
+formulation that works on a suite with standing failures, and this suite has them** (AR2, AR3, the
+`test_instance_lock` orphan flake).
+
+**Run BASE and MERGE with the IDENTICAL invocation (§V2), then compare SETS in BOTH directions.**
+
+> ### 🔴 **06-Aug IS THE CASE THAT PROVES IT, AND THE COUNT WOULD HAVE COST THE MOST**
+> **BASE 55 failures → MERGE 29.** A bare count reads *"29 failures — block the push."*
+> **The SETS read: MERGE-ONLY = 1** *(a pre-existing ordering flake — it fails identically on BASE
+> when run in isolation)* **· BASE-ONLY = 27** ⇒ ⭐⭐ **THE PUSH FIXES 27 TESTS AND BREAKS NONE.**
+> ⛔ **A count would have blocked a push that repairs 27.**
+> ⭐ **And the arithmetic closes — `55 − 27 + 1 = 29` — which is the check that COULD have gone red.**
+> 🏷️ **Record the direction: the count and the set disagreed in the direction that costs the most.**
+
+⚠️ **A merge-only entry is not automatically a regression** — re-run it **in isolation on BOTH
+trees** before calling it one. On 06-Aug that reclassified the single merge-only failure as a
+full-suite **ordering artifact**.
+
+### D6 · ⭐⭐ GIT PROVES **REPOSITORY** SYNC; md5 PROVES **DEPLOYMENT** SYNC — different questions
+
+⛔ **NEVER let `ahead 0` stand for PC == VM.** ⭐ **The VM is not a git checkout** *(it is a
+`checkout -f` target of the bare repo and has no `.git`)*, so `ahead 0` **cannot answer it even in
+principle.** **Keep both, always, and state which one you ran.**
+
+**And the EVIDENCE HIERARCHY for a low-risk deploy — walk it in order:**
+> **source diff → AST equivalence → regression equivalence → runtime deployment.**
+⭐ **06-Aug walked all four on `c5c1926`:** the diff said *comment-only*; **AST comparison said
+IDENTICAL**; the regression set said no new failures; md5 said PC == VM. ⭐ **Each step could have
+contradicted the one before it — that is what made the chain worth walking.**
+
+#### D6.1 · 📌 THE CRONTAB BASELINE — ⛔ **a hash taken AFTER the fact answers nothing**
+
+`post-receive` prints *"crontab AUTO-INSTALLED from canonical"* on **every** push. To prove it was a
+no-op you need a **PRE-push** hash. **06-Aug had none**, so it was closed by construction *(the diff
+touched no `deploy/`, no `config/cron_registry.yaml`)* — ⭐ **sound, and weaker than a hash.**
+
+**BASELINE RECORDED 06-Aug-2026 22:04:20 IST** *(post-push, service inactive, state known-good)*:
+
+| what | md5 | |
+|---|---|---|
+| live `crontab -l` | **`b8276da7043975cda2d0ce6578960c6a`** | 148 lines · **46 command-lines** |
+| `deploy/cron/trading-system.cron` | **`b8276da7043975cda2d0ce6578960c6a`** | ⭐⭐ **BYTE-IDENTICAL to live** |
+| `config/cron_registry.yaml` | `cc6329f05c3b3fd2bdfac288e329485d` | the source of truth |
+
+⭐ **Live == canonical settles 06-Aug better than the construction argument did — it proves the
+OUTCOME, not just the input.** ⚠️ **One gap stays open and is stated rather than glossed: this cannot
+prove live had not drifted BEFORE the push and been silently repaired by the auto-install.** ⛔ **Only
+a pre-push hash answers that — which is why this baseline now exists.**
+⚠️ *Noted, not chased: `SYSTEM_MAP` records **44** command-lines as of 30-Jun; it is **46** today.*
+
+**⇒ STANDING PRE-STEP, before every push:** `ssh trading-vm 'crontab -l | md5sum'` — **record it,
+then compare after.**
 
 ### D3 · No push before 18:15 IST
 Precondition: **the book is flat, and Rama flattens MANUALLY.**
