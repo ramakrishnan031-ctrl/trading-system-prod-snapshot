@@ -504,6 +504,52 @@ generalise to `_check7`, and assuming it does is exactly the error this section 
 
 ## 15 · ⚠️ The ATULAUTO phantom's disposition — ⛔ recorded, NOT actioned
 
+> # 🔴🔴 UPDATED 06-Aug-2026 ~18:4x — **THIS SECTION UNDERSTATED ITS SUBJECT BY FOUR COSTS. MEASURED, NOT INFERRED.**
+> **What this section had:** stranded capital + a respawning GTT.
+> **What 06-Aug measured:** the stock was **SOLD by its own GTT at ~09:31:56**, the system never
+> noticed, and the defect then did four more things. **One defect, FIVE resources.**
+>
+> **(P) The holdings timeline — `get_holdings`, 26 readings on 06-Aug:**
+> `08:15:11 → 1 holdings` · `09:15:07 → 1 holdings` · **every one of the remaining 24 → `0 holdings`.**
+> GTT `330456580` went `TRIGGERED` at **09:31:56**. **That is the sale.**
+>
+> **(P) What the monitor did next, in its own words:**
+> ```
+> 09:31:56  cnc_gtt_monitor.recreated → 330638484  why: "F6: GTT triggered but holding still > 0"
+> 09:47:04  cnc_gtt_monitor.recreated → 330648138  why: "F6: GTT triggered but holding still > 0"
+> 10:02:13  cnc_gtt_monitor.recreated → 330657774  why: "GTT missing; holding intact"
+> ```
+> Each respawn lands **35–43 ms** after the previous row leaves `ACTIVE`. Two CRITICAL Telegram
+> alerts delivered (09:31:56, 09:47:04) + one WARNING (10:02:14).
+>
+> | # | cost | resource consumed |
+> |---|---|---|
+> | 1 | ₹587.4228 re-reserved every boot | **capital** — ~21 % of the delivery bucket |
+> | 2 | 1 of 3 delivery slots, permanently *(`risk_engine.py:469`, no date bound)* | **concurrency** |
+> | 3 | 🔴 **`DUPLICATE_SYMBOL` blocks every intraday signal on ATULAUTO, indefinitely** *(`has_active_position`, no date filter, no product filter)* | **the symbol** |
+> | 4 | 🔴 **THREE LIVE SELL GTTs placed on a FLAT holding; `330657774` still resting** | **live orders at the broker** |
+> | 5 | 🔴 **a FABRICATED exit price when it eventually closes** — see §15.0 | **the data, permanently** |
+>
+> ⛔ **Cost 4 is not a bookkeeping error. The system placed real sell orders at Zerodha for stock it
+> does not own, on the strength of a predicate that cannot return anything but `held ≥ 1`.**
+
+### 15.0 · 🔴 THE FIFTH COST — **it does not end when the trade closes**
+
+**(S)** `orders/cnc_gtt_monitor.py:674-694` `_resolve_exit_price` falls through:
+**today's broker trade book → LTP → entry proxy.**
+
+⇒ On any later day the 06-Aug SELL is **not in that day's trade book**, so it books **that day's live
+quote** as the exit price for a sale that happened on 06-Aug at ~575.65.
+⇒ `_finalize_gtt_exit` closes the trade correctly and releases the capital correctly — **and writes a
+P&L computed from an unrelated price** into `record_gtt_close_financials` and `fm_ledger`.
+
+> ⛔⛔ **THAT FIGURE THEN FLOWS INTO THE DAILY-LOSS READER AND THE EXPECTANCY CORPUS** — the same
+> corpus every sizing conclusion of this week rests on *(`docs/design/sizing/`)*.
+> ⭐ **Costs 1–4 end when the trade closes. Cost 5 BEGINS there and persists in the data.**
+> ⇒ **"Correct closure, wrong P&L" is not a clean resolution, and no branch of F6 avoids it.**
+
+---
+
 `trd_e66ee17b…` is `OPEN` with `margin_reserved=587.4228`, and `_replay_open_trade` re-reserves
 it at **every 08:15 boot** — **~21 % of the delivery bucket, every day, for a position that does
 not exist.**

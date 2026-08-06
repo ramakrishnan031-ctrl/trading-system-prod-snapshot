@@ -40,27 +40,48 @@
 **These are the exact state the safety argument rests on. If any has moved, STOP and re-measure —
 do not proceed on a stale basis.**
 
+> ### 🔴 CORRECTED 06-Aug-2026 18:3x — **TWO DEFECTS IN THIS GATE, BOTH FOUND BY USING IT**
+> **(1) THE LOG PATH WAS HARD-CODED TO `2026-08-05`.** ⛔ On any later night check 2 reads
+> **yesterday's file** — a wrong-corpus answer on the gate that authorises a stop. **Now `$(date +%F)`.**
+> **(2) THE PASS BLOCK ASSUMED A ONE-POSITION NIGHT.** Its refusal rule *("a second ACTIVE row, a
+> different `trade_id` ⇒ STOP")* was written to catch **UNEXPLAINED** state. ⭐ It cannot tell
+> *unexplained* from *explained-and-measured*, so on 06-Aug it refused a legitimate two-position
+> night. **Rewritten below as a rule, not a literal.**
+> ⛔ **STATUS OF THE 06-Aug CASE: the gate REFUSED, and as of 18:3x the stop had NOT been run and
+> Rama had NOT ruled.** ⭐ **No override has been taken.** If one is taken later it must be recorded
+> as an override, with the time and the reason — ⛔ **it must not be absorbed into this rewrite.**
+
 ```bash
 ssh trading-vm 'cd /home/ubuntu/systems/trading-system; DB=data_store/trading_system.db
 echo "== 1. service still active =="
 systemctl is-active trading-system.service
-echo "== 2. position count still 1 =="
-grep "get_positions call_end" logs/system_2026-08-05.log | tail -1
-echo "== 3. gtt_state: one ACTIVE row for ATULAUTO with matching trade_id =="
+echo "== 2. position count (TODAY'"'"'s log — NOT a hard-coded date) =="
+grep "get_positions call_end" logs/system_$(date +%F).log | tail -1
+grep "get_holdings call_end" logs/system_$(date +%F).log | tail -1
+echo "== 3. every ACTIVE gtt_state row, with its trade =="
 sqlite3 "file:${DB}?mode=ro" "SELECT gtt_id, trade_id, symbol, status FROM gtt_state WHERE status = '"'"'ACTIVE'"'"';"
 echo "== 4. zero non-terminal orders =="
-sqlite3 "file:${DB}?mode=ro" "SELECT COUNT(*) FROM orders WHERE status NOT IN ('"'"'CLOSED'"'"','"'"'CANCELLED'"'"','"'"'FAILED'"'"','"'"'REJECTED'"'"','"'"'COMPLETE'"'"','"'"'FILLED'"'"','"'"'CLOSED_MANUAL'"'"');"'
+sqlite3 "file:${DB}?mode=ro" "SELECT COUNT(*) FROM orders WHERE status NOT IN ('"'"'CLOSED'"'"','"'"'CANCELLED'"'"','"'"'FAILED'"'"','"'"'REJECTED'"'"','"'"'COMPLETE'"'"','"'"'FILLED'"'"','"'"'CLOSED_MANUAL'"'"');"
+echo "== 5. every non-terminal trade (the row count check 3 must reconcile against) =="
+sqlite3 "file:${DB}?mode=ro" "SELECT trade_id, symbol, status FROM trades WHERE status IN ('"'"'OPEN'"'"','"'"'PARTIAL'"'"','"'"'PENDING_FILL'"'"');"'
 ```
 
-**PASS looks like:**
-```
-1.  active
-2.  ..."result_summary":"1 positions"
-3.  330456580|trd_e66ee17b1844491db5d2e99afa6f104b|ATULAUTO|ACTIVE
-4.  0
-```
-⛔ **Anything else — especially a second ACTIVE row, a different `trade_id`, or a non-zero count —
-means STOP. Do not continue. Re-measure and re-decide.**
+**PASS is a RULE, not a literal — ⛔ do not compare against a remembered row set:**
+
+| # | passes when |
+|---|---|
+| 1 | `active` |
+| 2 | the position count **equals the number of rows check 5 returns** ⚠️ **or the difference is explained and written down before proceeding** |
+| 3 | **every** ACTIVE row's `trade_id` matches a row in check 5 — ⛔ **a NULL or unmatched `trade_id` is the real failure**, because that is what defeats CHECK1's delivery skip |
+| 4 | `0` |
+| 5 | every non-terminal trade is one you can name and account for |
+
+⛔ **A second ACTIVE row is NOT itself a failure** — it is a failure only if it is **unexplained**.
+⭐ **The discriminator: can you name the trade it belongs to and say why it exists?** On 06-Aug at
+17:39 both could be named — **DIFFNKG's real protection (`330658430`) and ATULAUTO's F6 respawn
+artifact (`330657774`)** — so the refusal was a scope artifact rather than a real anomaly.
+⛔ **That does not authorise anything by itself: the override is Rama's to take, and it had not been
+taken.**
 
 ---
 
