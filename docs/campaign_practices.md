@@ -205,6 +205,31 @@ With an **amendment note and date**. ⛔ Never silently deleted, never quietly r
 reader must be able to see what the guidance used to say and why it changed — otherwise
 the correction is indistinguishable from a rewrite of history.
 
+### G6 · ⭐⭐ OVERRIDING A WRITTEN GATE TAKES **THREE** CONDITIONS — fresh evidence is only one
+
+*Authored by ChatGPT, adopted 06-Aug-2026. The campaign's first rule for overriding its own gates.*
+
+**Fresh evidence alone does NOT justify overriding a written gate.** Require **all three**:
+
+| | condition | why it is not optional |
+|---|---|---|
+| **(a)** | the original **safety objective is still satisfied** | ⭐ **the missing half.** *"The state was measured fresh"* is a fact about the **evidence**, ⛔ **not about whether the gate's PURPOSE is still served.** A gate exists to stop an act being taken over state that might mean something is wrong; (a) is the only condition that asks whether that worry is retired. |
+| **(b)** | the new evidence **fully explains** the apparent violation | a partial explanation leaves a residue, and the residue is exactly what the gate was built to catch. |
+| **(c)** | the override is **LOGGED — timestamp, clause, evidence, who ruled — BEFORE the act** | ⭐⭐ **An override recorded afterwards is a JUSTIFICATION; recorded before, it is a DECISION.** The ordering is the whole content of (c). |
+
+⛔ **THE COROLLARY, EARNED THE SAME NIGHT AND LOAD-BEARING — FIRST ASK WHETHER THE GATE ACTUALLY
+REFUSES.** On 06-Aug the gate's **literal** PASS block refused a two-position night (it had been
+written assuming one). The refusal was a **scope artifact**, so the gate was rewritten as a **rule**
+— and under the rule, re-measured fresh at 19:08:44, **all five checks PASSED**. ⇒ **no override was
+required, and none was taken.**
+⭐⭐ **Logging a "belt-and-braces" override anyway would have been the WORSE act, not the safe one:**
+it records a bypass that never happened, and a register with spurious overrides in it makes the next
+override look ordinary. **The safe default is not "log an override to be safe" — it is: repair the
+gate's SCOPE, re-run it, and override only what still refuses.**
+⚠️ **Fixing a gate's scope is itself governed** — the repair must be visible as a repair (§G4), and
+⛔ **a later override must never be absorbed into the rewrite that preceded it**, or the record can
+no longer distinguish *"the gate passed"* from *"the gate was edited until it passed."*
+
 ---
 
 ## M. MEASUREMENT

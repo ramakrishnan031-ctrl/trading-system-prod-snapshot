@@ -222,7 +222,12 @@ independent release path Invariant A requires.
 
 ---
 
-## 8 · Regression cases (6) — all six required
+## 8 · Regression cases ~~(6) — all six required~~ **(9) — all nine required**
+
+> ⚠️ **Count corrected 06-Aug-2026 19:2x (§G4):** the heading said **6** while the list already
+> carried **8**. Case **9** is added below, bringing it to **9**. ⛔ The stale heading is struck,
+> not deleted — a regression count that disagrees with its own list is exactly the kind of thing a
+> reader trusts without checking.
 
 1. same-day CNC **buy**
 2. same-day CNC **sell**
@@ -243,6 +248,26 @@ independent release path Invariant A requires.
    recreated GTT · no drift alert.** ⭐ It composes 5 and 7 and exercises **both** latent callers
    at once — `_replay_open_trade` on the restart, `_check7` on the cycles.
    ⛔ **Keep 5 and 7 as well: a composite that fails does not tell you which half broke.**
+
+9. 🔴 **SPANS MIDNIGHT — continuous run AND restart.** *(ChatGPT's, filed 06-Aug-2026.)*
+   ⭐⭐ **THE GAP, STATED AS A CASE: today's failure CROSSED A DAY BOUNDARY; the test set did not.**
+   Drive an injected `now_fn` across `D 23:59:59.9 → D+1 00:00:00.1` and validate **replay,
+   deferred loops and date-bound logic together** — in **both** shapes, because they fail
+   differently:
+   - **(i) CONTINUOUS** — the process stays up across midnight. Assert the **clock-bound** controls
+     roll to D+1: the daily-trade cap, **both** daily-loss halves, consecutive-losses and the
+     strategy governor must query **D+1** and see **zero**, not D's window.
+     ⚠️ **Anti-vacuity: assert D's counts are NON-ZERO first** — a day with no trades collapses the
+     two forms and proves nothing (the same trap as the E4/W10 no-cost-day case).
+   - **(ii) RESTART** — the process boots on D+1. Assert the **boot-bound** work actually re-runs:
+     `clear_stale_state`, the SU6 holiday guard, `initialize()`, and the B5 **shared day-floor**
+     passed to *both* seed and rehydrate (the `DESIGN_midnight_day_floor.md` residue).
+   ⭐ **What makes this an F6 case and not a general one:** a delivery position is the only thing
+   that is *supposed* to survive the boundary, so it is the only state where "rolled correctly" and
+   "never re-ran" produce **different** answers — and the T+1 predicate is read on **both** sides.
+   🏷️ **(S) 06-Aug source read** (`STOP_PROCEDURE_06-Aug-2026.md` §4) establishes the split the
+   case must pin: **counters clock-bound · kill-clear, holiday guard, seed and day-floor boot-bound.**
+   ⛔ **Do not simulate against the live DB — scratch only, injected clock, never a real wait.**
 
 **Gate:** `pytest tests/unit tests/integration` — ⛔ never `run_tests.py`.
 
