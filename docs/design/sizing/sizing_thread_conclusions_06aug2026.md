@@ -18,6 +18,32 @@ unless stated. ⛔ **No value set · no YAML key · no code · no ruling taken.*
 > with the session.** That is this file. **Cold-read target: a fresh session should be able to
 > RESUME the thread from here alone.**
 
+## 🧭 DECISION IMPACT MATRIX — ⛔ **read this instead of seven sections**
+
+> 🏷️ **THE DISTINCTION THAT MATTERS: `OPEN — MEASUREMENT` and `OPEN — GOVERNANCE DEPENDENCY` are
+> acted on by DIFFERENT PEOPLE.** ⛔ **More evidence moves the first and does nothing for the second.**
+
+| finding | § | needs MEASUREMENT? | needs a RULING? | blocks IMPLEMENTATION? |
+|---|---|---|---|---|
+| **the intraday two-leg margin divisor** | §1.1a | 🔴 **YES — passive, takeable on any trading day** | ⛔ no | ⚠️ **yes, for intraday sizing** — and ⭐ **the dangerous direction is the one currently assumed** |
+| **delivery divisor = 1** | §1.1 | ✅ settled **(P)** | ⛔ no | ⛔ no |
+| **leverage: declare the denominator** | §1.3 | ✅ settled **(P)** | ⚠️ **shape only** — keep deflate-the-requirement | ⛔ no |
+| **the ladder taxonomy** | §2 | ✅ settled **(S)**, structurally | ⚠️ adopt-as-written? | ⛔ no — ⭐ **it costs zero refused trades** |
+| **`:530`'s `raw_qty × 2` ceiling** | §2.3 | ✅ settled **(S)** | ⛔ no | ⚠️ **latent** — lives the moment a modifier exceeds 1 |
+| **the tier is armed, not dead** | §3 | ✅ settled **(P)** | 🔴 **YES — tier ON/OFF for delivery** | ⛔ no |
+| **G2's doubling warning stays unconditional** | §3.4 | ✅ settled **(P)** 372/483 | ⛔ **no — ⛔ do NOT re-open** | ⛔ no |
+| **the delivery surface ORDER** | §5 | ✅ settled **(P)** | 🔴 **YES — it is item 5's content** | 🔴 **YES** |
+| **segment halt = gate, not kill** | §6.1 | ✅ shape settled **(S)** | 🔴 **YES** | 🔴 **YES** |
+| **carried positions when delivery halts** | §6.1 | ⛔ no | 🔴 **YES — and it DEPENDS on the line above** | 🔴 **YES** |
+| **drift tolerance declined; fix the comparison** | §6.2 | ✅ settled **(S)** | ⚠️ the *comparison* fix is a separate item | ⛔ no |
+| **bucket denomination does not isolate** | §6.3 | ✅ settled **(S)** | ⚠️ only if the snapshot shape is pursued | ⚠️ **must land AFTER F6** |
+| **isolate the policy, never the purse** | §6.4 | ✅ settled | ✅ **promoted — rules §1.13** | ⛔ no |
+| 🔴 **inventory AUTHORITY** | §7.1 | ⛔ **no — evidence changes nothing** | 🔴 **YES** | 🔴🔴 **BLOCKS THE WHOLE SURFACE** |
+| 🔴 **pipeline OWNERSHIP (3 gates)** | §7.1 | ⛔ **no — it is STRUCTURAL** | 🔴 **YES** | 🔴🔴 **BLOCKS THE WHOLE SURFACE** |
+
+⭐ **Read the last two rows first.** ⛔ **Everything marked "blocks implementation" is downstream of
+them.**
+
 ---
 
 # §1 · THE CONCRETE SIZING FACTS THAT ARE IN NO MEASUREMENT DOC
@@ -29,7 +55,31 @@ unless stated. ⛔ **No value set · no YAML key · no code · no ruling taken.*
 | pipeline | divisor | evidence |
 |---|---|---|
 | **DELIVERY (CNC)** | **1** | **(P)** the delivery order set is **ONE row — `leg=ENTRY`, `product=CNC`, `COMPLETE`. Zero SL rows, zero TGT rows.** Protection is a **broker-side GTT**, which **blocks no margin until it triggers** ⇒ ⛔ **÷3 would cut CNC size to a third for nothing** |
-| **INTRADAY** | **at worst 2**, and only while both exits rest | ⚠️ `LIMIT_TRIPLE` is **two-phase** — SL+TGT are deferred to fill time. 🏷️ **OPEN: whether the broker charges the second leg is UNVERIFIED against this account.** ⛔ Do not close this by reasoning; it needs a margin observation |
+| **INTRADAY** | **at worst 2**, and only while both exits rest | ⚠️ `LIMIT_TRIPLE` is **two-phase** — SL+TGT are deferred to fill time. 🏷️ **`OPEN — MEASUREMENT`: whether the broker charges the second leg is UNVERIFIED against this account.** ⛔ Do not close this by reasoning; it needs a margin observation — ⭐ **and it is TAKEABLE on any trading day: see §1.1a** |
+
+### 1.1a · 🏷️ `OPEN — MEASUREMENT` · **the intraday two-leg margin question**
+
+⭐⭐ **This is the ONE piece of sizing work that is neither blocked nor analysis.** It needs a **live
+observation**, not a ruling and not another document.
+
+> **THE QUESTION:** with `LIMIT_TRIPLE`'s **SL and TGT both resting after a fill**, **does the broker
+> charge margin for the second?**
+> ⇒ ⭐⭐ **It decides whether the intraday divisor is 1 or 2 — a FACTOR OF TWO on every intraday
+> position.**
+
+**THE OBSERVATION IS PASSIVE — ⛔ NO TRADE IS TO BE PLACED FOR IT:**
+1. Kite **Funds → `used margin`** *before* the first MIS entry fills;
+2. **again after both exits are resting** *(i.e. the deferred `place_exits` has run)*;
+3. **the position's own value**, for the comparison.
+⭐ **Record all three with clock times.** ⛔ **If no MIS trade fires, the question simply ROLLS — do
+NOT manufacture one.**
+
+> ### ⚠️ THE ASYMMETRY — **and it is what decides how much this matters**
+> **If the divisor is 2 and we assume 1 ⇒ positions are DOUBLE-SIZED against the intended cap.**
+> **If it is 1 and we assume 2 ⇒ they are merely HALF-sized.**
+> ⇒ 🔴 **THE DANGEROUS DIRECTION IS THE ONE CURRENTLY ASSUMED.**
+
+⛔ **Record only. No sizing change follows from it without the full loop.**
 
 ## 1.2 · `margin_reserved` = **entry × 1.05 exactly** — ⛔ not ×3
 
@@ -196,8 +246,8 @@ kill switch is the one component whose portfolio-wide scope is the point.
 ⭐ **The pattern he wants ALREADY EXISTS: `risk_engine.py:468` / `:552` gate per bucket.**
 ⇒ **SHAPE: refuse new entries for one pipeline · leave existing positions managed · keep the kill
 portfolio-wide.**
-🏷️ **OPEN: what happens to CARRIED positions when delivery halts?** ⛔ Cannot be ruled before the
-gate-vs-kill question itself.
+🏷️ **`OPEN — GOVERNANCE DEPENDENCY`: what happens to CARRIED positions when delivery halts?**
+⛔ Cannot be ruled before the gate-vs-kill question itself.
 
 ## 6.2 · 🔴 THE DRIFT TOLERANCE IS **DECLINED**, and the reason is the whole point
 
@@ -235,7 +285,10 @@ REQUIRES A SHARED QUANTITY.**
 ✅ **Investigation COMPLETE.** 🔴 **Architecture: AWAITING RULINGS.** ⛔ **Implementation: BLOCKED,
 correctly.**
 
-## 7.1 · TWO GATES FREEZE IT
+## 7.1 · TWO GATES FREEZE IT — 🏷️ **both `OPEN — GOVERNANCE DEPENDENCY`**
+
+⛔ **Neither is answerable by measurement. More evidence changes nothing here** — that is what makes
+them governance dependencies rather than open questions.
 
 1. **The INVENTORY AUTHORITY ruling** — which control inventory survives, and where it lives.
 2. **The PIPELINE-OWNERSHIP ruling** — *may both pipelines hold the same symbol on a day?*

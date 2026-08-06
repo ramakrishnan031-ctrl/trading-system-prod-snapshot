@@ -257,6 +257,27 @@ a yes/no, and the answer is visible in the filing itself.
 ⛔ **FROM HERE IT IS A PRECONDITION ON FILING, NOT A REVIEW NOTE.** ⭐ The question is asked *before*
 the rule is written, not after.
 
+#### 🕯️ G7.1 · **A RULE IS NOT ADOPTED UNTIL IT HAS BOUND** — 🏷️ **PROVISIONAL**
+
+🏷️ **Parent (G7): extends G7.** ⛔ **Marked PROVISIONAL by its own terms — see the last line.**
+
+> **A RULE IS NOT ADOPTED UNTIL IT HAS BEEN APPLIED TO A REAL CASE AND HAS EITHER **BOUND** OR BEEN
+> **AMENDED**.** ⛔ **Writing it and agreeing it is not adoption.**
+
+⭐⭐ **Grounded in three instances from ONE evening — and the reason it is a rule at all is that all
+three were found by APPLICATION, none by review:**
+
+| rule | it PASSED its own test | …but |
+|---|---|---|
+| **the 1:1 telemetry rule** | as written | it **accepted 1 of the 2** known twins |
+| **`M12`** | the count verified | it verified a count **over a broken partition** |
+| **`G7`** | every rule named a parent | **naming a parent does not make a rule BIND** |
+
+⛔ **It applies to the rules written tonight as much as to the older ones** — ⭐ **including
+ITSELF**, which is exactly why it is filed **`PROVISIONAL`**: it has not yet bound or been amended
+against a real case. 🏷️ **Promote it to adopted the first time it does — ⛔ and if it never does,
+that is the answer too.**
+
 ⚠️ **AND THE CASE IT ALREADY CAUGHT, recorded because it is the honest one:** *"semantic
 correctness"* has **ONE instance in ONE artifact class** and would **fail** a promotion bar requiring
 recurrence **and** cross-category value. ⭐⭐ **It survives only because it was FOLDED INTO M12 as a

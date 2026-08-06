@@ -93,7 +93,26 @@ entirely, so **no stale P&L state exists to go wrong.**
    from `broker.net`. ⚠️ The SU6 holiday guard (`main.py:1754`) is also stale but **inert today**
    (Friday is a trading day).
 
-## 4. DIFFNKG's CHECK1 GATE — it carries into Friday
+## 4. 📐 A FREE MEASUREMENT IF — **and only if** — an MIS trade fires today
+
+⛔ **PASSIVE. NO TRADE IS TO BE PLACED FOR THIS.** ⭐ **If no MIS trade fires, the question ROLLS.**
+
+**With `LIMIT_TRIPLE`'s SL and TGT both resting after a fill, does the broker charge margin for the
+second?** ⇒ ⭐⭐ **it decides whether the intraday divisor is 1 or 2 — a FACTOR OF TWO on every
+intraday position.**
+
+**Record three numbers, each with its clock time:**
+1. Kite **Funds → `used margin`** *before* the first MIS entry fills;
+2. **again after both exits are resting** *(the deferred `place_exits` has run)*;
+3. **the position's own value**, for the comparison.
+
+> ⚠️ **THE ASYMMETRY, and it is why this is worth a glance:** **divisor 2 assumed as 1 ⇒ positions
+> DOUBLE-SIZED against the intended cap. Divisor 1 assumed as 2 ⇒ merely half-sized.**
+> 🔴 **The dangerous direction is the one currently assumed.**
+
+⛔ **Record only. No sizing change follows without the full loop.** ➡️ `docs/design/sizing/sizing_thread_conclusions_06aug2026.md` §1.1a
+
+## 5. DIFFNKG's CHECK1 GATE — it carries into Friday
 
 ⛔ **The same three checks**, and the one that matters: **an ACTIVE `gtt_state` row with a NULL or
 mismatched `trade_id` DOES NOT SKIP.** **(P) 06-Aug 19:08:44:** `330658430 → trd_010f8e21…` matched
