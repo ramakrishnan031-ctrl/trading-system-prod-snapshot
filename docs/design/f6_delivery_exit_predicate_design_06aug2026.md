@@ -610,6 +610,37 @@ first in-hours cycle**. ⇒ 🏷️ **The only levers are the nightly manual sto
 > obligation ends** *(DIFFNKG still defers the self-exit — but a real carry is a real reason)*; the
 > row **SURVIVES** ⇒ **the obligation stands indefinitely.**
 
+### 15.2 · 🔒 THE RETIREMENT TEST — ⭐⭐ **WRITTEN NOW, WHILE THE WORKAROUND IS NEW**
+
+> ⭐⭐ **WHY TODAY AND NOT WHEN F6 LANDS:** a retirement test authored by the person who is **tired of
+> the workaround** is not the same document as one authored today. ⛔ **This exists to prevent the
+> common failure mode where a workaround outlives the defect it mitigated** — nobody remembers why
+> the nightly stop is done, so it is either done forever or dropped without checking.
+
+🏷️ **FRAMING, and it is load-bearing: the nightly stop is a TEMPORARY COMPENSATING CONTROL tied to
+explicit preconditions — ⛔ NOT steady-state design. F6 is its EXIT CRITERION, not a nice-to-have.**
+
+**When F6 lands, RUN THIS CHECKLIST. ⛔ All four, in order. The workaround is not retired until #4.**
+
+| # | exit criterion | how it is verified | ⛔ not satisfied by |
+|---|---|---|---|
+| **1** | **the nightly stop is no longer required** — the service **self-exits at 17:35 with a carry open** | observe a real evening with a delivery position held: `eod_self_exit` fires, `ActiveState=inactive`, census emitted | *"the predicate looks right"* — this needs an **observed evening**, not a source read |
+| **2** | **the boot dependency is REMOVED — or explicitly RE-JUSTIFIED** | either a non-boot path clears a prior-day kill, **or** a written statement that boot-only is intended **and** that the self-exit now guarantees the boot | ⛔ leaving it boot-only **silently** — that is the whole defect, one layer up |
+| **3** | **Friday's three-way measurement still converges** | broker truth · reservation replay · internal state agree (`FRIDAY_MORNING_07-Aug-2026.md` §1) | a single view agreeing with itself |
+| **4** | **the recurring obligation is FORMALLY CLOSED** | ⛔ **struck from HOT memory (§G4: struck, legible, dated), the AR-style preconditions marked spent, and this section marked RETIRED** | ⭐⭐ **merely STOPPING doing it.** An undocumented stop is indistinguishable from forgetting |
+
+### 15.3 · ⚠️ THE PRIORITY ARGUMENT CARRIES PRECONDITIONS TOO
+
+⭐ **Extended from the conclusion to the PRIORITY, because a priority inherited without its reasons
+is the same failure one level up.** Cost 6 ranks F6 where it does **only while** these hold:
+
+1. **boot behaviour** — the 08:15 boot remains the only thing that runs the boot-bound work;
+2. **the kill-clear path** — both clearers remain boot-only, **one production site each**;
+3. **the self-exit logic** — it remains blocked by an open row *(including a phantom one)*.
+
+⛔ **If any changes, the priority is RE-EVALUATED, not INHERITED.** ⭐ A ranking is a measurement
+with a date on it, not a property of the item.
+
 ---
 
 `trd_e66ee17b…` is `OPEN` with `margin_reserved=587.4228`, and `_replay_open_trade` re-reserves

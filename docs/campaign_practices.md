@@ -705,6 +705,37 @@ false reassurance**. ⭐ It was caught only by reading the tag at source.
 
 ---
 
+### M12 · ⭐⭐ A REASONING ARTIFACT IS A CONFIGURATION ITEM — **and any numbered list carries its own count**
+
+*Generalised from ChatGPT's point 4, adopted 06-Aug-2026: "treat reasoning artifacts — cost
+numbering, dependency maps, evidence classes — as configuration items deserving the same consistency
+checks as code."*
+
+⛔ **"Be careful" is not a rule.** ⭐ **The checkable form:**
+
+> **Any numbered list in a design document STATES ITS OWN COUNT, and the count is RE-VERIFIED when
+> the list changes.** A total that is not re-added when a row moves is a stale assertion, not a
+> total.
+
+**FOUR instances, all in a single session (06-Aug-2026) — in artifacts whose entire purpose is to
+make counting reliable:**
+
+| # | artifact | said | was | how it was caught |
+|---|---|---|---|---|
+| 1 | F6's cost list | *"the fifth cost"* | **the sixth** — the list omitted cost 4, the three live sell GTTs | author re-reading |
+| 2 | F6's regression heading | *"(6) — all six required"* | **8 listed** | author re-reading |
+| 3 | sizing bucket totals | `31+34+6+42 = 113` ✅ | ⛔ **reconciles by ACCIDENT** — 6 phantom slots *(keys that do not exist)* almost exactly offset ≥4 real omissions *(existing keys in no bucket)* | a recount demanded by the reviewer |
+| 4 | the semantic filter's destinations | *"9 · 4 · 3 · 1"* | **17 of 25 drops** — 8 had no stated destination | re-adding the rows |
+
+> ### ⭐⭐ **INSTANCE 3 IS THE ONE THAT TEACHES THE RULE**
+> **A total that RECONCILES is the strongest signal a reader has that a classification is complete.**
+> There it reconciled **because two independent errors offset**. ⛔ **A correct-looking total is not
+> evidence; the re-addition is.**
+
+⚠️ **AND THE HONEST NOTE ABOUT HOW THESE WERE FOUND: three of the four were caught by the AUTHOR
+RE-READING, not by any check.** ⛔ **That is LUCK, NOT PROCESS** — which is precisely the argument
+for the stated-count rule: it converts a re-read into a check that can fail.
+
 ### 🕯️ CANDIDATES — ⛔ **HELD, NOT PROMOTED. ONE INSTANCE EACH.**
 
 ⭐ **"One occasion is not a property" is this campaign's own standard, and it applies to its own
