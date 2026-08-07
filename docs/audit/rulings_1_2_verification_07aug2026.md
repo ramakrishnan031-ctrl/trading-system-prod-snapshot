@@ -517,6 +517,8 @@ immediately preceded by `_tr = self._entry_throttle.admit(symbol)` at `:1249`, `
 
 ## §8.3 — Q3 · THE SENCO ARITHMETIC, OPERANDS SHOWN
 
+### 🏷️ **(b) CONFIRMED DESIGN — the interval the throttle evaluated was 719.644 s, and every operand is quoted.** **(P)**
+
 **Every timestamp below is quoted from the `ts` field of a JSON line in
 `logs/system_2026-07-27.log` on the VM. No figure is stated that was not read from that record.**
 
@@ -823,3 +825,61 @@ assumed away is what produced the strongest single piece of evidence in this sec
 - ⛔ **Nothing done about `330944932`.** Reported only. Cancellation, and any F6 work, need their own
   card and Rama's authorisation in his own words.
 - ⛔ **The 15:08:11 DIFFNKG trigger with no matching broker order is UNEXPLAINED** and was not chased.
+
+---
+
+## §8.12 — THE PUSH GATES, AND THE FAILURE SET WRITTEN DOWN
+
+**Clock read with PowerShell `Get-Date` per the standing rule.** ⚠️ **The recorded clock hazard is
+REFINED, not contradicted, by tonight's reading:** bare `date` in Git Bash returns **correct IST**
+(`17:38:36 IST`, matching PowerShell); it is specifically **`TZ=Asia/Kolkata date` that lies**,
+printing `12:08:37 GMT` — 5½ h early. **The hazard is the `TZ=` prefix, not Git Bash.**
+
+| gate | result |
+|---|---|
+| **①** service state | `ActiveState=active · SubState=running · NRestarts=0 · ExecMainStatus=0 · Result=success`. ⚠️ **`active` is tonight's EXPECTED state, not a failure** — a carried delivery position defers `eod_self_exit`. ⛔ **The manual stop and the 17:35 census are RAMA's (`sudo` denied here) and were NOT run** — stated, not silently skipped |
+| **②** forward shadow banked | checked, and **NOT satisfied on the first read** (`Aug 6 18:18`, last date `2026-08-06`) ⇒ **waited for the 18:15 cron rather than pushing on a stale artifact** |
+| **③** D2 behavioural surface | ✅ **ZERO.** `git diff --name-only origin/main..HEAD` excluding `docs/**` and `*.md` = **0 files**; `-- '*.py'` = 0; `-- '*.yaml' '*.sql'` = 0; and per-commit, **every one of the 14 commits ships 0 non-doc files** |
+| **④** tree + remote | ✅ working tree **CLEAN**; `git ls-remote origin main` = `6ae47d0` |
+| **⑤** full regression | see below |
+| **D6.1** crontab pre-hash | ✅ `b8276da7043975cda2d0ce6578960c6a`, **148 lines / 46 cmds** — identical to the standing baseline |
+
+### GATE ⑤ — `PYTEST_RC=1`, AND THE 9 ARE STRUCTURALLY NOT MINE
+
+**Invocation:** `pytest tests/unit tests/integration`, ⛔ **not `run_tests.py`**, ⛔ **not through a
+pipe.** **The rc was captured into a variable immediately (`D5.1 v2`) and read back separately from
+the wrapper's own exit code** — the wrapper reported `0` because its last command was a `tail`, which
+is precisely the trap `D5.1` exists for.
+
+```
+PYTEST_RC=1
+===== 9 failed, 5557 passed, 4 skipped, 281 warnings in 880.47s (0:14:40) =====
+```
+
+**Counts are IDENTICAL to the two runs recorded last night (9F / 5557P / 4S).**
+
+> ### ⭐ **THE SET, WRITTEN DOWN — because last night recorded *"the set is STABLE"* WITHOUT RECORDING THE SET**
+> A stability claim that cannot be re-checked is a count, and **the count is exactly what the 55→29
+> episode proved untrustworthy.** These nine are now on record so the next run can do a **true
+> set-compare** instead of matching a total:
+>
+> ```
+> tests/unit/test_closure_source_contract.py::test_no_module_restates_the_vocabulary_literals
+> tests/unit/test_fix181.py::TestStep4_ReconcilerInflightOrphan::test_inflight_orphan_flattened_when_kill_active
+> tests/unit/test_instance_lock.py::TestSingleInstanceAcrossProcesses::test_p1_second_concurrent_instance_is_refused
+> tests/unit/test_instance_lock.py::TestSingleInstanceAcrossProcesses::test_p2_restart_after_crash_is_not_blocked
+> tests/unit/test_main.py::TestBl15WebhookSecretRequired::test_paper_mode_does_not_require_webhook_secret
+> tests/unit/test_main.py::TestContinueFromGate::test_price_hit_calls_placer_with_correct_prices
+> tests/unit/test_main.py::TestContinueFromGate::test_no_placer_releases_reservation_and_updates_status
+> tests/unit/test_main.py::TestContinueFromGate::test_stats_placed_incremented_on_success
+> tests/unit/test_phase17_batch2.py::test_fix077_flask_max_content_length
+> ```
+>
+> ⭐ **`test_instance_lock` p1+p2 is the documented pre-existing full-suite ORDERING artifact**
+> (unreaped-`Popen` orphan), already proven on BASE as well as MERGE on 06-Aug.
+
+**ATTRIBUTION IS STRUCTURAL, ⛔ NOT A COUNT-COMPARE:** every executable file in the repo is
+**byte-identical to `origin/main`** (0 differing non-doc files), and each of the five failing test
+files was checked individually — **all five `IDENTICAL to origin/main`.** ⇒ **no failure in this set
+can have been caused by this push.** ⛔ **And they are NOT labelled "known env failures"** — that is a
+label, not a diagnosis, and the standing record says not one of them is environmental.
