@@ -200,6 +200,39 @@ then meant "advisory". Under the amended G2 that distinction no longer separates
 the register says why, and rewriting a past classification to match a later rule is the
 history-rewrite G4 exists to prevent.
 
+### G2.1 · ⭐⭐ WHERE A CARD'S **NARRATIVE** AND ITS **MECHANICS** DISAGREE, THE **MECHANICS** GOVERN
+
+🏷️ **Parent (G7): EXTENDS `G2`.** G2 settles *whose word carries authority*. **G2.1 settles what to
+do when that word is internally inconsistent** — ⛔ a case G2 does not reach, because "the source
+wins" gives no answer when the source disagrees with *itself*.
+
+> **A card's prose states an INTENT; its mechanism statements state a CAUSAL CHAIN. When the two
+> conflict, follow the CHAIN.**
+
+**THE EARNING CASE — 07-Aug-2026, and the source ruled on it itself.** The Friday card's §1
+blockquote said the nightly-stop obligation **ENDS** on the favourable branch *(ATULAUTO's `−1` row
+gone ⇒ the phantom closes)*. Its own §3.2 said the obligation does **not** end until **nothing** is
+open. ⛔ **§3.2 is right and §1 was wrong** — and the mechanics say why in one line:
+
+> **DIFFNKG is a real open CNC position ⇒ it defers the 17:35 self-exit ⇒ no Monday 08:15 boot ⇒
+> Friday's 15:15 `SOFT_KILL` never clears ⇒ MONDAY TAKES NO ENTRIES**, presenting as a quiet market.
+
+⭐ **The phantom's closure was never the whole condition.** It was one of two, and the narrative had
+collapsed them.
+
+⭐⭐ **WHY THE MECHANICS ARE THE SAFER SIDE OF THE DISAGREEMENT — this is the rule's actual argument,
+not a preference for detail.** A narrative sentence is a **summary**, and summaries fail by
+**dropping a term**; a mechanism statement fails only by being **wrong about a link**, which is
+**checkable at source**. ⇒ **The narrative's failure mode is silent; the mechanism's is testable.**
+⚠️ **And the error direction is not symmetric:** here, following the narrative would have **ENDED a
+standing safety obligation** on a partial condition — ⛔ the narrative failed **permissively**.
+
+⛔ **THIS IS NOT LICENCE TO OVERRIDE A SOURCE.** It applies **only** to an internal conflict inside
+one source. Where the card is *consistent* and disagrees with me, **G2 stands and the source wins** —
+`M8`, and 06-Aug's four failed after-the-fact explanations, are the record of what happens otherwise.
+⭐ **And say the disagreement out loud** — the card did exactly that about its own §1, which is why
+this rule exists at all rather than being quietly patched.
+
 ### G3 · DISCLOSE, DON'T EXPAND
 A defect found **outside the card's scope** is **reported and carded — never fixed in
 passing.** Earned repeatedly, and every time the disclosure became its own item:
@@ -1260,6 +1293,27 @@ bound — and it would have joined the three rules that passed their own test wh
 purpose** *(the 1:1 telemetry rule · `M12` · `G7`)*.
 🏷️ **Recorded as `(P)` — the rule was applied to a case that could have embarrassed it, which is the
 only thing that validates a governance rule.**
+
+### 🧾 ENTRY GD-2 · **THE NINETEEN — DECLINED UNDER (E), 07-Aug-2026 10:3x**
+
+**Nineteen further governance refinements across two replies: ⛔ ALL DECLINED under `(E)` as
+governance elevation — the category (E) names explicitly as NOT a reopen condition.** Not one is a
+reversed ruling, contradicts production evidence, or is an open measurement resolving against its
+recorded prediction. ➡️ **Pointer, ⛔ not nineteen entries: the source card, `§4`, 07-Aug 10:30.**
+🔓 **HELD under GD-1's standing trigger, unchanged: *a SECOND ledger cold-read failure whose SHAPE
+the existing vocabulary cannot express.***
+
+✅ **ONE EXCEPTION, ADOPTED — *record the prediction BEFORE the measurement*** →
+`docs/design/sizing/margin_calibration_07aug2026.md` §1. ⚠️ **And it was ALREADY OURS** *(round 12
+§1.3; the prediction-vs-explanation result)* ⇒ ⭐ **its value today is TIMING, not novelty** — the
+window was open when the card arrived, so the rule got applied instead of merely being held.
+
+> ## ⚠️⚠️ **THE PATTERN IS NOW MEASURABLE, AND IT IS THE REASON TO RECORD THIS AT ALL: 8 → 19.**
+> **Nineteen proposals in one round, after `(E)` was agreed, following eight the round before.**
+> ⭐ **(E) is binding correctly — this is its SECOND application.** ⛔ **But a rule that must be
+> applied to a GROWING volume each round is holding a line, not moving one.** 🏷️ **The count is the
+> instrument: track it. If a third round exceeds nineteen, the volume itself is the finding, and
+> `(E)`'s sufficiency becomes the question rather than each proposal's merit.**
 
 ---
 

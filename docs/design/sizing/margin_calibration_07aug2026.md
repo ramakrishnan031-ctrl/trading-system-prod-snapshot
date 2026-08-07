@@ -1,88 +1,165 @@
 # MARGIN CALIBRATION — 07-Aug-2026 · the intraday divisor
 
-> **Status: PREDICTION RECORDED, MEASUREMENT PENDING.**
+> **Status: PREDICTION RECORDED (§1) · SYSTEM SIDE MEASURED (§2) · BROKER READING PENDING (§4).**
 > Parent: `sizing_thread_conclusions_06aug2026.md` §1.1a · card `FRIDAY_MORNING_07-Aug-2026.md` §4.
 
 ---
 
 ## 1. ⭐⭐ THE PREDICTION — **recorded BEFORE the measurement**
 
-**Written 2026-08-07 10:29:27 +05:30 IST** (`Get-Date`), with the entry window `[10:00, 15:00)`
-**OPEN** and **no MIS entry inspected yet.** ⛔ Nothing below §1 existed when this was written.
+**Written 2026-08-07 10:29:27 +05:30 IST** (`Get-Date`), committed `a6808dc` **before** any MIS
+entry was inspected. ⛔ Nothing below §1 existed when this was written.
 
 > ### **PREDICTION**
 > **`used margin` after both exits rest will EQUAL `used margin` after the entry fills.**
-> ⇒ **DIVISOR = 1** — because an exit order placed against an *existing* position requires no
-> additional margin.
+> ⇒ **DIVISOR = 1** — an exit order placed against an *existing* position requires no additional
+> margin.
 >
 > ### **THE ALTERNATIVE, stated so the prediction can fail**
-> **`used margin` RISES by roughly the position's margin again ⇒ DIVISOR = 2** — the second resting
-> opposite-side order is treated as fresh.
+> **`used margin` RISES by roughly the position's margin again ⇒ DIVISOR = 2.**
 
-**Why the prediction is recorded at all:** it is the difference between an experiment and a note.
-A number captured with no prior commitment can be explained *after the fact* by whichever story
-fits — and the 06-Aug methodological result measured exactly that split: **every prediction written
-before the fact HELD; every explanation constructed after it FAILED.**
-
-### 1.1 · 🔴 THE ASYMMETRY — why the direction matters more than the number
+### 1.1 · 🔴 THE ASYMMETRY
 
 | if the truth is | and we assume | consequence |
 |---|---|---|
 | divisor **2** | **1** | ⛔ positions **DOUBLE-SIZED** against the intended cap |
 | divisor **1** | **2** | merely **HALF-sized** |
 
-🔴 **The dangerous direction is the one currently assumed.** That is what makes a passive
-measurement worth the discipline.
+🔴 **The dangerous direction is the one currently assumed.**
 
 ---
 
-## 2. CAPTURE SHEET — **four readings, each with its clock**
+## 2. ✅ THE SYSTEM SIDE — MEASURED 10:3x, live DB `data_store/trading_system.db`
 
-⛔ **PASSIVE. NO TRADE IS PLACED FOR THIS.** ⭐ If no MIS entry fires by **15:00**, the question
-**ROLLS** — a legitimate outcome under the sizing thread's exit criterion **(B)**, ⛔ not a miss,
-**provided the roll is RECORDED as one** (§5).
+**`LIMIT_TRIPLE` is in exactly the state the test is about: entry `COMPLETE`, SL and TGT BOTH
+`OPEN` (resting).** Measured from `orders`, joined on `trades.status='OPEN'`:
 
-⚠️ **`used margin` is a Kite Funds reading — it is RAMA'S, not a system measurement.** The system
-records the fill and the deferred `place_exits`; it does not record broker margin. Provenance is
-labelled per reading.
+| symbol | leg | product | status | placed_at |
+|---|---|---|---|---|
+| CARRARO | ENTRY | MIS | COMPLETE | 10:06:17.720 |
+| CARRARO | **SL** | MIS | **OPEN** | **10:06:41.695** |
+| CARRARO | **TGT** | MIS | **OPEN** | **10:06:41.695** |
+| CROMPTON | ENTRY | MIS | COMPLETE | 10:09:14.880 |
+| CROMPTON | **SL** | MIS | **OPEN** | **10:09:22.967** |
+| CROMPTON | **TGT** | MIS | **OPEN** | **10:09:22.967** |
+| DIFFNKG | ENTRY | CNC | COMPLETE | 06-Aug 10:02:17 |
+| MANINFRA | ENTRY | CNC | COMPLETE | 10:05:23.088 |
 
-| # | reading | moment | clock (IST) | value | source |
-|---|---|---|---|---|---|
-| 1 | **used margin** | BEFORE the first MIS entry fills | | | Kite Funds (Rama) |
-| 1b | **available funds** | same moment as (1) | | | Kite Funds (Rama) |
-| 2 | **used margin** | AFTER the entry fills, BEFORE exits are placed | | | Kite Funds (Rama) |
-| 3 | **used margin** | AFTER **BOTH** exits rest — deferred `place_exits` has run | | | Kite Funds (Rama) |
-| 3b | **available funds** | same moment as (3) | | | Kite Funds (Rama) |
-| 4 | **position value** | qty × fill price | | | system (`trades`) |
+**The four open positions and the margin the SYSTEM modelled for each:**
 
-⛔ **(3) is "after both exits are RESTING", not "after the entry fills."** The deferred
-`place_exits` is the whole subject of the test; reading too early measures nothing.
+| symbol | product | qty | entry | `margin_reserved` | position value | ratio |
+|---|---|---|---|---|---|---|
+| DIFFNKG | CNC | 1 | 446.10 | **446.106** | 446.11 | 1.00 |
+| MANINFRA | CNC | 4 | 115.23 | **460.916** | 460.92 | 1.00 |
+| CARRARO | MIS | 1 | 510.80 | **102.162** | 510.81 | **0.20** |
+| CROMPTON | MIS | 1 | 254.05 | **50.811** | 254.05 | **0.20** |
+| | | | | **Σ 1,059.995** | Σ 1,671.89 | |
+
+⭐ Both MIS trades are **SHORTS** (`sl_initial` > entry, `tgt_initial` < entry) — a broker condition
+that belongs in §5, not a footnote.
+
+### 2.1 · ⛔⛔ READINGS (1) AND (2) ARE **UNOBTAINABLE** — stated plainly, not worked around
+
+The card's capture sheet asks for `used margin` **before the first MIS entry fills** and **after the
+fill, before exits are placed.** Those moments were **10:06:17** and the ~24 s to **10:06:41**.
+**The card arrived at 10:30** — ⇒ **both moments had passed by ~24 minutes.**
+
+⛔ **They cannot be reconstructed.** Kite's Funds page reports a *current* figure; there is no
+historical used-margin series. ⚠️ **And the system does not record broker margin at all** — it
+records its own `margin_reserved` model, which is the thing under test and therefore cannot stand in
+for it.
+
+⇒ **The clean before/after delta is NOT available for CARRARO or CROMPTON.** What replaces it is
+weaker and is labelled as such in §3.
 
 ---
 
-## 3. THE FOUR FIELDS TO DOCUMENT — permanent evidence, not a note
+## 3. THE SUBSTITUTE TEST — a STATIC comparison, ⛔ not the delta
+
+**One `used margin` reading now discriminates, because the two hypotheses predict different totals:**
+
+| hypothesis | arithmetic | predicted `used margin` |
+|---|---|---|
+| **DIVISOR 1** *(predicted)* | 446.11 + 460.92 + 102.16 + 50.81 | **≈ ₹1,060** |
+| **DIVISOR 2** | the two MIS exits charge again: + (102.16 + 50.81) | **≈ ₹1,213** |
+
+**A ₹153 gap on a ₹1,060 base.** ⭐ **Distinguishable by a single reading.**
+
+### 3.1 · ⚠️ THE CONFOUND, stated in the same breath
+
+This compares broker truth against **the system's own leverage model** (MIS at 0.20 = 5×). ⛔ If the
+broker's real MIS margin for these symbols is not 5×, the absolute totals shift and the test
+degrades. **It is not a clean experiment; it is a bounded one.**
+
+⭐ **What limits the damage:** the **CNC portion is model-independent** — CNC is charged at full
+value by definition, so **₹907.02 of the ₹1,060 carries no leverage assumption.** The entire
+uncertainty lives in the **₹152.97** MIS portion, which is also exactly the quantity the divisor
+doubles. ⇒ **the confound and the signal are the same size**, which is the honest way to say this
+reading is *suggestive*, ⛔ **not decisive.**
+
+### 3.2 · ⭐ THE CLEAN DELTA IS STILL AVAILABLE — the window runs to 15:00
+
+⛔ **A third MIS entry may still fire.** If one does, the clean readings are takeable and they
+**supersede §3 entirely.** The system's own entry activity today shows the pipeline is live and
+attempting frequently (12 `entry_throttled` releases 10:00–10:11, 2 `slippage_exceeded`), so this is
+**not a remote possibility.**
+
+⛔ **STILL PASSIVE. NO TRADE IS PLACED FOR THIS.**
+
+---
+
+## 4. CAPTURE SHEET — **broker readings, PENDING**
+
+⚠️ **`used margin` is a Kite Funds reading — RAMA'S, ⛔ not a system measurement.**
+
+### 4a · the static reading (takeable NOW, while CARRARO + CROMPTON are both open)
+
+| # | reading | clock (IST) | value |
+|---|---|---|---|
+| A | **used margin** (Funds) | | |
+| B | **available funds** | | |
+| C | per-position margin, if the positions page shows it | | |
+
+⏰ **Time-critical: both MIS positions have SL and TGT resting. If either fires, the state changes
+and this reading is gone.**
+
+### 4b · the clean delta (only if a THIRD MIS entry fires before 15:00)
+
+| # | reading | moment | clock | value |
+|---|---|---|---|---|
+| 1 | used margin | BEFORE the entry fills | | |
+| 2 | used margin | AFTER the fill, BEFORE exits placed | | |
+| 3 | used margin | AFTER **BOTH** exits rest | | |
+
+⛔ **(3) is "after both exits are RESTING", not "after the entry fills."** Reading too early measures
+nothing. ⭐ On today's evidence the gap between fill and exits-resting is **~8–24 seconds**
+(10:06:17→10:06:41; 10:09:14→10:09:22) — **narrow, and it is why (2) was missed.**
+
+---
+
+## 5. THE FOUR FIELDS — to be completed from the readings
 
 | field | value |
 |---|---|
-| **observed divisor** | *(1 or 2 — the arithmetic, not the impression)* |
-| **confidence** | *(what this reading CANNOT settle, stated in the same breath as what it does)* |
-| **broker conditions** | *(segment · product · any other position open · time of day — ⛔ a margin reading is a reading of the WHOLE account, not of one order)* |
-| **repeat required?** | *(yes/no WITH the reason. ⭐ one observation, one symbol, one day = a CALIBRATION POINT, ⛔ not a broker rule)* |
-
-⚠️ **The `broker conditions` row is load-bearing today: DIFFNKG is a live CNC carry and ATULAUTO's
-₹587.40 phantom reservation replayed at boot.** Any `used margin` read today includes both.
-⇒ **the DELTA between (2) and (3) is the measurement; the ABSOLUTE figures are not.**
+| **observed divisor** | *(pending)* |
+| **confidence** | ⚠️ **already bounded, whatever the reading says:** §3.1's confound means a static reading is **suggestive, not decisive**. Only §4b's delta settles it. |
+| **broker conditions** | **07-Aug-2026, NSE equity, mid-session.** ⛔ **NOT a clean single-position account:** 2 CNC positions open (DIFFNKG carried from 06-Aug; MANINFRA opened 10:06 today) **plus** 2 MIS positions, **both SHORT**. A margin reading today is a reading of **all four**. |
+| **repeat required?** | ✅ **YES.** One observation, one day, on an account holding three unrelated positions, via a *static* comparison rather than a delta. ⭐ A **calibration point**, ⛔ not a broker rule. |
 
 ---
 
-## 4. RESULT
+## 6. RESULT
 
 *(pending — filled only from clock-stamped readings)*
 
 ---
 
-## 5. ROLL RECORD
+## 7. ROLL RECORD
 
-*(if no MIS entry fires by 15:00, record here: the clock, the fact that the window closed with no
-MIS fill, and that the question rolls under exit criterion (B). ⭐ An unrecorded roll is
-indistinguishable from forgetting.)*
+⛔ **The question has NOT rolled.** Two MIS entries fired (10:06:41, 10:09:22) — exit criterion (B)'s
+"observation completed" branch is **live**, not its "explicitly ROLLED" branch. ⚠️ **But what fired
+was the OPPORTUNITY, not the OBSERVATION:** the readings that matter were missed by ~24 minutes.
+
+⇒ 🏷️ **A THIRD STATE the criterion does not name: *the event occurred and the measurement was
+missed.*** ⛔ That is neither "completed" nor "rolled", and recording it as either would be false.
+**Recorded here as its own outcome.**

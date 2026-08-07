@@ -214,6 +214,25 @@ trustworthy; the 221 was a false finding produced by the old comment above.**
 > held** — `sum_fm_ledger_margin_delta('54672bb96d30421d')` → **689.41341**, because the offsetting
 > `RELEASE_USED` row carries no `reservation_id` *(0 of 220; `RELEASE` carries it 1189 of 1189 —
 > **the keys are perfectly disjoint**)*.
+>
+> #### 🔺 **RE-MEASURED 07-Aug-2026 10:3x — THE ENTRY IS WORSE THAN `reservation_id` ALONE**
+> **(P)** live DB, `SELECT count(*), sum(reservation_id IS NOT NULL), sum(trade_id IS NOT NULL)
+> FROM fm_ledger WHERE entry_type='RELEASE_USED'` → **224 · 0 · 65.**
+> ⇒ 🔴🔴 **159 of 224 rows (71 %) carry NEITHER key** — ⛔ **not "missing `reservation_id`": missing
+> *any* structured identifier**, leaving the **free-text `reason`** as the only handle. ⚠️ That
+> inverts the standing rule *never classify by free text when a structured status exists* — **here
+> one does not exist**, which is the defect rather than the workaround.
+> ⛔ **CORRECTION TO THE 07-Aug CARD, NOT SMOOTHED:** it recorded *"today's row has neither."*
+> **Measured, it has one.** Both of today's `RELEASE_USED` rows — **ATULAUTO `ledger_id 10239`
+> @08:15:41** *(−587.40, the phantom's release)* and **COSMOFIRST `10277`** @10:13:57 — **carry a
+> `trade_id` and lack only `reservation_id`.** The card's counts *(223 · 0 · 64)* were correct when
+> taken ~09:36; COSMOFIRST's exit added exactly one to both totals. **The "neither" half is what is
+> wrong, and it matters** — it is the difference between *one broken join* and *no join at all*.
+> ⭐ **The lifecycle's two halves are keyed disjointly END TO END:** `RESERVE`/`COMMIT` carry
+> `reservation_id` *(ATULAUTO's chain: `ee9af41eae554c35`, `RESERVE` 616.79394 → `COMMIT` 587.40)*;
+> the terminating `RELEASE_USED` carries `trade_id`. ⇒ **a reservation cannot be followed to its own
+> release by any single key**, which is exactly the ordering constraint above, restated from the
+> other end.
 > **(S)** `_check7` publishes with `source_module="fund_manager_self_check"`
 > (`order_reconciler.py:3782`), which **IS** in `_ESCALATING_SOURCES` (`drift_handler.py:66-70`)
 > ⇒ **DH1 does NOT bar it** ⇒ **single-sample SOFT/HARD escalation.**
