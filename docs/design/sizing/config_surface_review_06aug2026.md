@@ -4,6 +4,18 @@
 ⛔ **MEASUREMENT + CLASSIFICATION ONLY. No design · no proposed value · no proposed key · nothing changed.**
 Citations at deployed SHA `0197923`. Production read ~15:2x IST.
 
+> # ✅ MERGED 07-Aug-2026 — **RULING 1 (Rama). THIS FILE IS NOW EVIDENCE, NOT A DOCUMENT OF RECORD.**
+> Its findings live in the authority: **`ops_dashboard/docs/G2a_capacity_inventory.md`** §F (the
+> pipeline / twin / binds axes), §G (14 new inventory rows 31–44) and §H (the collisions the merge
+> exposed). ⛔ **Cite the authority, not this file.** It is kept unedited below as the evidence set
+> that produced those rows — ⭐ *a conclusion recorded without the evidence set that produced it is
+> how the next reader ends up re-deriving it.*
+> ⚠️ **Three of its figures did NOT survive the merge and are corrected in §H:** `alerts.*` is **31**
+> leaf keys, not 9 · `entry_gate.*` is **17**, not 9 · and the `113` is a **scope count, never a row
+> set** (§G.2).
+> ⭐ **Its own status block below is why this merge was clean rather than a turf war** — a working
+> document that declares itself cannot become an authority by being useful.
+
 > # ⛔⛔ STATUS: **WORKING DOCUMENT. NOT AN AUTHORITY. NOT AN INVENTORY.**
 > **This file is an INPUT to item 4, not a control inventory and not a third one.** It is keyed on
 > the dotted config key — **the same key as inventory #2** — which is precisely why it must say so.
