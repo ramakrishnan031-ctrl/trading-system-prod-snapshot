@@ -192,6 +192,64 @@ arithmetically identical to a cap change** ⇒ *"should we tune the tier or the 
 direction** — a conditional warning on a doubling is a warning that will be absent on the day it is
 needed. 🏷️ **Recorded as a failed prediction in §8.**
 
+## 3.5 · 🔴🔴🔴 **(E) HAS FIRED — 07-Aug-2026. THE SCOPE OF §3.3 WAS WRONG, AND A LIVE POSITION PROVED IT**
+
+🏷️ **THE FIRST LEGITIMATE REOPEN SINCE CLOSURE.** ⭐⭐ **And it came from the BROKER SCREEN, not from
+either reviewer** — production evidence contradicting a registered conclusion, which is exactly the
+clause `(E)` names. ⛔ Not a refinement; the nineteen remain declined.
+
+**(P) MEASURED, ⛔ NOT INFERRED** — `trades` row, MANINFRA, entered 07-Aug 10:06:05:
+
+| field | value |
+|---|---|
+| `qty_by_risk` | 40 |
+| `qty_by_capital` | 20 |
+| **`qty_by_concentration`** | **8** |
+| **`binding_constraint`** | **`concentration`** |
+| `tier_multiplier_mode` | **ON** |
+| **`tier_weight_applied`** | **0.5** |
+| `perf_weight_applied` | 1.0 |
+| **`qty_planned` = `qty_filled`** | **4** |
+| `entry_actual_price` | 115.23 |
+
+⇒ **`raw_qty = min(40, 20, 8) = 8`** and **`floor(8 × 0.5) = 4`.**
+⇒ 🔴🔴 **THE TIER HALVED A LIVE DELIVERY POSITION TODAY — THE FIRST OBSERVABLE INSTANCE IN THE
+CAMPAIGN'S HISTORY.** ⭐ **FIX-133's floor never engaged, because the modifier did not round to zero.**
+
+### ⛔ THE CORRECTION IS TO THE **SCOPE**, NOT THE ARITHMETIC
+
+**The chain — concentration → `min()` → tier → floor — is UNCHANGED and was never in doubt.** What
+was wrong is the **generality**: §3.3's *"its only effect is the 111 `qty=1` trades"* and §3 §210's
+*"at `raw_qty=1` the FIX-133 floor cancels it"* were drawn from a corpus in which **every delivery
+position ever measured was `qty 1`** — ATULAUTO ₹587.40 · ASKAUTOLTD ₹656.60 · DIFFNKG ₹446.10,
+**all high-priced.**
+
+> ## ⭐⭐ **"CONCENTRATION BINDS STRICTLY AT 1" IS PRICE-DEPENDENT.**
+> **True for high-priced symbols; FALSE for low-priced ones.** A concentration cap that permits **1**
+> share at ₹587 permits **8** at ₹115. ⇒ **the tier's cancellation was never the general case — it
+> was an artifact of the sample's price range**, and it was registered without that qualifier.
+
+🏷️ **SAME FAILURE SHAPE AS AR9's TWO SCOPE CORRECTIONS: a conclusion true of the observed set, stated
+as true of the class.** ⭐ It is also §8's already-recorded failed prediction *"the tier cancellation
+being the general case"* — ⛔ **now upgraded from a self-noted error to a MEASURED one, on a live
+position.**
+
+### ⭐⭐ G2's DOUBLING WARNING — SCORED AGAINST A LIVE CASE FOR THE FIRST TIME
+
+**§3.4's warning has never had a delivery instance until today.** At `tier_weight_applied = 1.0`,
+**MANINFRA would be 8 shares, not 4 — DOUBLE, on a real position, today.**
+⇒ ✅ **§3.4 is CONFIRMED by production, and the instinct to make it conditional is refuted a second
+time — this time by evidence rather than by argument.**
+
+### 🔀 WHAT THIS CHANGES — ⛔ AND WHAT IT DOES NOT
+
+⛔ **The two blocking rulings are UNTOUCHED** (the control-inventory authority; may both pipelines
+hold the same symbol). §3.5 reaches neither.
+⭐ **What it does change is PRIORITY.** The delivery surface was ordered **concentration first, tier
+second**, on the reasoning that the tier is inert. **That reasoning no longer holds below roughly
+₹150** ⇒ **the tier and `G2` RISE in the order.**
+⛔ **The surface is NOT redesigned here** — recorded for the ruling-holder to see **before** he rules.
+
 ---
 
 # §4 · RAMA'S SIX CONFIG REQUESTS, TRIAGED

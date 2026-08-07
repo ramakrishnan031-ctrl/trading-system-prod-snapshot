@@ -148,7 +148,71 @@ nothing. ⭐ On today's evidence the gap between fill and exits-resting is **~8�
 
 ---
 
-## 6. RESULT
+## 6. 🔴🔴 THE "CLOSED BY SOURCE" ARGUMENT IS **REFUTED** — ⛔ CRITERION (B) STAYS OPEN
+
+**A 07-Aug 11:00 card proposed closing this question by source, on the premise:** *"`place_exits`
+calls `_place_sl` and RETURNS. NO TGT ORDER IS EVER PLACED ON THE MIS PATH"* ⇒ no second resting
+order ⇒ the divisor question is moot ⇒ divisor 1 everywhere.
+
+⛔⛔ **THE PREMISE IS FALSE, AND IT WAS ATTRIBUTED TO ME. I DID NOT FIND IT — I MEASURED THE
+OPPOSITE, 30 MINUTES EARLIER** *(§2's leg table: both TGT legs `OPEN`)*.
+
+### 6.1 · **(S)** THE SOURCE — the early return is a **CONDITIONAL BRANCH**, not the path
+
+`orders/order_protocol_limit.py::place_exits` *(read at HEAD `ad303e4`)*:
+
+| step | line | behaviour |
+|---|---|---|
+| Step 1 — SL | `:381` | placed **always** |
+| **the early return** | **`:452-463`** | ⛔ **guarded by `if tgt_unplaceable:`** — the NOCIL circuit-band gate. Returns `_partial_sl_only()` and hands the TGT to `TGTRetryManager` |
+| **Step 2 — TGT LIMIT** | **`:465-474`** | **`self._adapter.place_order(..., order_type="LIMIT")` — the ORDINARY path** |
+
+⇒ **One branch, generalised to the whole path.**
+
+### 6.2 · **(P)** PRODUCTION — refuted 220 times over
+
+| measure | value |
+|---|---|
+| **MIS `TGT` legs ever placed** | **220** — ⭐ **all 220 carry a broker `order_id`** |
+| MIS `SL` legs | 232 |
+| CNC `SL` / `TGT` legs | **0 / 0** — delivery exits via GTT, as designed |
+| **MIS trades with an SL and NO TGT** | **1** — `THELEELA`, 19-Jun-2026 |
+| today's resting TGTs | CARRARO `260807170241188` · CROMPTON `260807170247310`, both `OPEN` |
+
+⇒ **the `tgt_unplaceable` branch has fired ONCE in the campaign.** The card describes a real path
+that fires ~0.5 % of the time and states it as 100 %.
+
+### 6.3 · ⇒ THE DOWNSTREAM CLAIMS DO NOT FOLLOW
+
+| claim | verdict |
+|---|---|
+| *"divisor = 1 for both pipelines, closed by source"* | ⛔ **NOT CLOSED.** Two exit orders **do** rest on the MIS path ⇒ the original question is **LIVE** |
+| *"`LIMIT_TRIPLE` is a misnomer, there is no third leg"* | ⛔ **FALSE.** ENTRY + SL + TGT, all three with broker order IDs. **The name is honoured** |
+| *"close exit criterion (B)"* | ⛔⛔ **MUST NOT.** Closing on a refuted premise is `V5` exactly — **manufactured confidence**, and the worse half of it: a missing check leaves you uncertain, a tautological one leaves you **wrongly certain** |
+| *"`tgt_retry.*` inert on both paths?"* | ⚠️ **NOT inert — DORMANT.** See §6.4 |
+
+### 6.4 · §2.3 ANSWERED — `tgt_retry.*` is **DORMANT, ⛔ not inert**, and that is a different thing
+
+**(S)** wired and started — `main.py:2788` constructs `TGTRetryManager`, `:3527` starts it; it is the
+declared handler for **both** the `:452` band branch **and** FIX-190 Bug C (broker-side TGT
+rejection). ⇒ ⛔ **it is REACHABLE on the intraday path, so "inert" is the wrong word.**
+**(P)** across **555 trades: `needs_tgt_retry` = 0 · `tgt_retry_count` = 0 · max 0.**
+⇒ 🏷️ **BUILT AND NEVER RUN** — the campaign's named class. ⭐ **And the one trade that needed it
+(`THELEELA`, 19-Jun) records no retry**, which is the gap worth carding: **the branch fired and the
+handler shows nothing.** ⛔ **Disclosed, NOT chased (`G3`)** — it is outside this doc's subject.
+
+### 6.5 · ⭐ WHAT THE REFUTATION COSTS, STATED HONESTLY
+
+**The static reading in §3/§4a is now the ONLY live read on the divisor** — the "closed by source"
+route is gone, and §2.1's readings remain unobtainable. ⇒ **the prediction in §1 stands UNRESOLVED**,
+and 🔴 **the dangerous direction is still the one currently assumed.**
+
+⚠️ 🏷️ **AND THE SHAPE IS WORTH RECORDING: the card diagnoses this exact error in `§1.4` — *"a
+conclusion from three samples, stated as general"* — and commits it in `§2` in the same breath.**
+⭐ **Not a criticism; a demonstration that naming a failure mode does not immunise against it**, which
+is the argument for checks that run rather than rules that are written *(`G7.1`)*.
+
+## 7. RESULT
 
 *(pending — filled only from clock-stamped readings)*
 
