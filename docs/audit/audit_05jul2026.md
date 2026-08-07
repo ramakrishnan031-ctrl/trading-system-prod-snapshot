@@ -526,6 +526,8 @@ The config-as-data core is genuinely strong: a 592-LOC package with a rigorously
 
 ### 6.1 What exists (control inventory)
 
+> ⛔ **SUPERSEDED 07-Aug-2026 (Ruling 1, Rama).** The authority for the control inventory is `ops_dashboard/docs/G2a_capacity_inventory.md`. These 27 rows are frozen 05-Jul history — read, never updated.
+
 | # | Control | Key (value) | Enforcement point | Stage |
 |---|---------|-------------|-------------------|-------|
 | 1 | Kill-switch gate | `kill_switch` injected | `risk_engine._run_checks` check 1 (risk_engine.py:342-346); re-checked in signal_processor (signal_processor.py:627 et al.) + order_placer last-mile (order_placer.py:932) | pre-trade |

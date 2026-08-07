@@ -1,5 +1,42 @@
 # G2a — Capacity Inventory: Configured Limits ↔ Live Counters
 
+> # 🏛️ AUTHORITY — **THIS DOCUMENT IS THE SINGLE SOURCE OF TRUTH FOR THE CONTROL INVENTORY**
+>
+> **RULING 1, TAKEN BY RAMA ON 07-Aug-2026.** Decision ledger row **1** (*"Which CONTROL INVENTORY
+> survives — and, separately, where it lives"*), `docs/MASTER_PENDING_01-Aug-2026.md`.
+>
+> - **THIS FILE IS THE AUTHORITY.** Any statement about which controls exist, what they are keyed
+>   on, or whether one binds, is settled here.
+> - **The 27-row inventory at `docs/audit/audit_05jul2026.md:527` (§6.1) is SUPERSEDED.** It is
+>   frozen, historical, and is **never to be updated again**. It remains readable as the 05-Jul
+>   evidence set; ⛔ it is not to be cited as current.
+> - **The 113-key config review (`docs/design/sizing/config_surface_review_06aug2026.md`) is
+>   MERGED IN** (§F–§H below). It does **not** survive as a separate document of record; it is
+>   retained as the *evidence* behind the merged axes, exactly as it always declared itself.
+> - ⛔ **ANY FUTURE INVENTORY REVIEW COMPARES AGAINST THIS DOCUMENT.** It does not create a parallel
+>   inventory. A review that cannot express its finding as a change to a row here is telling you
+>   something about the row schema, not about the need for a second document.
+> - **JOIN IDENTIFIER: the dotted config key** (`risk.max_daily_trades`, `position_sizing.tier_multipliers`).
+>   Every row is reachable by it, and it is what any other document joins on.
+>
+> ### ⚠️ AMENDMENT, ADOPTED AT THE RULING'S FIRST APPLICATION (07-Aug-2026, same day)
+> The dotted key is a sufficient **join** identifier and an insufficient **merge** identifier.
+> Two documents can agree on every key and still disagree on what a *row* is. So the authority
+> also declares, and a merging document must match or explicitly reconcile:
+> - **ROW UNIT** — one row = **one configured limit that has a capacity semantic** (a ceiling, a
+>   quota, a budget, a window, a threshold), together with the live counter that consumes it.
+>   ⛔ Not "one YAML leaf key": a family whose keys are consumed as a unit is ONE row, and the row
+>   states the family's **measured** leaf-key count.
+> - **INCLUSION RULE** — a key is IN if changing it can change *how much* the system may do
+>   (existence · size · execution · lifecycle · alerting). Pure transport/paths/logging/ports are OUT.
+> - **VALUE PROVENANCE** — every value in this file is read from `config/system_config.yaml` at a
+>   named date. ⛔ A value carried from a prior document without re-reading is not evidence.
+>
+> 🔴 **LOCATION IS A SEPARATE DECISION, NOT TAKEN.** This file lives under `ops_dashboard/docs/` — a
+> subsystem folder holding a system-wide authority. That is a **known and accepted wart**. Moving it
+> breaks `ops_dashboard/backend/services/capacity.py`'s consumer unless that changes in the same
+> breath, so the move is its own card on its own day. ⛔ Do not move this file.
+
 **Phase:** G2a (Ops Dashboard) · **Date:** 2026-07-03 IST · **Scope:** every configured limit/quota → its live "used" counter → "remaining".
 **Sources (read-only, by value — no production imports):** `config/system_config.yaml`, `config/strategies/*.yaml` (15), `core/schema.sql` (v42), risk/capital check codes from `capital/risk_engine.py`, reject-status codes from `signals/signal_processor.py`.
 **Consumer:** `ops_dashboard/backend/services/capacity.py` (v1 rows) + later G2b M20 groups (System/Risk/Capital/Strategies/Scanners/Execution/SmartTarget/Slippage).
