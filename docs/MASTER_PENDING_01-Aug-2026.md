@@ -309,8 +309,8 @@ the defect.
 
 | # | DECISION | 🏷️ | EVIDENCE ALREADY MEASURED | RESIDUAL RISK if unruled | REOPEN TRIGGER | DATE / VERSION |
 |---|---|---|---|---|---|---|
-| **1** | 🔴 **Which CONTROL INVENTORY survives** — *and, separately, WHERE it lives* | `[ENG]` | two inventories exist keyed on the same dotted config key; `config_surface_review` is explicitly **an INPUT, not a third inventory** | ⛔ **blocks the whole delivery config surface** — item 5 cannot start; any value set first is exactly the *"blind settings"* being refused | ⚠️ **EMPTY** | `0197923`, 01→06-Aug |
-| **2** | 🔴 **May BOTH pipelines hold the same symbol on the same day?** *(all **THREE** product-blind gates, ⛔ not just the named key)* | `[ENG]` | **(S)** three gates, not one — `one_trade_per_symbol_direction_per_day` is **NOT** the binding one; **(P)** a held CNC blocks intraday on that symbol, reported as `DUPLICATE_SYMBOL`; **(P)** the ATULAUTO phantom is blocking a symbol **right now** | ⛔ **blocks the delivery surface AND F6's slot/symbol costs**; the phantom's symbol block has no expiry | ⚠️ **EMPTY** | `0197923`, §7 05-Aug |
+| **1** | ✅ **RULED 07-Aug (Rama) — §R.1.** 🔴 **Which CONTROL INVENTORY survives** — *and, separately, WHERE it lives* ⇒ **G2a is the authority; location NOT decided** | `[ENG]` | two inventories exist keyed on the same dotted config key; `config_surface_review` is explicitly **an INPUT, not a third inventory** | ⛔ **blocks the whole delivery config surface** — item 5 cannot start; any value set first is exactly the *"blind settings"* being refused | ⚠️ **EMPTY** | `0197923`, 01→06-Aug |
+| **2** | ✅ **RULED 07-Aug (Rama) — §R.2, TIGHTENED.** 🔴 **May BOTH pipelines hold the same symbol on the same day?** *(all **THREE** product-blind gates, ⛔ not just the named key)* ⇒ **ONE simultaneous open position per symbol, account-wide; eligible again the instant it is flat** | `[ENG]` | **(S)** three gates, not one — `one_trade_per_symbol_direction_per_day` is **NOT** the binding one; **(P)** a held CNC blocks intraday on that symbol, reported as `DUPLICATE_SYMBOL`; **(P)** the ATULAUTO phantom is blocking a symbol **right now** | ⛔ **blocks the delivery surface AND F6's slot/symbol costs**; the phantom's symbol block has no expiry | ⚠️ **EMPTY** | `0197923`, §7 05-Aug |
 | **3** | **N: how many of the SIX row candidates are admitted?** | `[PREF]` | candidates: F6 predicate · DH1 doc/code divergence · absent operator recovery · **the measurement layer** · **classification leakage** · **the watchman/flow_trace check** | N is a governed number; the register cannot self-serve | ⚠️ **EMPTY** | 06-Aug evening |
 | **4** | **The TWO TWIN PARENTS** — retire `delivery_risk_per_trade_pct` / `delivery_max_position_value_pct`, or keep them? | `[ENG]` | **(P)** both twins exist and are **`null`**; **(P)** neither parent has **ever** bound — `binding_constraint='concentration'` on **483/483**, zero `REJECTED_SIZING_RISK`; the 1:1 rule **rejects both** | the last **2 of §6's 8** unassigned drops cannot be placed; the sizing partition stays unclosed | ⚠️ **EMPTY** | 06-Aug, `dependency_map` §1.3 |
 | **5** | **Retire the `watchman.md`/`flow_trace.md` CHECK, or restore a producer?** | `[PREF]` | **(S)** `system_manager.py:409-410` checks both; **repo-wide, all file types: NO producer for either**; `SYSTEM_MAP:1293` logged the same MISSING lines 22/23/24-Jul; `watchman` **never scheduled** (11 manual runs) | a daily WARNING for an artifact nobody produces — ⭐ **alert-debt that is currently unlisted** | ⚠️ **EMPTY** | 06-Aug, `eod_email_findings` §4 |
@@ -334,8 +334,101 @@ ruling 1 as **"N: 233 → 235?"**. ⛔ **The register records SIX candidates, no
 addendum *(the measurement layer · classification leakage · the watchman check)*. ⇒ **the range is
 `233 → 233…239`, not `→ 235`.** ⭐ **Recorded as measured; the card's number is not adopted.**
 
-⛔ **NOTHING IN THIS TABLE IS RULED. N STAYS 233.** ⭐ **The ledger's job is to make nine rulings
+~~⛔ **NOTHING IN THIS TABLE IS RULED. N STAYS 233.**~~ ⭐ **The ledger's job is to make nine rulings
 takeable in one sitting — ⛔ not to take any of them.**
+
+> ## ✅✅ **07-Aug-2026 — ROWS 1 AND 2 ARE RULED. RAMA. THE OTHER SEVEN STAND OPEN.**
+> **N STAYS 233** — row 3 *is* the N ruling and it was **not** taken. ⛔ Do not read "two rulings
+> taken" as movement on the count. 📌 **The ledger's own purpose is now discharged for the two rows
+> that together blocked the entire delivery surface.** Full text, evidence and the measured
+> corrections: **§R below**, and `docs/audit/rulings_1_2_verification_07aug2026.md`.
+
+---
+
+# ✅ §R — **THE TWO RULINGS TAKEN, 07-Aug-2026 · DECIDER: RAMA**
+
+## §R.1 · RULING 1 — CONTROL-INVENTORY AUTHORITY · **TAKEN 07-Aug-2026 · Rama** · ledger row **1**
+
+**DECISION.** `ops_dashboard/docs/G2a_capacity_inventory.md` **is the authority** — the single source
+of truth for the control inventory. The 27-row inventory at `docs/audit/audit_05jul2026.md:527` is
+**SUPERSEDED**: frozen, historical, never updated again. The 113-key config review
+(`docs/design/sizing/config_surface_review_06aug2026.md`) is **MERGED INTO** the authority and does
+not survive as a separate document. Joined on the **dotted config key**. ⛔ **Location NOT decided** —
+the file stays under `ops_dashboard/docs/`; moving it breaks `capacity.py`'s consumer and is its own
+card on its own day.
+
+**AUTHORITY:** Rama. **DATE/VERSION:** 07-Aug-2026, against repo HEAD `612a06b`.
+**RESIDUAL RISK:** a system-wide authority lives in a subsystem folder — accepted, named, and
+carried as a wart rather than smoothed away.
+**REOPEN TRIGGER:** ⭐ *(this row has one, deliberately — 8 of 9 ledger rows did not, and that
+emptiness was the ledger's own first finding)* — **a review whose finding cannot be expressed as a
+change to a row in the authority.** That is the signal the row schema is wrong, and it is the only
+condition under which a second inventory is reconsidered.
+
+**EXECUTED (docs only, `98e7406` + `612a06b`):** authority header · one-line superseded pointer ·
+the merge, `30 + 14 = 44` rows, with five collision classes recorded.
+
+## §R.2 · RULING 2 — SHARED SYMBOL NAMESPACE, TIGHTENED · **TAKEN 07-Aug-2026 · Rama** · ledger row **2**
+
+**RAMA'S DECISION, VERBATIM — this text governs; everything below it is commentary:**
+
+> "One symbol may have only ONE SIMULTANEOUS OPEN position across the entire account."
+>
+> "If any open position already exists for a symbol, every new entry for that symbol is rejected.
+> When that position is completely closed and no open position exists anymore, the symbol
+> immediately becomes eligible again for every pipeline. The next entry is evaluated from the
+> current account state, not from historical ownership."
+>
+> Delivery holding sold at 11:50, no position remains  → MIS may enter at 11:51.
+> MIS exits first                                      → Delivery may enter after.
+> Delivery open + MIS entry together                   → reject.
+> MIS open + Delivery entry together                   → reject.
+
+**THE GATE REDUCES TO ONE QUESTION:** does an **OPEN** position currently exist for this symbol?
+**YES → reject. NO → proceed to normal eligibility checks.**
+**The rule is PIPELINE-INDEPENDENT.** MIS / CNC / GTT / delivery is irrelevant to it. This is
+deliberate: **it is business policy, and implementation derives from the policy, never the reverse.**
+
+**AUTHORITY:** Rama. **DATE/VERSION:** 07-Aug-2026. **Chose option (b), then tightened it.**
+
+### 🔴 §R.2a — THE THREE CONSEQUENCES, RECORDED SO NO FUTURE READER BELIEVES THIS RULING WAS FREE
+
+Option (b) *as originally offered* blessed the current behaviour and cost zero code. The tightened
+version does not. Recorded as commissioned, each with the measurement that tested it:
+
+| # | consequence as stated when the ruling was recorded | measured verdict, 07-Aug |
+|---|---|---|
+| **(i)** | *"it is a real behaviour change requiring real code"* | 🔴 **HALF REFUTED.** It **is** a real behaviour change — 🔴 **9 entries on 2 days across 4 symbols** would have been permitted that the live gates blocked (**(P)**, §H6). But it requires **no code**: the blocking gate is `risk.one_trade_per_symbol_direction_per_day`, and setting it **`false`** restores a **byte-identical** pre-27-Jul path by the code's own docstring. ⭐ **The cost is a POLICY cost, not an engineering one — and that is a bigger difference than it sounds** |
+| **(ii)** | *"it LOOSENS an existing protection, and the campaign carries a standing caution against loosening gates"* | ✅ **STANDS, and is NOT softened.** The caution is aimed at loosening to make numbers look better; **this loosening is for a defensible policy reason — but the direction is the same and it is named as such.** ⚠️ **What is being loosened has a named incident behind it:** the gate exists because of SENCO, 27-Jul — exited TGT 10:13:31 @425.05, **re-entered 80 seconds later @425.25**, *above* the price its own strategy had just taken profit at, then stopped out for −4.86, **giving back 83 % of the first trade's gain** (`signal_processor.py:681-687`). ⛔ **Ruling 2 as written re-admits exactly that trade** |
+| **(iii)** | *"the claim that Ruling 2 retires one of F6's seven costs is NOT established and may be false"* | 🔴 **CONFIRMED — it is false, and in the more dangerous direction.** Ruling 2 does not retire an F6 cost; **F6 makes Ruling 2 UNIMPLEMENTABLE CORRECTLY.** The rule's predicate is *"is a position open right now"*, the only product-blind source of that is `trades.status`, and F6 is precisely what stops a delivery trade ever leaving `OPEN`. See §H5 of the verification report |
+
+### §R.2b — THE ACCEPTED TRADE-OFF, RECORDED EXPLICITLY *(§2.3)*
+
+**Overlapping exposure in a single symbol is now an INTENTIONAL PORTFOLIO-RISK CONSTRAINT.**
+⛔ It is no longer an accidental limitation inherited from the code. Concretely, and accepted:
+
+- **Concentration is capped by policy, not only by `max_concentration_pct`.** A symbol can never be
+  held twice, so single-name exposure cannot be stacked by two pipelines arriving independently.
+- **The cost of that is a foregone trade.** When delivery holds a name the intraday scanner likes,
+  the intraday entry is refused — and it is refused *because we chose to*, not because a gate
+  happened to be product-blind.
+- **The benefit is that exit attribution stays unambiguous.** Two positions in one symbol at one
+  broker net into one line; the reverse-aware flatten paths, the oversell guards and the GTT
+  adoption logic all key on `(symbol)` or `(symbol, product)` and **PAPER NETS BY SYMBOL WHILE LIVE
+  KITE NETS PER (SYMBOL, PRODUCT)** — so a two-position book is a shape paper can never rehearse.
+  ⭐ **The ruling makes a whole class of paper/live divergence unreachable by policy.**
+
+**RESIDUAL RISK:** the loosening half re-admits the SENCO trade class (consequence ii).
+**REOPEN TRIGGER:** ⭐ **a same-day re-entry, permitted by this ruling, that closes worse than the
+exit that preceded it — twice.** *(One is noise; the SENCO incident was a single observation and the
+gate built on it is the thing now being loosened, so the bar is deliberately set at two.)*
+
+### §R.2c — ⛔ WHAT IS **NOT** AUTHORISED BY THIS RECORD
+
+⛔ No gate changed · ⛔ no predicate rewritten · ⛔ no config key flipped · ⛔ no schema · ⛔ no F6
+fix · ⛔ F6's retirement checklist **not edited** (see §2.4 in the design doc). Recording a ruling is
+not authorising its build. **Gate 2 — Rama's authorisation in his own words for a build — has not
+been given, and nothing here supplies it.**
 
 ## 🔴 THE LEDGER TESTED AGAINST ITS OWN CRITERION — **and it went RED on one of two rows**
 

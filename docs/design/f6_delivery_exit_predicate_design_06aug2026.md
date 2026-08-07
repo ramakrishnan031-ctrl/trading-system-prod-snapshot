@@ -9,6 +9,26 @@
 > ⛔ **Gate (2) — Rama's approval to BUILD — HAS NOT ARRIVED.** He is away until ~17:00.
 > **This document is the design step only. Nothing here is implemented.**
 
+> ## 📌 DATED NOTE — 07-Aug-2026 · **RULING 2 WAS TAKEN, IN TIGHTENED FORM**
+> Rama ruled ledger row 2 on **07-Aug-2026**: *"One symbol may have only ONE SIMULTANEOUS OPEN
+> position across the entire account… when that position is completely closed… the symbol
+> immediately becomes eligible again for every pipeline. The next entry is evaluated from the
+> current account state, not from historical ownership."* Verbatim text and the three consequences:
+> `docs/MASTER_PENDING_01-Aug-2026.md` §R.2.
+>
+> ⛔ **THE RETIREMENT CHECKLIST BELOW IS DELIBERATELY NOT EDITED.** Whether the tightened wording
+> retires **any** F6 cost was **under verification (H5)** when this note was written. Editing the
+> checklist first would have been recording a conclusion ahead of its evidence.
+>
+> **H5 has since returned, and the answer is the opposite of the claim that accompanied option (b):**
+> 🔴 **Ruling 2 retires NO F6 cost. It ADDS a dependency in the other direction** — the ruling's
+> predicate is *"is a position open right now"*, the only product-blind source of that is
+> `trades.status`, and **F6 is precisely what stops a delivery trade ever leaving `OPEN`**
+> (`held == 0` is the sole door to `_finalize_gtt_exit`, `cnc_gtt_monitor.py:487`/`:501`/`:510`).
+> ⇒ 🔒 **F6 IS A PREREQUISITE OF IMPLEMENTING RULING 2, not a beneficiary of it.**
+> ⭐ **Nothing here changes the F6 design.** Full trace and the per-cost verdicts:
+> `docs/audit/rulings_1_2_verification_07aug2026.md` §H5.
+
 ---
 
 ## 1 · The defect, as measured

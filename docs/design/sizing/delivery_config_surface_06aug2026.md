@@ -356,6 +356,21 @@ vacuous by construction** — see §8's `raw_qty ≥ 2` precondition.
 ⭐ **The card's ruling stands and is reinforced. But the source says the named key is NOT the binding
 gate, and that changes what the ruling must cover.**
 
+> ## ✅ **RULED 07-Aug-2026 BY RAMA — §7.5's question is ANSWERED. See `MASTER_PENDING_01-Aug-2026.md` §R.2.**
+> **ONE simultaneous open position per symbol, account-wide, PIPELINE-INDEPENDENT.** Reject while any
+> open position exists; **eligible again the instant it is flat** — *"evaluated from the current
+> account state, not from historical ownership."*
+> ⭐⭐ **THE THREE GATES BELOW ARE NOW ONE BUSINESS RULE, NOT THREE COINCIDENTALLY-SIMILAR ONES**, and
+> the ruling splits them cleanly: **gates 2 and 3 ALREADY implement it** (product-blind, never
+> date-scoped, released the instant the trade leaves `PENDING_FILL/OPEN/PARTIAL`); **gate 1 is the
+> only one the ruling contradicts** — it is scoped to *historical ownership within the day*, which the
+> ruling explicitly rejects.
+> 🔴 **§7.3's correction is REINFORCED by production data, not just by source:** `REJECTED_DUPLICATE_SYMBOL`
+> **stops on 31-Jul** (107 all-time) and `REJECTED_SYMBOL_DIRECTION_DAILY_LIMIT` **starts on 03-Aug**
+> (65) — **(P)** consecutive trading days. ⛔ Anyone measuring the leak under the wrong code after
+> 03-Aug reads **zero**. ⭐ Gate 1 masking gate 2 is now MEASURED, not only reasoned.
+> ⛔ **NOTHING IS AUTHORISED TO CHANGE.** Full measurement: `docs/audit/rulings_1_2_verification_07aug2026.md`.
+
 ## §7.1 · **(S) THREE product-blind symbol gates, not one. Width: all call sites, whole repo.**
 
 | # | gate | site | query | product-aware? | expires? |

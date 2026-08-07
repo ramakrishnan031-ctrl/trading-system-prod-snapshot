@@ -64,6 +64,34 @@ RE5 — Check sequence (lock; ordered, short-circuit on first fail):
   Each check is a method: _check_X(...) returning (passed: bool,
   reason: str). approve() runs them in order.
 
+  ---------------------------------------------------------------
+  CROSS-REFERENCE, 07-Aug-2026 — RULING 2 (Rama). The symbol gates
+  are ONE business rule, not three similar ones.
+
+  RULE: one symbol may have only ONE SIMULTANEOUS OPEN position
+  across the entire account. Reject every new entry while an open
+  position exists; the symbol becomes eligible again the instant it
+  is flat. PIPELINE-INDEPENDENT — MIS/CNC/GTT/delivery is irrelevant.
+  Recorded verbatim in docs/MASTER_PENDING_01-Aug-2026.md section R.2.
+
+  MEASURED CORRECTION TO THE LIST ABOVE (verified at HEAD 612a06b,
+  docs/audit/rulings_1_2_verification_07aug2026.md):
+   - CONTRARY_POSITION is check 9 (risk_engine.py:665-686) and
+     DUPLICATE_SYMBOL is check 10 (risk_engine.py:688-694). The
+     numbering above is off by one.
+   - Both read the SAME predicate set --
+     status IN ('PENDING_FILL','OPEN','PARTIAL') for the symbol --
+     so they partition one condition by direction. CONTRARY_POSITION
+     has fired ZERO times in 109,254 signals.
+   - A THIRD gate exists OUTSIDE risk_engine and fires FIRST:
+     SYMBOL_DIRECTION_DAILY_LIMIT (signals/signal_processor.py:706-720),
+     config key risk.one_trade_per_symbol_direction_per_day = true.
+     It is DATE-SCOPED and is the only gate Ruling 2 contradicts.
+   - A FOURTH labels itself DUPLICATE_SYMBOL but is a batch rule:
+     allocation/portfolio_allocator.py:182-183, inert (mode=shadow).
+  NOTHING IS AUTHORISED TO CHANGE by this note.
+  ---------------------------------------------------------------
+
 RE6 — Audit Issue #6 fix — sector concentration race:
   SECTOR_EXPOSURE check counts BOTH open positions AND in-flight
   reservations (queried from state_store). Audit flaw was
