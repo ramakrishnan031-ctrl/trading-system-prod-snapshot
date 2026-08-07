@@ -1346,6 +1346,30 @@ the existing vocabulary cannot express.***
 §1.3; the prediction-vs-explanation result)* ⇒ ⭐ **its value today is TIMING, not novelty** — the
 window was open when the card arrived, so the rule got applied instead of merely being held.
 
+### 🧾 ENTRY GD-3 · **THE NINE — DECLINED UNDER (E), 07-Aug-2026**
+
+**Nine further governance-taxonomy proposals: ⛔ ALL DECLINED under `(E)`** — not one is a reversed
+ruling, contradicts production evidence, or is an open measurement resolving against its recorded
+prediction. ➡️ **Pointer, ⛔ not nine entries and ⛔ not restated: the source card, `§1`, 07-Aug.**
+🔓 **HELD under GD-1's trigger, unchanged: *a SECOND ledger cold-read failure whose SHAPE the
+existing vocabulary cannot express.***
+
+✅ **TWO OF THE NINE ARE ALREADY IN PLACE — marked so, ⛔ NOT deferred:** *fabrication as its own
+failure class* **IS `M3.1`**, filed an hour earlier and filed **deliberately apart** from the scope
+errors; *reconciliation-first* **IS the discriminator `M3.1` already records** *("18/9/9 reconciles
+with nothing" — the real row falls out of `system_config.yaml:166`/`:167` against the 08:15:41 `INIT`
+₹9,444.50)*. ⇒ **2 already in place · 7 deferred** *(`M12`: 2 + 7 = 9)*.
+
+🏷️ **SAME SHAPE AS GD-1's 5-of-8** — ⭐⭐ **the pull to ADD is stronger than the memory of WHAT
+EXISTS**, and this round makes it a *repeat* observation rather than a one-off: ⚠️ **both times, the
+already-existing instrument was filed by the SAME campaign that then proposed it.**
+
+> ## ⚠️⚠️ **THE PATTERN ACROSS THREE ROUNDS: 8 → 19 → 9, ALL AFTER `(E)` WAS AGREED.**
+> **`(E)` bound each time.** ⛔ **The volume is NOT falling.** ⭐ **GD-2 set the test — *"if a third
+> round exceeds nineteen, the volume itself is the finding"*. It did not: 9 < 19, so the escalation
+> clause does NOT fire.** 🏷️ **⛔ But neither does it clear — three rounds of decline in one day is
+> the standing observation, and the count remains the instrument.**
+
 > ## ⚠️⚠️ **THE PATTERN IS NOW MEASURABLE, AND IT IS THE REASON TO RECORD THIS AT ALL: 8 → 19.**
 > **Nineteen proposals in one round, after `(E)` was agreed, following eight the round before.**
 > ⭐ **(E) is binding correctly — this is its SECOND application.** ⛔ **But a rule that must be
