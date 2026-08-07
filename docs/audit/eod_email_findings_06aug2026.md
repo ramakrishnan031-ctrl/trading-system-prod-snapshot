@@ -42,6 +42,29 @@ the GTT was `sl_trigger 575.65` / `sl_limit 558.35`, so any fill lies in **[558.
 | **gross** | **−7.20** | **≈ −19.10** | 🔴 **the missing loss (−11.90) is 165 % of the reported gross** |
 | **net** | −11.16 | **≈ −23.9 … −24.8** | ⚠️ **bounded, not exact** — needs the contract note; ATULAUTO's **entry-side** charges settled on 05-Aug. Comparable same-day round trips: 0.84 (798) · 0.92 (866) · 1.72 (656→676) |
 
+### ✅ §1.2a · **THE CONTRACT NOTE SETTLED IT — 07-Aug-2026. F6 COST #7 NOW CARRIES A NUMBER.**
+
+⭐ **The estimate is recorded BESIDE the note's figure, ⛔ not replaced by it** — the gap and its
+direction are the finding.
+
+| | **the system booked** | **the contract note** | gap |
+|---|---|---|---|
+| **exit fill** | **579.55** *(an LTP estimate — `get_quote` `.771–.787`, ledger write `.788`)* | **575.50** | **4.05 too high** |
+| **gross** | −7.85 | **−11.90** | **4.05 understated** |
+| **net** | **−9.35** | **−13.99** | 🔴 **₹4.64 UNDERSTATED** |
+
+⇒ 🔴 **DIRECTION: the booked loss is SMALLER than the real one.** ⛔ **The dangerous direction** — a
+loss-tracking figure that errs toward looking better feeds the **daily-loss limit** and the
+**483-trade expectancy corpus** with an optimistic bias.
+✅ **575.50 lands inside the pre-stated bound `[558.35, 575.65]`** — ⭐ the bound was written before
+the note arrived and it held.
+⛔ **NOT ADJUSTED.** The booked −9.35 stands in the DB; this record is the correction, per §3.1.
+
+⚠️ **AND THE TWO-DAY ATTRIBUTION STANDS, BOTH DAYS WRONG IN OPPOSITE DIRECTIONS:**
+**07-Aug's P&L opens at −9.35 for a 05-Aug trade** *(booked at the 08:15:41 boot close)*; **06-Aug's
+excludes it entirely.** ⇒ ⭐ **no single day's reported P&L is right, and neither error is visible
+from inside its own day's report.**
+
 > ### ⭐⭐⭐ **THE REPORTED DAY IS −7.20 GROSS. THE REAL DAY IS ≈ −19.10. THE ERROR IS LARGER THAN THE FIGURE REPORTED.**
 
 ## §1.3 · 🔴 WHAT IT FEEDS — **not a display problem**
