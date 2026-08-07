@@ -212,6 +212,50 @@ conclusion from three samples, stated as general"* — and commits it in `§2` i
 ⭐ **Not a criticism; a demonstration that naming a failure mode does not immunise against it**, which
 is the argument for checks that run rather than rules that are written *(`G7.1`)*.
 
+### 6.6 · ⛔ THE 11:20 CARD DOUBLED DOWN — **"No TGT resting order exists on either path"** — refuted in the PRESENT TENSE
+
+**(P) measured 11:2x, live DB:** **CROMPTON's TGT `260807170247310` is `OPEN` — resting at the
+broker at this minute.** CARRARO's TGT `260807170241188` is `CANCELLED` **because the trade CLOSED**
+— `SL_HIT` at 11:15:14, exit 519.55, net −9.31, `closure_source OWN_SL`; the bracket peer is
+cancelled on an SL fill, which is the design, ⛔ not an absence. **220 all-time MIS TGT legs stand.**
+⇒ **Criterion (B) remains OPEN.** ⚠️ The static discriminator WEAKENED with CARRARO's close: one MIS
+position left, so the divisor-2 increment is only **CROMPTON's ₹50.81** — and whether a **carried**
+CNC holding (DIFFNKG) appears inside Kite's `used margin` at all is a presentation unknown this
+reading cannot settle. **The clean §4b delta on a third MIS entry remains the decisive instrument.**
+
+### 6.7 · ✅ `LIMIT_TRIPLE` — the name at source; the retraction was right, its reason is not
+
+The card withdrew its "misnomer" claim on the ground that the name means *"the ENTRY order type
+(LIMIT, 3 retry attempts), nothing to do with three legs."* **(S)** the module docstring,
+`order_protocol_limit.py:5-8`: *"LIMIT_TRIPLE order protocol. Two-phase placement: Phase 1 (execute):
+ENTRY LIMIT … Phase 2 (place_exits): SL + TGT"*; and the pre-fix history `:13-17`: *"the protocol
+placed **ENTRY + SL + TGT** in sequence."* ⇒ **TRIPLE = the three legs.** ⛔ **"3 retry attempts"
+appears nowhere in the file** — every `attempt` hit (7, whole file) is "no TGT attempted" /
+retry-manager scheduling. Corroborated: `order_placer.py:1651` — *"TGT leg — both LIMIT_TRIPLE and
+CO_PLUS_TGT place a separate TGT order."*
+
+### 6.8 · ⛔ `tgt_retry.*` "CLASSIFIED BACKWARDS" — **refused with the consumer inventory; the four rows STAND**
+
+The card: *"Four keys · three consumers · ALL on the CNC/GTT path · ZERO intraday consumers"* ⇒ the
+`INTENTIONALLY UNAVAILABLE` classification is inverted. **(S) measured, repo-wide over `*.py`,
+tests excluded — the claim is itself the inversion:**
+
+| role | site | path |
+|---|---|---|
+| sets `needs_tgt_retry` | `order_placer.py:2619` *(FIX-190 Bug C)* | **LIMIT_TRIPLE / intraday** |
+| sets (recovery) | `order_reconciler.py:4194` | **LIMIT_TRIPLE / intraday** |
+| consumes + clears | `tgt_retry_manager.py:330/:348/:358` | **LIMIT_TRIPLE / intraday** |
+| scheduling view | `state_store.py:1556-1586` *(`:1503`: "A LIMIT_TRIPLE trade whose SL is live but whose TGT could not be placed")* | **LIMIT_TRIPLE / intraday** |
+| passive readers | `daily_trade_review.py:480` · `preflight/checks/state.py:140-152` | reporting |
+| **any CNC/GTT file** | **0 hits** | — |
+
+⭐ **And the classification was made BY MECHANISM, not by name** — `delivery_config_surface:330`'s own
+recorded reason: *"(P) the delivery order set is ONE row, `leg=ENTRY`, `product=CNC` — zero SL rows,
+zero TGT rows; protection is a broker-side GTT."* ⇒ **no inversion occurred ⇒ the proposed sweep of
+the 42-key bucket loses its premise and is NOT run** *(the bottleneck is governance; a sweep on a
+refuted exemplar is review work manufacturing itself)*. **Bucket counts: UNCHANGED; no percentage
+quoted.**
+
 ## 7. RESULT
 
 *(pending — filled only from clock-stamped readings)*

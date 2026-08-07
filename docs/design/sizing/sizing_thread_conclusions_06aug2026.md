@@ -250,6 +250,69 @@ second**, on the reasoning that the tier is inert. **That reasoning no longer ho
 ₹150** ⇒ **the tier and `G2` RISE in the order.**
 ⛔ **The surface is NOT redesigned here** — recorded for the ruling-holder to see **before** he rules.
 
+## 3.6 · ✅ **THE "483/483" FIGURE RE-DERIVED FROM THE PERSISTED BREAKDOWNS — THE REGISTER IS CONFIRMED, AND A SECOND (E) REOPEN IS REFUSED** *(07-Aug-2026 11:2x)*
+
+**An 11:20 card asserted MANINFRA showed `risk 18 · capital 9 · concentration 9` — a capital/
+concentration TIE, with `binding_constraint` reporting CAPITAL ("the tie-report bug, live") — and on
+that premise asked whether the registered *"concentration decided 483/483"* inherited a tie bug.**
+
+### ⛔⛔ THE PREMISE IS NOT IN THE DATABASE
+
+**(P) re-verified, all MANINFRA rows any status — there is exactly ONE
+(`trd_9e709c501a9e4938a8d01a21ca312398`):** `qty_by_risk` **40** · `qty_by_capital` **20** ·
+`qty_by_concentration` **8** · `binding_constraint` **`concentration`**. ⛔ **No tie: 8 < 20 < 40 —
+concentration is the STRICT minimum, and the label is correct.**
+⭐ **And the row reconciles with the real capital base while 18/9/9 reconciles with nothing:** at the
+08:15:41 `INIT` capital **₹9,444.50** — risk `0.01 × 9444.5 / 2.3055 = 40.96 → 40` ✓ *(`:166`)* ·
+concentration `0.10 × 9444.5 / 115.23 = 8.19 → 8` ✓ *(`:167`)* · and the capital rung 20 is
+consistent with the delivery bucket net of DIFFNKG's ₹446.11 reservation *(2,833.35 − 446.11 =
+2,387.24 / 115.23 = 20.7)*.
+
+### ✅ THE RE-DERIVATION — from the persisted columns, ⛔ not the label
+
+**(P)** live DB, min-pattern over `(qty_by_risk, qty_by_capital, qty_by_concentration, qty_by_flat)`:
+
+| population | n |
+|---|---|
+| trades total | **555** |
+| carrying a persisted breakdown | **492** *(63 predate the v30-era columns)* |
+| **concentration the UNIQUE strict minimum** (`0010`) | **492** |
+| **any TIE at the minimum** | **0** |
+| concentration never the minimum | **0** |
+
+> **The sentence the register needs: concentration was the SOLE decider on 492 of 492 rows carrying
+> a breakdown; TIED on 0; NEVER the decider on 0.** *(Partition: 492+0+0 = 492; 492+63 = 555 ✓,
+> total checked LAST per `M12.1`.)* ⭐ **The 06-Aug figure was the same property at the then-corpus
+> 483; it has since grown +9 and held on every new row — including MANINFRA, which is the 492nd
+> CONFIRMATION, not a counter-example.**
+
+### ⭐ HOW THE ORIGINAL WAS COMPUTED — both of the card's forks, answered
+
+`tier_multiplier_measurement_06aug2026.md:133` states its width: *"whole `trades` table — 545 rows,
+483 carrying a persisted sizing breakdown"* — **computed over the breakdowns**;
+`dependency_map_06aug2026.md:102` cites the **label**. ⭐ **The two methods now cross-check: label ==
+unique-min on all 492.**
+**(S) And the tie semantics at source make the label UNDER-count concentration, never inflate it** —
+`capital/position_sizer.py:427-437`: *"CAPITAL wins on tie (most conservative)"* — a
+capital/concentration tie would print **CAPITAL**. ⇒ **492 `concentration` labels are reachable only
+by strict wins.** 🏷️ **The tie branch is a DOCUMENTED CHOICE, and it has never been exercised: 0
+ties in 492** — ⛔ *"the tie-report bug, live"* is wrong on all three words.
+
+### ⇒ **(E) #2 IS REFUSED — production evidence AGREES with the registered conclusion**
+
+The thread stays open **only** on §3.5's scope correction *(the tier's cancellation was
+price-dependent)*. **The card's §2 flip — "concentration did NOT bind, the tier was the SOLE rung" —
+fails with its premise:** concentration solely decided the raw (8), the tier then halved it (8→4).
+⭐ **The PRIORITY RISE (§3.5: tier + G2 rise) stands; the FLIP does not.**
+
+### 📏 THE TIER'S COST TODAY, AS A RATIO — operands labelled per the capital vocabulary
+
+**Withheld: 4 shares × 115.23 = ₹460.92** *(8→4; ⛔ not 5 shares/₹576 — that rests on the refuted
+raw 9)* = **exactly 50 % of the intended ₹921.84 position** = **16.3 % of the ₹2,833.35 delivery
+bucket** *(0.30 × the 08:15:41 INIT ₹9,444.50)* = **4.9 % of the day's capital**.
+**G2's live figure: at tier 1.0 MANINFRA is `floor(8 × 1.0)` = 8 vs 4 — DOUBLE.** ⛔ The proposed
+correction to *"9 vs 4"* is refused with the row.
+
 ---
 
 # §4 · RAMA'S SIX CONFIG REQUESTS, TRIAGED
