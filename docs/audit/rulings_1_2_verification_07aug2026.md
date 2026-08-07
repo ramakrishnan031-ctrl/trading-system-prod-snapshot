@@ -572,6 +572,20 @@ verdict does not depend on the proxy.
 > **median holding period = 1,596 s (26.6 min) = 5.3× the cooldown.** *(min 2 s · max 166,460 s)*
 > ⇒ **On roughly four trades in five, the 300 s cooldown has nothing left to give at the moment the
 > re-entry question arises.**
+>
+> ### ✅ **ROBUSTNESS — the figure is NOT an artifact of delivery carries, and this check could have gone red**
+> The 166,460 s maximum is a T+1 carry, and a `GTT_EXIT` trade's `exit_time` is the **boot-time
+> finalisation**, not the real exit (F6) — so delivery rows could have inflated the number. **Re-run
+> with them excluded:**
+>
+> | population | n | held ≥ 300 s | median |
+> |---|---|---|---|
+> | all closed | 225 | **185 = 82.2 %** | 1,596 s |
+> | **excluding `exit_reason='GTT_EXIT'`** | 222 | **182 = 82.0 %** | 1,574 s |
+> | only `GTT_EXIT` (delivery) | 3 | 3 = 100 % | 2,479 s |
+>
+> ⇒ **82.2 % → 82.0 %. The conclusion is carried by the intraday book, not by the three delivery
+> rows.** *(Exit-reason mix: `SL_HIT` 106 · `TGT_HIT` 72 · `MANUAL` 44 · `GTT_EXIT` 3.)*
 
 ---
 
