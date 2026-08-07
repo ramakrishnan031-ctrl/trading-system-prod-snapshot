@@ -313,6 +313,27 @@ bucket** *(0.30 × the 08:15:41 INIT ₹9,444.50)* = **4.9 % of the day's capita
 **G2's live figure: at tier 1.0 MANINFRA is `floor(8 × 1.0)` = 8 vs 4 — DOUBLE.** ⛔ The proposed
 correction to *"9 vs 4"* is refused with the row.
 
+### 3.6a · ✅ **THE SOURCE ACCEPTED ALL SEVEN CORRECTIONS — 07-Aug 11:50. FILED AS STATED, ⛔ NOT SOFTENED.**
+
+| the card's claim | verdict |
+|---|---|
+| MANINFRA `18/9/9`, tied, mislabelled | ⛔ **FABRICATED** — real `40/20/8`, strict min, correct label. **No such row existed** |
+| *"the 483/483 figure may be wrong"* | ⛔ **REFUTED** — concentration is the UNIQUE strict minimum on **492/492**, ties **0**; breakdown-derived, label cross-checks identical |
+| **(E) #2 — a second reopen** | ⛔ **REFUSED** — production **CONFIRMED** the registered conclusion; ⭐ MANINFRA is the **492nd confirmation** |
+| *"the surface order flips — tier first"* | ⛔ **FAILS with its premise** — concentration solely decided the raw (8), the tier then halved it. ⭐ **The RISE stands; the FLIP does not** |
+| *"9 vs 4, not double"* | ⛔ **WRONG** — `floor(8 × 1.0) = 8` vs `4`; **"double" stands** |
+| *"`tgt_retry` classified backwards"* | ⛔ **REFUTED** — every consumer LIMIT_TRIPLE/intraday, **0** CNC hits; classified **by mechanism, not name**. 42-key sweep **NOT run** |
+| *"`LIMIT_TRIPLE` = 3 retry attempts"* | ⛔ **WRONG** — `:5-8`, `:13-17`: **TRIPLE = the three legs.** The retraction was right; its reason was not |
+
+> ## ⭐ **WHAT SURVIVES — and it is the only thing that does**
+> **The tier halved a live delivery position 8 → 4: ₹460.92 withheld = 50 % of the intended position
+> = 16.3 % of the ₹2,833.35 delivery bucket.** ⛔ **First observable instance in the campaign — and
+> the rung that did it still has NO delivery control.**
+
+🏷️ **The fabrication itself is filed apart, at `campaign_practices.md` `M3.1`** — ⛔ **deliberately
+NOT beside the scope errors:** a scope error over-generalises something true; this manufactured
+something that was never true, **wearing the format of a measurement.**
+
 ---
 
 # §4 · RAMA'S SIX CONFIG REQUESTS, TRIAGED

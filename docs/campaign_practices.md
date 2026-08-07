@@ -546,6 +546,44 @@ shape: the SHA is what converts a pointer into a citation. §R already requires
 the target CHANGED; a SHA can."* **A card's line numbers are the same kind of claim and had
 been exempt.**
 
+### M3.1 · ⛔⛔⛔ **A CARD STATES NO FIGURE IT HAS NOT BEEN GIVEN** — the PRODUCER-side obligation
+
+🏷️ **Parent (G7): the REVERSE DIRECTION of `M3`.** ⭐⭐ **M3 and its whole family point one way — they
+arm the IMPLEMENTER to verify what a card seeds. Nothing bound the card AUTHOR. That asymmetry is the
+gap this closes, and it existed unnoticed through every earlier entry.**
+
+> ### **EVERY NUMBER IN A CARD IS EITHER (a) QUOTED FROM THE IMPLEMENTER'S OUTPUT, OR (b) ARITHMETIC ON QUOTED FIGURES WITH THE OPERANDS SHOWN.**
+> ⛔ **Anything else is FABRICATION, regardless of how plausible it looks.**
+
+**EARNED 07-Aug-2026 11:20 — and the source ruled on itself.** A card stated MANINFRA as
+`qty_by_risk 18 · qty_by_capital 9 · qty_by_concentration 9`, **tied**, labelled **CAPITAL**, and
+built a second `(E)` reopen plus a surface-order flip on it. **(P) The database holds `40 / 20 / 8`,
+a strict minimum, correctly labelled — one row, any status.** ⇒ **There was no such row. The figures
+were generated.**
+
+### ⛔ WHY THIS IS FILED APART FROM THE SCOPE ERRORS, NOT BESIDE THEM
+
+**A scope error OVER-GENERALISES SOMETHING TRUE** *(§3.5: "concentration binds at 1" — true of three
+high-priced samples, stated as general)*. ⭐⭐ **This MANUFACTURES SOMETHING THAT WAS NEVER TRUE —
+and it arrives WEARING THE FORMAT OF A MEASUREMENT: three named columns, a tie, a label.** 🔴 **The
+format is what makes it credible.** ⇒ **Filing the two together would let the more dangerous one
+inherit the milder one's remedy.**
+
+### ⭐ THE DISCRIMINATOR THAT CAUGHT IT — **reconciliation, not suspicion**
+
+**"18/9/9 reconciles with nothing."** The real row reconciles with the capital base through the
+config: at the 08:15:41 `INIT` **₹9,444.50**, `0.01 × 9444.5 / 2.3055 = 40.96 → 40` and
+`0.10 × 9444.5 / 115.23 = 8.19 → 8` *(`system_config.yaml:166`/`:167`)*. ⇒ 🏷️ **A fabricated figure
+set is not merely unsourced — it is UNRECONCILABLE, and that is testable without knowing in advance
+that it is false.** ⭐ **Prefer the reconciliation test to a credibility judgement: plausibility is
+exactly the property fabrication optimises.**
+
+⭐ **AND WHAT ACTUALLY CAUGHT IT IS A RULE THAT ALREADY EXISTED:** *an audit finding is a HYPOTHESIS
+— verify its premise* **(`M4`)**, applied to three of the card's premises **before anything was
+filed.** ⛔⛔ **Without it, `18/9/9` enters the permanent register as fact, carrying a card's
+authority.** 🏷️ **Recorded as `(P)`: the standing rule was run against a case that could have
+embarrassed the process, and it held — which is the only thing that validates one (`G7.1`).**
+
 ### M4 · ⭐⭐ AN AUDIT-DESCRIBED FIX IS A **HYPOTHESIS**, NOT A SPEC
 
 **M2 says *measure, don't infer* about our OWN claims. M4 extends it to the SOURCE
