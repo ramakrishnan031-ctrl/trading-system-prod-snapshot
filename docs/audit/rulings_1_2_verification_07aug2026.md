@@ -414,3 +414,398 @@ settles nothing. The 302 came from an indentation walk, which was **not re-run**
 - ⛔ **No test was run and none was needed** — this card changed no code, so there was nothing a
   regression could have gone red on. **(P)** `git diff --name-only 348c226..HEAD -- '*.py' '*.yaml'
   '*.sql'` = empty.
+
+---
+---
+
+# §8 · 07-Aug-2026 EVENING — THE ENTRY-THROTTLE MEASUREMENT (Q1–Q5) + THE BROKER GTT CHECK
+
+**⛔ READ-ONLY. NO CODE. NO CONFIG. NO SCHEMA. NO GTT CANCELLED. NO BUILD.**
+
+> **WHY THIS IS HERE AND NOT IN A NEW FILE.** The card offered a choice. This is an **append**,
+> because §8 does not introduce a topic — it **closes OPEN-1 and OPEN-2 of this document's own §6**
+> and **corrects this document's own H1 row 5 and H7 row 5**. A companion file would fork the record
+> that PATHS.md and `SYSTEM_MAP.md` already point at by section. The anti-duplication rule binds here
+> exactly as it bound Ruling 1 in §4.
+>
+> **PROVENANCE.** Code read at working-tree `8affcae` (docs-only since `348c226`; `signals/entry_throttle.py`
+> is byte-identical to its only ever commit, `c0554c6`). Production reads: VM
+> `/home/ubuntu/systems/trading-system/logs/system_2026-07-27.log` (JSON), `journalctl -u trading-system.service`,
+> `data_store/trading_system.db` `mode=ro`, and **the Zerodha GTT/orders/holdings/positions API**, ~17:0x–17:3x IST.
+
+---
+
+## §8.1 — Q1 · FROM WHAT EVENT DOES `per_symbol_cooldown_sec` MEASURE?
+
+### 🏷️ **(b) CONFIRMED DESIGN — it measures PREVIOUS ENTRY → NEW ENTRY. There is no exit hook anywhere in the class.** **(S)** + **(P)**
+
+**The code that RECORDS the timestamp** — `signals/entry_throttle.py:109-113`, inside `admit()`, on the
+admit path only:
+
+```python
+            # admit — record the placement
+            self._last_entry = now
+            self._recent.append(now)
+            if symbol:
+                self._per_symbol_last[symbol] = now
+```
+
+**The code that COMPARES against it** — `signals/entry_throttle.py:97-107`:
+
+```python
+            # 3. per-symbol cooldown
+            if self._per_symbol > 0 and symbol:
+                last = self._per_symbol_last.get(symbol)
+                if last is not None:
+                    elapsed = now - last
+                    if elapsed < self._per_symbol:
+```
+
+> ### ⭐ **`_per_symbol_last[symbol]` IS WRITTEN AT EXACTLY ONE PLACE IN THE REPOSITORY — LINE 113, INSIDE `admit()`.**
+> *(Width: repo-wide grep for `entry_throttle|EntryThrottle|per_symbol_cooldown|\.admit\(` across every
+> `*.py`. Every hit outside `tests/` is a **constructor** argument (`main.py:3150`, `core/config_loader.py:404`,
+> `signals/signal_processor.py:151/230-234`), a **metrics read** (`:602`), or one of the three `admit()`
+> calls. **No exit path, no fill path, no `trade_closed` path, and no reconciler touches this class.**)*
+>
+> ⇒ **The interval is PREVIOUS ENTRY → NEW ENTRY.** The class has no way to learn that a position exited.
+
+**And `admit()` is reached at entry DISPATCH, not at fill.** All **three** production `_placer.place(`
+call sites — `signal_processor.py:1263` (main), `:2028` (gate path), `:2305` (retest path) — are each
+immediately preceded by `_tr = self._entry_throttle.admit(symbol)` at `:1249`, `:2017`, `:2296`.
+**(S)** The chokepoint is complete: there is no fourth production `place()` site.
+
+---
+
+## §8.2 — Q2 · WHY DID IT NOT BLOCK SENCO ON 27-JUL? — **ALL FOUR NAMED CANDIDATES, SCORED**
+
+### 🏷️ **(b) CONFIRMED DESIGN. Candidate 1 is the whole explanation. Candidates 2, 3 and 4 are each REFUTED BY MEASUREMENT — not merely unsupported.** **(P)** + **(S)**
+
+| # | candidate | verdict | evidence, and the width of the check |
+|---|---|---|---|
+| **1** | **the cooldown measures from the wrong event** | ✅ **SUPPORTED — and sufficient alone** | §8.1 (S) + §8.3's arithmetic (P): the operand the throttle actually held was **719.644 s**, which is **2.399×** the 300 s threshold. It was consulted, it evaluated correctly, and it correctly admitted |
+| **2** | the value was different on 27-Jul | 🔴 **REFUTED** | **(P)** `git show d3fa5b8:config/system_config.yaml` — the tree deployed at 10:14 on 27-Jul — reads `per_symbol_cooldown_sec: 300`, identical to today. **Width:** `git log -S "per_symbol_cooldown_sec"` over `system_config.yaml`, `entry_throttle.py`, `signal_processor.py`, `main.py`, `config_loader.py` returns **exactly one commit ever** — `c0554c6`, 19-Jun-2026. **The value has been 300 continuously since the day it was created and has never been edited** |
+| **3** | the throttle is not on that code path | 🔴 **REFUTED** | **(S)** all 3 production `place()` sites are throttle-gated (§8.1). **(P)** and it demonstrably ran on that symbol that morning: `SENCO … rejected at ENTRY_THROTTLED` never appears, but the gate itself fired **7 times on 27-Jul**, including its **`per_symbol` category twice** (§8.4) |
+| **4** | **the throttle state is in-memory and had been LOST** *(the card flagged this as the more serious outcome)* | 🔴 **REFUTED — decisively** | **(P)** the **complete** `systemd[1]` record for `trading-system.service` on 27-Jul is **THREE LINES**: `Started 08:15:30` · `Deactivated successfully 17:35:04` · the CPU-consumption summary. **Width:** `journalctl -u trading-system.service --since 2026-07-27 00:00 --until 2026-07-28 00:00`, filtered to `systemd[1]` — the emitter that *must* log any start, stop, crash or scheduled restart — and the line count is **3**. ⇒ **ONE continuous process spanning both SENCO entries.** The in-memory map still held SENCO's 10:02 timestamp at 10:14 |
+
+> ## ⭐⭐ **THE RESULT IS THE OPPOSITE OF A FAILURE, AND THAT IS WHY IT MATTERS**
+> The throttle did not miss SENCO, was not reset, was not bypassed and was not misconfigured.
+> **It held the correct timestamp, computed the correct interval, and correctly admitted** — because
+> the interval it is built to measure is not the interval the incident is about.
+> ⛔ **There is nothing here to fix.** There is a semantic to be *known before a control is removed.*
+
+### 🔴 **AND A SECOND, INDEPENDENT REASON — WHICH REFRAMES OPEN-1 ENTIRELY**
+
+**(P) Gate 1 did not exist when SENCO re-entered.** The tree deployed at 10:14 on 27-Jul was
+`d3fa5b8` (26-Jul 23:19:19). In that tree **both halves are absent** — the config key
+`one_trade_per_symbol_direction_per_day` and the code site `SYMBOL_DIRECTION_DAILY_LIMIT` /
+`count_executed_trades_today_for_symbol_direction`. They arrive later **the same day**:
+
+| commit | timestamp (IST) | what | Δ after the 10:14:12 re-entry |
+|---|---|---|---|
+| — | **27-Jul 10:14:12** | **the SENCO re-entry** | — |
+| `656b62d` | **27-Jul 13:54:12** | `feat(signals): one completed trade per symbol+direction per day -- DEFAULT OFF` — the code | **+3 h 40 min** |
+| `300a247` | **27-Jul 15:24:31** | `feat(config): TURN ON the one-trade-per-symbol+direction rule (Rama, 27-Jul eve)` — `: true` | **+5 h 10 min** |
+
+> ## 🔴🔴 **SENCO IS NOT A TRADE THAT GATE 1 HAPPENS TO COVER. SENCO IS THE INCIDENT THAT CREATED GATE 1 — CODE AND CONFIG BOTH AUTHORED THAT SAME AFTERNOON.**
+> ⭐ This also settles **OPEN-7** in passing: the "four trading days" between the config commit
+> (27-Jul) and the first rejection (03-Aug) is **not** a deploy lag question about a pre-existing
+> rule — the rule was **born** on 27-Jul evening, after the market closed. *(⛔ Whether the gap from
+> 28-Jul to 03-Aug is deploy lag or simply no qualifying signal is still **not determined** — that
+> half of OPEN-7 stands.)*
+
+---
+
+## §8.3 — Q3 · THE SENCO ARITHMETIC, OPERANDS SHOWN
+
+**Every timestamp below is quoted from the `ts` field of a JSON line in
+`logs/system_2026-07-27.log` on the VM. No figure is stated that was not read from that record.**
+
+**The proxy, stated rather than assumed:** `admit()` returns at `signal_processor.py:1249`,
+microseconds before `place()` emits `order_placer.place_start`. `place_start` is therefore used as the
+**admit instant**. Its error is bounded below by the preceding `risk_engine.approve` line, so the true
+interval lies in **[718.941 s, 720.298 s]** — and every value in that interval exceeds 300 s, so the
+verdict does not depend on the proxy.
+
+| # | event | quoted timestamp (IST) |
+|---|---|---|
+| ① | trade 1 `risk_engine.approve … approved=True` | `10:02:12.033` |
+| ② | trade 1 `trade_created` `trd_c9675b4fae4a…` | `10:02:12.685` |
+| ③ | 🔑 **trade 1 `order_placer.place_start` — `admit("SENCO")` recorded here** | **`10:02:12.687`** |
+| ④ | trade 1 entry fill @ **418.75** (`avg_fill_price`) | `10:02:17.674` |
+| ⑤ | 🔑 **trade 1 `trade_closed` `exit_reason:"TGT_HIT"` @ **425.05** | **`10:13:31.744`** |
+| ⑥ | trade 2 `risk_engine.approve … approved=True` | `10:14:11.628` |
+| ⑦ | 🔑 **trade 2 `order_placer.place_start` — `admit("SENCO")` consulted here** | **`10:14:12.331`** |
+| ⑧ | trade 2 entry fill @ **425.25** (`limit_triple_exits_placed reason:"entry_fill"`) | `10:14:51.157` |
+
+### THE THREE INTERVALS
+
+| interval | operands | seconds | vs 300 s | outcome |
+|---|---|---|---|---|
+| 🔑 **ENTRY → ENTRY** — *what the throttle actually measured* | ⑦ − ③ = `10:14:12.331 − 10:02:12.687` | **719.644** | **+419.644 (2.399×)** | ✅ **ADMITTED — correctly** |
+| **EXIT → re-entry DISPATCH** — *what an exit-keyed cooldown would have measured* | ⑦ − ⑤ = `10:14:12.331 − 10:13:31.744` | **40.587** | **−259.413** | 🔴 **would have BLOCKED** |
+| **EXIT → re-entry FILL** — *the figure carried in the incident record* | ⑧ − ⑤ = `10:14:51.157 − 10:13:31.744` | **79.413** | −220.587 | 🔴 would have BLOCKED |
+
+**✅ RECONCILIATION:** the SENCO report's *"Exit → re-entry gap: 10:13:31 → 10:14:51 = 80 seconds"* is
+**79.413 s** at full precision. The record is correct; the "80" is a rounding of it.
+
+> ### ⭐ **THE TENSION THE CARD OPENED WITH IS DISSOLVED, NOT EXPLAINED AWAY**
+> The card wrote: *"A live 300-second per-symbol cooldown did not stop an 80-second re-entry."*
+> **(P) The throttle never saw 80 seconds. It saw 719.644.** The 80 s figure describes an interval
+> that **no control in this system measures.** Both stated facts were true; they were about different
+> intervals, and nothing in the repo reconciled them because nothing in the repo computes the second.
+
+### 🔑 **AND THE NUMBER THAT PRICES THE DECISION — TRADE 1's HOLDING PERIOD**
+
+⑤ − ③ = `10:13:31.744 − 10:02:12.687` = **679.057 s** (11 min 19 s).
+
+⇒ **When SENCO exited, its cooldown had already been expired for 379.057 s.** Generalised:
+
+> ## 🔴 **THE PER-SYMBOL COOLDOWN'S RESIDUAL PROTECTION AGAINST AN IMMEDIATE RE-ENTRY IS EXACTLY `max(0, 300 − holding_period)`. FOR ANY TRADE HELD LONGER THAN FIVE MINUTES IT IS *ZERO*.**
+> **(P) MEASURED over the whole book** — 225 closed trades carrying both `entry_time` and `exit_time`
+> (`status IN ('CLOSED','CLOSED_MANUAL')`):
+>
+> | | n | share |
+> |---|---|---|
+> | held **< 300 s** — cooldown still alive at exit, offers *some* cover | **40** | **17.8 %** |
+> | 🔴 held **≥ 300 s** — cooldown already dead at exit, offers **NO** cover | **185** | **82.2 %** |
+>
+> **median holding period = 1,596 s (26.6 min) = 5.3× the cooldown.** *(min 2 s · max 166,460 s)*
+> ⇒ **On roughly four trades in five, the 300 s cooldown has nothing left to give at the moment the
+> re-entry question arises.**
+
+---
+
+## §8.4 — ⭐⭐ THE PYRAMID CONTROL — THE SEMANTICS PROVEN ON PRODUCTION DATA, NOT ONLY READ FROM SOURCE
+
+**(P)** The `per_symbol` gate fired **twice on 27-Jul**, on PYRAMID. Because the reject string prints
+the operand (`f"per_symbol {symbol} {elapsed:.0f}s < {self._per_symbol:.0f}s"`), the log **states the
+interval the throttle measured** — which makes this a direct discriminator between the two candidate
+semantics, on live data, on the same day as SENCO.
+
+| # | previous PYRAMID `order_placer.place_start` | throttle reject line | wall-clock Δ | **printed `elapsed`** | match at printed precision |
+|---|---|---|---|---|---|
+| 1 | `10:06:13.701` | `10:07:14.035` — `per_symbol PYRAMID 60s < 300s` | **60.334 s** | **60** | ✅ |
+| 2 | `10:11:13.903` | `10:12:14.835` — `per_symbol PYRAMID 61s < 300s` | **60.932 s** | **61** | ✅ |
+
+> ### 🔴 **AND THE DISCRIMINATOR IS CLEAN BECAUSE PYRAMID NEVER EXITED — IT NEVER EVEN OPENED.**
+> **(P)** the full PYRAMID event list for 10:00–10:20 shows the 10:06 entry was **REJECTED BY THE BROKER**:
+> `place_order call_start 10:06:14.637` → **`Zerodha rejected order: MIS orders are currently blocked for PYRAMID`** `10:06:14.678`
+> → `mis_blocklist: recorded MIS-block` `10:06:15.471` → `Pipeline exception` `10:06:15.474`.
+> **There is no PYRAMID position, no fill and no exit anywhere in that window** ⇒ an exit-keyed
+> cooldown would have had **no timestamp to measure from** and could not have printed `60s`/`61s` at all.
+> **The only events 60.3 s and 60.9 s before the two rejects are the two dispatches.** **Q1 is proven twice over.**
+
+### ⚠️ **A CONSEQUENCE THIS SURFACED THAT WAS IN NO DOCUMENT — REGISTERED, NOT FIXED**
+
+### 🏷️ **(b) CONFIRMED DESIGN, with a consequence worth knowing** **(P)**
+
+**`admit()` records the placement BEFORE `place()` is called** — deliberately, and the docstring gives
+the reason: *"a split would leave a TOCTOU window where a burst of concurrent worker threads all pass
+check() before any records."* Correct for burst suppression. **But it means a placement the broker
+REJECTS still consumes the symbol's full 300 s cooldown.** PYRAMID is the measured instance: an order
+that was never accepted locked the symbol for five minutes and blocked **three** later signals
+(`10:07:14.035`, `10:07:14.840`, `10:12:14.835`).
+
+⭐ **Same family as the standing finding *"it counts its own rows where it means the broker's reality"*** —
+here the throttle counts its own **dispatch** where a reader would assume it counts an **entry**.
+⛔ **Not a defect and not proposed for change**: the TOCTOU rationale is sound and this is the price of it.
+
+⚠️ **And one more, stated because it bears directly on OPEN-2:** PYRAMID's two dispatches are
+`10:11:13.903 − 10:06:13.701` = **300.202 s** apart. It re-entered **0.202 s after the cooldown
+expired.** With a scanner re-firing on a ~60 s cadence, **the cooldown does not prevent the re-entry —
+it schedules it.** *(This is the measured form of H7's "a throttle DELAYS; it does not consume the day.")*
+
+---
+
+## §8.5 — Q4 · DOES THE THROTTLE DISCRIMINATE DIRECTION, OR PRODUCT?
+
+### 🏷️ **(b) CONFIRMED DESIGN — NEITHER. It is direction-blind and product-blind, and its key is the bare symbol string.** **(S)**
+
+- The state is `self._per_symbol_last: dict[str, float]` (`:58`) — **`symbol -> last placement ts`**. One
+  scalar per symbol; the type cannot carry a second dimension.
+- The signature is `admit(self, symbol: Optional[str] = None)` (`:65`). **Direction, product, intent,
+  strategy and side are not parameters** — all three call sites pass `admit(symbol)` and nothing else.
+
+> ⭐ **This is the same shape as the three symbol gates in H1** *(gate 3 `DUPLICATE_SYMBOL` is
+> direction-blind and product-blind; gate 2 is the direction-partitioned slice of it)*. ⇒ **Ruling 2 is
+> pipeline-independent and so is the throttle** — a CNC delivery entry and a MIS intraday entry on the
+> same symbol contend for **one** 300 s cooldown. **Relevant to OPEN-2: whatever Rama decides about
+> *"immediately"*, the throttle will apply it across products, because it cannot do otherwise.**
+
+---
+
+## §8.6 — Q5 · WAS THE THROTTLE EXERCISED IN BOTH PAPER AND LIVE?
+
+### 🏷️ **(d) CANNOT DETERMINE BY OBSERVATION — parity is (I), never (P). ⛔ IT WAS EXERCISED IN LIVE ONLY.** **(P)** for the negative; **(S)/(I)** for the parity claim
+
+**MEASURED, not inferred.** Every retained daily log on the VM, checked for its boot-banner mode:
+
+| | |
+|---|---|
+| retained `logs/system_*.log` files | **24** (`2026-07-07` → `2026-08-07`, the full 30-day window) |
+| days whose boot banner reads `mode=live` | **24 of 24** |
+| 🔴 days whose boot banner reads `mode=paper` | **0** |
+| days on which the `per_symbol` gate fired | **19 of 24** *(all live)* |
+
+⇒ **The per-symbol cooldown has NOT been exercised in paper within any evidence window available to
+me.** ⛔ **This does NOT establish "never in paper"** — 30-day retention means the check can only say
+*"not in the last 24 trading days."* **(Absence is bounded by the width of the check.)**
+
+**What supports parity is structural, and it is (I):**
+`EntryThrottle` holds no adapter, imports nothing from `broker/`, and its outcome depends only on
+`time.monotonic()` and the symbol string; `main.py:3150` constructs it identically regardless of mode;
+`signal_processor.py:26` declares *"no direct broker import."* The module docstring asserts
+*"Parity: pure in-memory rate logic, identical in paper and live"* — **an assertion, not a measurement.**
+
+> ⭐ **AND THE PARITY HAZARD NAMED IN §7 DOES NOT REACH THIS CONTROL — which is worth saying, because
+> it is the one place in this campaign where a paper drill would NOT be vacuously green.** The standing
+> hazard is **PAPER NETS BY *SYMBOL* / LIVE KITE NETS PER *(SYMBOL, PRODUCT)*** — it bites anything
+> reading broker position quantities. **The throttle reads none.** ⇒ a paper drill of the throttle would
+> be genuinely informative. ⛔ **It has not been run, and this report does not propose one.**
+
+---
+
+## §8.7 — THE CARD'S PRE-REGISTERED EXPECTATIONS, SCORED
+
+⭐ **Written by the card's author before any measurement existed. 4 HELD · 0 FAILED · 1 correctly ABSTAINED.**
+
+| # | prediction | score | why |
+|---|---|---|---|
+| **Q1-P** | **ENTRY → ENTRY** *(moderate confidence, reasoned from "atomic check-and-record")* | ✅ **HELD** | and the stated reasoning was the *correct* reasoning — "records at placement ⇒ no exit hook" is exactly what `:113` does. ⭐ The prediction was right for the right reason, which is the stronger form |
+| **Q2-P** | the explanation is Q1's answer **alone**; **no** restart or lost-state involvement | ✅ **HELD — and more strongly than predicted** | lost state is not merely *unsupported*, it is **REFUTED**: a 3-line `systemd[1]` record proves one continuous process across both entries. ⭐ The card asked for the serious alternative to be checked rather than assumed away, and that instruction is what turned an absence into a refutation |
+| **Q3-P** | entry→re-entry **exceeds** 300 s; exit→re-entry is the recorded 80 s; **no figure predicted for the entry time** | ✅ **HELD** | 719.644 s and 79.413 s. ⭐ **The abstention was correct discipline** — the entry timestamp was genuinely not in the card, and inventing one would have been unfalsifiable |
+| **Q4-P** | product-blind **and** direction-blind, same shape as the symbol gates | ✅ **HELD** | `dict[str, float]` keyed on the bare symbol; `admit(symbol)` takes nothing else |
+| **Q5-P** | *no prediction offered — "I have no basis"* | ➖ **CORRECTLY ABSTAINED** | there genuinely was no basis in the card, and the measured answer (live-only, 24/24) could not have been reasoned to |
+
+> ### ⚠️ **AND THE HONEST METHODOLOGICAL READ: THIS SET IS WEAKER EVIDENCE THAN THIS MORNING'S.**
+> **A clean sweep of confirmations teaches less about the predictor than P3's failure did.** The card
+> says so itself and it is right. ⭐ **The one place these predictions earned their keep is Q2-P**: by
+> naming lost in-memory state *in advance* as the more serious alternative, the card forced a check
+> that would otherwise have been skipped once candidate 1 already explained everything —
+> **and a skipped check would have left "the state was probably fine" where there is now a 3-line proof.**
+
+---
+
+## §8.8 — 🔴 WHAT THIS DECIDES — OPEN-1 AND OPEN-2
+
+> ## ⛔ **THE CARD PRE-COMMITTED THAT THE TWO ANSWERS LEAD TO OPPOSITE RECOMMENDATIONS AND FORBADE SOFTENING WHICHEVER WAS FOUND. THE ANSWER FOUND IS THE EXPENSIVE ONE, AND IT IS RECORDED UNSOFTENED.**
+
+**The finding is ENTRY → ENTRY.** Therefore, in the card's own words: *"gate 1 is the ONLY control
+standing between the system and an immediate re-entry after a profitable exit, and Rama is being asked
+to remove it."* **That reading is CONFIRMED, and measurement makes it sharper than the card put it.**
+
+**Every control enumerated in H7, tested against the SENCO shape** — *a completed, profitable exit
+followed by a same-symbol same-direction re-entry seconds later*:
+
+| control | does it block the re-entry? | why not |
+|---|---|---|
+| **gate 1 `SYMBOL_DIRECTION_DAILY_LIMIT`** | ✅ **YES — the only one** | its status set includes **`CLOSED`/`CLOSED_MANUAL`**, so a completed trade still counts (H3). **This is the loosening half of Ruling 2** |
+| gate 2 `CONTRARY_POSITION` | ⛔ no | requires `PENDING_FILL/OPEN/PARTIAL`; a closed trade has left that set. *(And it has fired **0** times in 109,254 signals)* |
+| gate 3 `DUPLICATE_SYMBOL` | ⛔ no | same status set — **released by the exit, by design** |
+| **`per_symbol_cooldown_sec: 300`** | ⛔ **no — measured: 719.644 s ≥ 300** | entry-keyed; **dead for 82.2 % of trades by the time they exit** (§8.3) |
+| throttle `min_gap` 20 s | ⛔ no | global, and 719 s ≫ 20 s |
+| throttle `burst` 3/60 s | ⛔ no | one entry in the window |
+| `max_open_positions` 5 · per-strategy concurrency | ⛔ no | **the exit released the slot** — H7's ⭐⭐ point |
+| `max_daily_trades` 10 | ⚠️ only at the margin | has not bound since **10-Jul**; H6 measures both affected days reaching **11** |
+
+⇒ **Turning gate 1 off does not fall back onto the cooldown. It falls back onto nothing**, on ~82 % of
+trades. ⭐ **And §8.2 adds the fact that most changes the character of the decision: gate 1 was written
+and switched on within five hours of the SENCO re-entry, in response to it.** OPEN-1 is therefore not
+*"should we relax an incidental legacy rule"* — it is *"should we remove the control this incident
+caused, given that measurement now shows nothing else would have stopped it."*
+
+⛔ **THIS IS A MEASUREMENT AND A FRAMING. IT IS NOT A RECOMMENDATION, AND THE DECISION IS RAMA'S.**
+The counter-argument remains fully alive and is **not** weakened by anything here: the SENCO report's
+own §4 measured the re-entry population at **n=2 over five weeks, total stake ≈ ₹5**, and called it
+*"two anecdotes… a rule justified on one blocked trade is a rule justified on nothing."* **A control
+can be the only one of its kind and still not be worth its cost.** ⭐ What §8 changes is that the price
+of removing it is now **known** rather than assumed.
+
+**FOR OPEN-2 — the one sentence Rama was asked for is now better posed.** Rama's text says a symbol
+*"immediately becomes eligible again."* **(P)** The cooldown does not contradict that as a matter of
+*ownership* — it never asserts ownership, it spaces dispatches, and §8.4 shows it **defers** a re-entry
+by seconds rather than preventing it (PYRAMID re-entered at 300.202 s). ⇒ the two can coexist without
+amendment. ⛔ **But that is still a decision, not an inference, and §8 does not take it.**
+
+---
+
+## §8.9 — 🔴 THE BROKER GTT SAFETY CHECK — AND THE CARD'S PREMISE IS **REFUTED**
+
+**⛔ ANSWERED FROM THE BROKER API (`kite.get_gtts()` / `.orders()` / `.holdings()` / `.positions()`),
+NOT FROM `gtt_state`, exactly as §3.1 required. NOTHING WAS CANCELLED.**
+
+### ✅ **3.1 — ATULAUTO GTT `330657774`: ABSENT FROM THE BROKER. IT IS GONE.**
+
+**(P)** The broker returns **4** GTTs in total. `330657774` is **not among them**, and **no ATULAUTO GTT
+of any status exists at the broker.**
+
+### 3.3 — WHAT CLOSED IT, AND WHEN — traced in the log
+
+| timestamp (IST) | line |
+|---|---|
+| `2026-08-06 10:02:13.710` | `place_gtt call_end … gtt_id:"330657774"` — placed by `cnc_gtt_monitor.recreated`, `why:"GTT missing; holding intact"` **(the F6 respawn)** |
+| `2026-08-07 08:15:41.704` | ⚠️ `cnc_gtt_monitor.forensic … detail:"GTT active but holding flat (external close)"` |
+| 🔑 `2026-08-07 08:15:41.722` | **`delete_gtt call_end … gtt_id:"330657774", mode:"LIVE"`** ← **the system cancelled it itself, at this morning's 08:15 boot** |
+| `2026-08-07 08:15:41.795` | `cnc_gtt_monitor.gtt_exit … exit_price:579.55, pnl:-9.35` → trade `trd_e66ee17b…` **CLOSED**, `exit_reason='GTT_EXIT'` |
+
+⇒ **The "no manual ATULAUTO buy" DO-NOT can be lifted.** ⛔ **I have NOT lifted it — that is Rama's,
+as §3.3 requires.**
+
+### 🔴🔴 **BUT THE CARD'S CLOSING PREMISE IS WRONG, AND IT IS WRONG IN THE DIRECTION THAT MATTERS**
+
+The card wrote that ATULAUTO is *"the only item here that involves real money at the broker tonight."*
+**(P) It is not — and it is the one item that is now clean. The live one is `DIFFNKG`.**
+
+**MEASURED AT THE BROKER, 07-Aug ~17:2x IST:**
+
+| source | reading |
+|---|---|
+| `holdings()` DIFFNKG | **`quantity=0`, `t1_quantity=0`, `realised=0`** — the holding is **FLAT** |
+| `positions()` net DIFFNKG | **CNC `net=-1`, `buy=0`, `sell=1`** — a completed SELL, surviving as a **NEGATIVE** row |
+| `orders()` DIFFNKG today | **ONE** order: `260807170745584` SELL CNC LIMIT qty 1 **`filled=1` `COMPLETE` at 14:50:52** |
+| 🔴 `get_gtts()` | **`330944932` · DIFFNKG · `active` · SELL/SELL · CNC/CNC · triggers `[437.2, 459.45]` · created today `15:20:35`** |
+| `trades` row `trd_010f8e21…` | **`OPEN`, `exit_time` NULL** — a **PHANTOM** |
+
+**And the respawn is visible as a sequence** — `gtt_state` for DIFFNKG: `330658430` TRIGGERED (→ the
+14:50:52 fill) → `330940420` created **15:05:26**, TRIGGERED 15:08:11 → `330944932` created **15:20:35**,
+**ACTIVE now**. *(⚠️ **Stated not chased (G3):** the second trigger at 15:08:11 has **no corresponding
+order** in the broker's order book — only one DIFFNKG order exists today. Observed, not explained.)*
+
+> ## 🔴 **THERE IS A LIVE, RESTING SELL GTT AT ZERODHA (`330944932`, DIFFNKG, CNC, triggers 437.2 / 459.45) AGAINST A HOLDING THAT IS ALREADY FLAT AND ALREADY SOLD.**
+> **This is F6 cost 4 — "three live SELL GTTs on a flat holding" — measured live, tonight, on the
+> symbol the card did not name.** The mechanism is exactly the recorded one: the completed CNC SELL
+> survives as `net=-1`, `abs()` at `cnc_gtt_monitor.py:464` reads it as `held=1`, the monitor concludes
+> the holding is intact and **recreates the GTT every cycle**.
+> ⛔ **NOT CANCELLED — §3.2 and §5 forbid it, and they are right to: cancellation is a live broker
+> action and it is not authorised here.** ⭐ **Markets are closed, so nothing can fire tonight; the
+> exposure is MONDAY.**
+> ⭐ **`MANINFRA` is by contrast CORRECT and needs nothing:** `positions()` CNC `net=+4, buy=4, sell=0`
+> — a real position — with one matching `active` GTT `330856765`. ⛔ **Do not sweep it with DIFFNKG.**
+
+---
+
+## §8.10 — WHAT §8 REFUTES IN THE CARD *(the card asked for this explicitly)*
+
+| # | the card said | verdict |
+|---|---|---|
+| 1 | *"Your own **H1 note** says the throttle state is not persisted"* | ⚠️ **MIS-ATTRIBUTED.** H1 row 5 says only that the cooldown is a *spacing* rule and **LIVE**; it makes **no** persistence claim. The in-memory fact is real but its sources are the **code** (`dict`/`deque` instance attrs, no store) and the 19-Jul throttle report — **not H1.** ⭐ Immaterial to the answer; corrected so a later reader does not go looking for it in H1 |
+| 2 | *"A live 300-second cooldown did not stop an 80-second re-entry"* — framed as an unreconciled tension | ⚠️ **DISSOLVED, not resolved.** The throttle never evaluated 80 s; it evaluated **719.644 s**. The two facts were never in tension — they describe **different intervals**, and the 80 s one is measured by **no control in the system** |
+| 3 | 🔴 *"ATULAUTO … is the only item here that involves real money at the broker tonight"* | 🔴 **REFUTED.** ATULAUTO is **clean** — the system cancelled its GTT at 08:15:41 today. The real-money item is **DIFFNKG `330944932`, resting and active** (§8.9), which the card did not know about |
+| 4 | *(implicit)* SENCO passed gate 1 | 🔴 **REFUTED — gate 1 did not exist yet.** Both halves were authored **3 h 40 min and 5 h 10 min AFTER** the re-entry, the same day (§8.2) |
+
+⭐ **Nothing here refutes the card's core instruction, which was correct and load-bearing:** Q1 was
+*"the whole question,"* and it was. **And Q2's demand that lost in-memory state be checked rather than
+assumed away is what produced the strongest single piece of evidence in this section.**
+
+---
+
+## §8.11 — WHAT §8 DOES **NOT** ESTABLISH
+
+- ⛔ **Nothing about paper.** The throttle has **not** been exercised in paper in 24 retained trading
+  days; parity remains **(I)**. ⛔ "Never in paper" is **not** established — retention is 30 days.
+- ⛔ **No recommendation on OPEN-1 or OPEN-2.** §8.8 prices the decision; it does not take it.
+- ⛔ **Nothing about whether the 300 s value is right.** Only what it measures **from**.
+- ⛔ **No claim that the throttle is defective.** It is not. It did exactly what it is built to do.
+- ⛔ **Nothing done about `330944932`.** Reported only. Cancellation, and any F6 work, need their own
+  card and Rama's authorisation in his own words.
+- ⛔ **The 15:08:11 DIFFNKG trigger with no matching broker order is UNEXPLAINED** and was not chased.
