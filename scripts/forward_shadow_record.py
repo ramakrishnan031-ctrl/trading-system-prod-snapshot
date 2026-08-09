@@ -44,7 +44,12 @@ JOB_NAME = "forward_shadow_record"
 def _weights() -> dict:
     # config/scoring_weights.yaml is the single source (its own header says so).
     import yaml
-    data = yaml.safe_load((ROOT / "config" / "scoring_weights.yaml").read_text())
+    # N9-07: encoding is EXPLICIT. This is a CRON job, and a cron environment with
+    # LANG unset resolves the platform default to ASCII -- on a file that carries 51
+    # non-ASCII bytes, an unencoded read raises and the job produces nothing that day.
+    # This artifact CANNOT BE REGENERATED, so a missed day is a permanent hole.
+    data = yaml.safe_load(
+        (ROOT / "config" / "scoring_weights.yaml").read_text(encoding="utf-8"))
     return {k: float(v) for k, v in (data.get("steps") or {}).items()}
 
 
@@ -99,7 +104,9 @@ def _build_kite(log):
         from broker.rate_limiter import RateLimiter
         from core.config_loader import load_all
         api_key = os.environ.get("ZERODHA_API_KEY_LFL836", "")
-        access = json.loads(tok_path.read_text()).get("access_token")
+        # N9-07: the SECOND unencoded read in this file. The register named only
+        # the weights one; this is the same class and is fixed with it.
+        access = json.loads(tok_path.read_text(encoding="utf-8")).get("access_token")
         kite = KiteConnect(api_key=api_key); kite.set_access_token(access)
         kite.profile()
         inst = kite.instruments("NSE")
