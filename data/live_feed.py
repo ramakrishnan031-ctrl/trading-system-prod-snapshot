@@ -19,6 +19,7 @@ from kiteconnect import KiteTicker
 
 from core.effect_telemetry import handle as _effect_handle
 from core.logger import log_exception
+from alerts.delivery import send_alert_recorded
 from core.time_authority import now_ist
 
 
@@ -481,20 +482,26 @@ class LiveFeedManager:
         if self._kill_switch is not None:
             self._kill_switch.soft_kill("LIVEFEED_RECONNECT_EXHAUSTED")
         # FIX-134: CRITICAL Telegram alert
-        if self._notifier is not None:
-            try:
-                self._notifier.send(
-                    severity="ERROR",
-                    title=f"[{self._mode_label}] WebSocket DEAD -- Max Reconnects Exhausted",
-                    body=(
-                        f"Max attempts: {self._max_reconnect_attempts}\n"
-                        f"Total reconnects this session: {self._reconnect_count}\n"
-                        f"SOFT_KILL triggered. Manual intervention required."
-                    ),
-                    source_module="live_feed",
-                )
-            except Exception:
-                pass
+        # == ALERT DELIVERY CONTRACT (Phase 1, 09-Aug-2026) =================
+        # BOUNDARY TRACED BEFORE CONVERTING, not assumed from Phase 0: the
+        # `_log.critical`, the `_on_critical_failure` callback and the
+        # `soft_kill` above ALL run before this block, and the callback itself
+        # calls `soft_kill` first and only then notifies. A notification failure
+        # therefore cannot skip, delay or alter the SOFT_KILL (INVARIANT 1).
+        # The swallow is NOT removed -- the helper never raises -- it now leaves
+        # a machine-readable record instead of vanishing (INVARIANT 2).
+        # Return value ignored on purpose: nothing here may branch on delivery.
+        send_alert_recorded(
+            self._notifier, self._log,
+            severity="ERROR",
+            title=f"[{self._mode_label}] WebSocket DEAD -- Max Reconnects Exhausted",
+            body=(
+                f"Max attempts: {self._max_reconnect_attempts}\n"
+                f"Total reconnects this session: {self._reconnect_count}\n"
+                f"SOFT_KILL triggered. Manual intervention required."
+            ),
+            source_module="live_feed",
+        )
 
     # ------------------------------------------------------------------ #
     # Internal helpers

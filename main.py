@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 import core.time_authority as time_authority
+from alerts.delivery import send_alert_recorded
 from alerts.telegram_notifier import TelegramNotifier
 from broker.clock_skew_probe import BrokerClockSkewProbe
 from broker.token_monitor import TokenMonitor
@@ -1194,20 +1195,26 @@ def _start_eod_self_exit_thread(
                     "— staying up to manage them; will exit once flat.",
                     window_end.strftime("%H:%M"), active,
                 )
-                try:
-                    if notifier is not None:
-                        notifier.send(
-                            severity="WARNING",
-                            title=f"[{mode}] EOD shutdown deferred",
-                            body=(
-                                f"{active} position(s) still open past "
-                                f"{window_end.strftime('%H:%M')} IST — service staying "
-                                "up until flat (not abandoning positions)."
-                            ),
-                            source_module="main",
-                        )
-                except Exception:
-                    pass
+                # == ALERT DELIVERY CONTRACT (Phase 1, 09-Aug-2026) =========
+                # BOUNDARY TRACED: the DEFER is the ABSENCE of
+                # `shutdown_event.set()`, already decided by
+                # `_eod_self_exit_due(...)` above; this alert only reports it.
+                # The swallow mattered here for a second reason and still does:
+                # an escaping exception would kill the eod-self-exit THREAD and
+                # the service would then never self-exit at all. The helper
+                # never raises, so that protection is intact (INVARIANT 1) and
+                # the failure is now recorded rather than lost (INVARIANT 2).
+                send_alert_recorded(
+                    notifier, log,
+                    severity="WARNING",
+                    title=f"[{mode}] EOD shutdown deferred",
+                    body=(
+                        f"{active} position(s) still open past "
+                        f"{window_end.strftime('%H:%M')} IST — service staying "
+                        "up until flat (not abandoning positions)."
+                    ),
+                    source_module="main",
+                )
             # Re-check after poll_interval (in shutdown-aware increments).
             end_ts = _now_ist().timestamp() + poll_interval_sec
             while not shutdown_event.is_set() and _now_ist().timestamp() < end_ts:
