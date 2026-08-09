@@ -705,7 +705,8 @@ class StateStore:
         return int(row["n"]) if row else 0
 
     def count_executed_trades_today_for_symbol_direction(
-        self, symbol: str, direction: str, date_iso: str
+        self, symbol: str, direction: str, date_iso: str,
+        pipeline: str | None = None,
     ) -> int:
         """Executed trades on `symbol` in `direction` created on the given IST date.
 
@@ -719,13 +720,52 @@ class StateStore:
 
         Matches SUBSTR(created_at, 1, 10) like count_trades_today, so the day
         boundary is the same one the daily-trade cap already uses.
+
+        TICK 2 (09-Aug-2026) -- the OPTIONAL `pipeline` scope, which implements the
+        SECOND CLAUSE of Ruling 2 (Rama, 07-Aug): "the symbol becomes eligible again
+        the INSTANT it is flat". That half had never been true, because this count is
+        product-blind and DAY-scoped: once a DELIVERY trade closed it kept blocking
+        INTRADAY on the same symbol+direction for the rest of the day.
+
+          pipeline=None       -- account-wide; byte-equivalent to the pre-Tick-2 query
+          pipeline="intraday" -- only trades whose ENTRY product is NOT CNC
+          pipeline="delivery" -- only trades whose ENTRY product IS CNC
+
+        THERE IS NO PRODUCT COLUMN ON `trades`, on main or on the sizing branch
+        (v46's eight new columns are all sizing-audit), so the pipeline is derived
+        from `orders.product` via `leg='ENTRY'` -- the same join five other queries
+        in this file already use. No schema change.
+
+        FAIL-CLOSED, AND THIS IS THE WHOLE SAFETY ARGUMENT: a trade whose product
+        cannot be resolved (no ENTRY order row) matches BOTH pipelines. That is
+        exactly the pre-Tick-2 behaviour, so an unresolvable row is unchanged by this
+        work and there is no blind morning -- the change is a strict RELAXATION only
+        where the product is KNOWN. A join that let NULL fall out of both buckets
+        would make a protective gate fail OPEN, which is the wrong direction for the
+        gate that exists to stop the SENCO give-back.
+
+        DELIVERY IS THE CLOSED SET AND INTRADAY IS ITS COMPLEMENT (`<> 'CNC'`), not
+        an `IN ('MIS','CO')` allow-list: a product code added later would silently
+        escape an allow-list and be blocked by nothing.
+
+        COUNT(DISTINCT t.trade_id), not COUNT(*): SCALE mode writes several ENTRY
+        legs per trade (leg_index 0/1/2) and the join would otherwise multiply one
+        trade into three and over-count the day.
         """
         placeholders = ",".join("?" for _ in self._EXECUTED_TRADE_STATUSES)
+        scope = ""
+        if pipeline == "delivery":
+            scope = "AND (o.product IS NULL OR o.product = 'CNC') "
+        elif pipeline == "intraday":
+            scope = "AND (o.product IS NULL OR o.product <> 'CNC') "
         row = self.fetch_one(
-            f"SELECT COUNT(*) AS n FROM trades "
-            f"WHERE symbol = ? AND direction = ? "
-            f"AND SUBSTR(created_at, 1, 10) = ? "
-            f"AND status IN ({placeholders})",
+            f"SELECT COUNT(DISTINCT t.trade_id) AS n FROM trades t "
+            f"LEFT JOIN orders o "
+            f"       ON o.trade_id = t.trade_id AND o.leg = 'ENTRY' "
+            f"WHERE t.symbol = ? AND t.direction = ? "
+            f"AND SUBSTR(t.created_at, 1, 10) = ? "
+            f"AND t.status IN ({placeholders}) "
+            f"{scope}",
             (symbol, direction, date_iso, *self._EXECUTED_TRADE_STATUSES),
         )
         return int(row["n"]) if row else 0

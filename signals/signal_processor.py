@@ -672,7 +672,29 @@ class SignalProcessor:
                 f"active_incl_pending={active_incl_pending})",
             )
 
-    def _enforce_one_trade_per_symbol_direction(self, symbol: str, side: str) -> None:
+    @staticmethod
+    def _pipeline_for_intent(intent) -> str | None:
+        """TICK 2: the entry's book -- "intraday" | "delivery" | None.
+
+        Imported from `capital.fund_manager`, NOT re-declared: those sets are
+        what `reserve()` itself branches on, so the gate's notion of a book and
+        the bucket the money leaves are the SAME decision.
+        An UNKNOWN intent returns None, which scopes the gate ACCOUNT-WIDE --
+        i.e. it falls back to the stricter pre-Tick-2 behaviour. Fail-closed.
+        """
+        try:
+            from capital.fund_manager import (_INTRADAY_INTENTS,
+                                              _POSITIONAL_INTENTS)
+            if intent in _POSITIONAL_INTENTS:
+                return "delivery"
+            if intent in _INTRADAY_INTENTS:
+                return "intraday"
+        except Exception:  # noqa: BLE001 -- never break admission
+            pass
+        return None
+
+    def _enforce_one_trade_per_symbol_direction(self, symbol: str, side: str,
+                                               intent=None) -> None:
         """27-Jul-2026: at most ONE executed trade per symbol+DIRECTION per trading day.
 
         DEFAULT OFF. When `risk.one_trade_per_symbol_direction_per_day` is false this
@@ -710,13 +732,29 @@ class SignalProcessor:
         # this is the single inverse, not a fourth restatement.
         direction = "LONG" if str(side).upper() == "BUY" else "SHORT"
         today = now_ist().date().isoformat()
+        # TICK 2 (09-Aug-2026): scope the count to THIS entry's book. Ruling 2's
+        # account-wide simultaneous-OPEN rule is gate 3 and is UNCHANGED -- a
+        # delivery holding still blocks intraday WHILE IT IS OPEN. What changes is
+        # only the DAY-scoped completed-trade rule: a closed delivery trade no
+        # longer spends intraday's slot, which is Ruling 2's own second clause
+        # ("eligible again the instant it is flat"), not a new policy.
+        # An unresolvable intent yields None -> account-wide -> the old, stricter
+        # behaviour. Fail-closed at both ends.
+        # CLASS-QUALIFIED, not `self.` -- the gate must not acquire a dependency
+        # on the live processor instance. The existing gate tests call this on a
+        # minimal stub on purpose, and an instance lookup there raises
+        # AttributeError inside a live entry path. (Same defect the Phase-0 alert
+        # formatter shipped and the same tests caught; not repeated a third time.)
+        pipeline = SignalProcessor._pipeline_for_intent(intent)
         n = self._store.count_executed_trades_today_for_symbol_direction(
-            symbol, direction, today)
+            symbol, direction, today, pipeline=pipeline)
         if n >= 1:
+            book = pipeline or "account-wide"
             raise _PipelineReject(
                 "SYMBOL_DIRECTION_DAILY_LIMIT",
-                f"{symbol} {direction} already traded today ({n} executed trade(s)); "
-                f"one completed trade per symbol+direction per day",
+                f"{symbol} {direction} already traded today in the {book} book "
+                f"({n} executed trade(s)); one completed trade per "
+                f"symbol+direction per day, per pipeline",
             )
 
 
@@ -1149,7 +1187,8 @@ class SignalProcessor:
             # portfolio_lock, immediately before reserve(), so a Chartink burst can't
             # slip past a stale pre-lock count. One deduped check for all 3 paths.
             self._enforce_strategy_position_cap(strategy_name, strategy_obj)
-            self._enforce_one_trade_per_symbol_direction(symbol, side)
+            self._enforce_one_trade_per_symbol_direction(
+                symbol, side, intent=getattr(strategy_obj, "intent", None))
             try:
                 approval = self._risk.approve(
                     symbol, side, strategy_obj.intent, sizing, signal_id,
@@ -1932,7 +1971,8 @@ class SignalProcessor:
                 # H-7 (Wave-5): per-strategy cap enforced atomically inside portfolio_lock
                 # (gate path). One deduped check for all 3 paths.
                 self._enforce_strategy_position_cap(strategy_name, strategy_obj)
-                self._enforce_one_trade_per_symbol_direction(symbol, side)
+                self._enforce_one_trade_per_symbol_direction(
+                symbol, side, intent=getattr(strategy_obj, "intent", None))
                 try:
                     approval = self._risk.approve(
                         symbol, side, strategy_obj.intent, sizing, signal_id,
@@ -2242,7 +2282,8 @@ class SignalProcessor:
                 # H-7 (Wave-5): per-strategy cap enforced atomically inside portfolio_lock
                 # (retest path). One deduped check for all 3 paths.
                 self._enforce_strategy_position_cap(strategy_name, strategy_obj)
-                self._enforce_one_trade_per_symbol_direction(symbol, side)
+                self._enforce_one_trade_per_symbol_direction(
+                symbol, side, intent=getattr(strategy_obj, "intent", None))
                 try:
                     approval = self._risk.approve(
                         symbol, side, strategy_obj.intent, sizing, signal_id,
