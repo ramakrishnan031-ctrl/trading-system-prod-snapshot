@@ -261,3 +261,40 @@ def test_the_gate_does_not_depend_on_the_processor_INSTANCE():
     assert "self._pipeline_for_intent" not in src, \
         "resolve the pipeline class-qualified, never off the instance"
     assert "SignalProcessor._pipeline_for_intent" in src
+
+
+def test_the_gate_RUNS_on_a_bare_stub__the_carried_countermeasure():
+    """§2 — THE PRACTICE THAT WAS RECORDED BUT NOT CARRIED.
+
+    Phase 0 produced exactly this countermeasure (a case asserting the method
+    works on a BARE STUB) after `self._alert_prefix(...)` shipped. It was not
+    carried to Tick 2, and hours later `self._pipeline_for_intent(...)` shipped
+    the identical defect. A practice that is recorded but not carried is not
+    adopted.
+
+    ⭐ This is BEHAVIOURAL, not source-inspection: a rename or a differently
+    shaped instance lookup would slip past a grep and be caught here.
+    """
+    from signals.signal_processor import SignalProcessor
+
+    class _Risk:
+        _one_trade_per_symbol_direction = True
+
+    class _Store:
+        def __init__(self):
+            self.calls = []
+
+        def count_executed_trades_today_for_symbol_direction(self, *a, **kw):
+            self.calls.append((a, kw))
+            return 0                       # nothing traded => must not reject
+
+    class _Stub:                            # the three attributes and nothing else
+        _risk = _Risk()
+        _store = _Store()
+
+    stub = _Stub()
+    # ⛔ must not raise AttributeError; must reach the store with a pipeline
+    SignalProcessor._enforce_one_trade_per_symbol_direction(
+        stub, "SENCO", "BUY", intent="DELIVERY")
+    assert stub._store.calls, "the gate never reached the store"
+    assert stub._store.calls[0][1].get("pipeline") == "delivery"
