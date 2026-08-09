@@ -107,6 +107,7 @@ from core.exceptions import (
     BrokerRateLimitError,
     BrokerTimeoutError,
 )
+from alerts.delivery import send_alert_recorded
 from core.time_authority import now_ist
 
 if TYPE_CHECKING:
@@ -1440,20 +1441,30 @@ class KillSwitch:
             if now_mono - last < _EXIT_ALERT_DEDUP_SEC:
                 continue
             self._exit_alert_ts[trade_id] = now_mono
-            try:
-                self._notifier.send(
-                    severity="CRITICAL",
-                    title=f"[{self._mode}] HARD_KILL EXIT FAILED -- {symbol}",
-                    body=(
-                        f"Could not exit {symbol} ({exit_side} x{qty}) within "
-                        f"{_HARD_KILL_MAX_RETRY_HOURS:.0f}h of HARD_KILL.\n"
-                        f"MANUAL INTERVENTION REQUIRED — verify/flatten at broker.\n"
-                        f"Trade: {trade_id}"
-                    ),
-                    source_module="kill_switch",
-                )
-            except Exception:
-                pass
+            # == ALERT DELIVERY CONTRACT (Phase 0, 09-Aug-2026) ==============
+            # The bare `try/except Exception: pass` that stood here is gone as
+            # a SILENT swallow -- but the swallow itself is NOT removed: the
+            # helper never raises, so this loop still cannot be broken by a
+            # Telegram failure (INVARIANT 1, which is why it existed at all).
+            # What changes is that the failure now leaves a machine-readable
+            # record instead of vanishing (INVARIANT 2).
+            # The return value is deliberately IGNORED: there is no branch
+            # here that a failed notification is allowed to influence.
+            # NOTE: the dedup stamp above still fires BEFORE delivery is
+            # known -- one of the five stamp-before-send limiters, and that
+            # is PHASE 5's, not this card's.
+            send_alert_recorded(
+                self._notifier, self._log,
+                severity="CRITICAL",
+                title=f"[{self._mode}] HARD_KILL EXIT FAILED -- {symbol}",
+                body=(
+                    f"Could not exit {symbol} ({exit_side} x{qty}) within "
+                    f"{_HARD_KILL_MAX_RETRY_HOURS:.0f}h of HARD_KILL.\n"
+                    f"MANUAL INTERVENTION REQUIRED — verify/flatten at broker.\n"
+                    f"Trade: {trade_id}"
+                ),
+                source_module="kill_switch",
+            )
 
     def _mark_trade_exiting(self, trade_id: str) -> None:
         """FIX-190: mark a trade EXITING (best-effort; broker truth > DB). Marking

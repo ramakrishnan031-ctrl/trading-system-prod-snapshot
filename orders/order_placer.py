@@ -232,6 +232,7 @@ from core.exceptions import BrokerError, BrokerRateLimit429Error, BrokerTimeoutE
 from core.ids import new_trade_id, truncate_tag_for_broker
 from core.logger import log_exception
 from core.mis_blocklist import is_mis_block_rejection
+from alerts.delivery import send_alert_recorded
 from core.time_authority import now_ist
 from orders.entry_engine import EntryResult
 from orders.full_entry_engine import FullEntryEngine
@@ -3998,22 +3999,27 @@ class OrderPlacer:
             )
 
         # Send Telegram alert
-        if self._notifier is not None:
-            try:
-                self._notifier.send(
-                    severity="CRITICAL",
-                    title=f"[{self._mode}] EMERGENCY EXIT -- {symbol}",
-                    body=(
-                        f"SL placement failed permanently\n"
-                        f"Trade: {trade_id}\n"
-                        f"Emergency {exit_order_type} {side} {qty} shares placed"
-                        f"{f' @ {exit_price}' if exit_price else ''}\n"
-                        f"Reason: {reason}"
-                    ),
-                    source_module="order_placer",
-                )
-            except Exception:
-                pass
+        # == ALERT DELIVERY CONTRACT (Phase 0, 09-Aug-2026) =================
+        # The emergency market exit is ALREADY PLACED by the time this runs,
+        # so a notification failure cannot cost the exit -- but it CAN cost
+        # Rama's only notice that an SL died and a market order replaced it.
+        # The helper never raises (INVARIANT 1: this method still returns
+        # True) and always records (INVARIANT 2). Return value ignored.
+        # A None notifier is handled inside the helper and recorded as
+        # `suppressed` -- previously that case was invisible too.
+        send_alert_recorded(
+            self._notifier, self._log,
+            severity="CRITICAL",
+            title=f"[{self._mode}] EMERGENCY EXIT -- {symbol}",
+            body=(
+                f"SL placement failed permanently\n"
+                f"Trade: {trade_id}\n"
+                f"Emergency {exit_order_type} {side} {qty} shares placed"
+                f"{f' @ {exit_price}' if exit_price else ''}\n"
+                f"Reason: {reason}"
+            ),
+            source_module="order_placer",
+        )
 
         return True
 
