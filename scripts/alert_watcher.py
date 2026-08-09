@@ -58,6 +58,7 @@ _PROJECT_ROOT = Path(__file__).parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
+from alerts.delivery import send_alert_recorded
 from alerts.critical import (
     list_pending_sentinels,
     mark_delivered,
@@ -396,14 +397,33 @@ def _telegram_fallback_batch(pending, notifier, log: logging.Logger) -> tuple[in
             stuck += 1
             continue
         sev = data.get("context", {}).get("severity", "CRITICAL")
-        res = notifier.send(
+        # == ALERT DELIVERY CONTRACT (Phase 2, 09-Aug-2026) ====================
+        # DIFFERENT SHAPE FROM PHASES 0/1, and deliberately so: those added a
+        # record to an existing swallow. Here there was NO swallow -- this send
+        # was unguarded -- so the fix must STOP THE PROPAGATION *and* record.
+        # `send_alert_recorded` does both and returns exactly the delivered
+        # boolean this loop needs, so no second mechanism is introduced.
+        #
+        # WHAT AN ESCAPING SEND USED TO COST, traced rather than assumed: it
+        # skipped `_write_degraded_marker` (the machine-visible marker the canary
+        # and the Officer read), the EMAIL DELIVERY DEGRADED log line, the
+        # counter save, and `return 0` itself -- and `run_once` is called
+        # UNGUARDED from `run_loop` and from `main()` (whose try has only a
+        # finally). So a Telegram fault killed the long-lived --loop watcher and
+        # exited non-zero, RE-CREATING the 10s systemd crash-loop that this
+        # file's own closing comment names as the original fault.
+        #
+        # It also fixes a second thing: one raising sentinel used to abort every
+        # remaining sentinel in the pass. Each is now attempted independently.
+        ok = send_alert_recorded(
+            notifier, log,
             severity=sev if sev in ("CRITICAL", "ERROR", "WARNING", "INFO") else "CRITICAL",
             title=data.get("title", "(no title)"),
             body=(data.get("body", "") or "")[:3500],
             source_module=data.get("source_module", "alert_watcher"),
             write_sentinel=False,   # the sentinel already exists — do not rewrite it
         )
-        if getattr(res, "success", False):
+        if ok:
             try:
                 mark_delivered(sp)
                 delivered += 1
