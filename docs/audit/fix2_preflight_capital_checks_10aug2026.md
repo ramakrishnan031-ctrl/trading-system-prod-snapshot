@@ -113,7 +113,72 @@ is not. **Correcting the base is a separate decision, not Fix 2.**
 
 ---
 
-## §2 — `kite_funds_available` · 🔴 **STOPPED — THE THRESHOLD IS A DECISION THAT DOES NOT EXIST**
+## §2b — ✅ **ANSWERED THE SAME DAY AND BUILT — ₹2,000 (`ee3ff49`)**
+
+**RAMA, 10-Aug-2026, quoted — the quote is the authorisation:** *"minimum broker cash: Rs 2k or your
+opinion, but avoid spending time on it — no much of setting x or y amount when other config settings
+are master."*
+
+### 🔑 Severity was measured BEFORE the value was set — **it does not block the system**
+
+`Criticality.CRITICAL` sets how **loud** a failure is, not whether anything stops.
+
+- `report.py:44-51` — `is_blocking = FAIL AND CRITICAL` rolls up the **report**. The name is
+  misleading: nothing it gates is the boot.
+- `base.py:19-24` — `Criticality`'s own docstring: *"ALERT-ONLY — never blocks trading."*
+- `main.py:3637-3641` — the **only** preflight touchpoint in the app. It launches a missed phase
+  **detached**, inside a try/except, and **never reads a result**; its comment says "never blocks
+  startup".
+- **Width for the absence:** every `.sh`, `.yaml`, `.service`, `.timer` in the tree — the only
+  preflight references are the three cron entries that **run** the orchestrator.
+
+⇒ **A post-sweep morning is reported loudly and still starts.**
+
+### ⏰ And it could not have saved 10-Aug
+
+`preflight_phase_a` is `30 8 * * 1-5` = **08:30** — fifteen minutes **after** the 08:15 boot had
+already hard-killed. Today the check saw `209.80 > 0.0` and **passed**; under the floor it would have
+**failed**, adding a third FAIL to a Phase A run already `CRITICAL_FAILURE` (`kill_switch_state`,
+`open_positions_at_start`). **No outcome changes.** ⭐ Its only real gain: it would have been the
+first check to name the **cause** rather than a consequence. ⛔ It fixes neither the invariant defect
+nor the ceiling and is not offered as softening either.
+
+### 🗂️ Home: `config/preflight.yaml`, deliberately outside `AppConfig`
+
+Every AppConfig model is `extra="forbid"`, so a key in `system_config.yaml` would need a pydantic
+field **the trading app never reads** — and the campaign already deleted one such set (`live_test_*`)
+as misleading dead config. Same precedent as `config/security.yaml`: preflight is a separate process
+and owns its thresholds. ⇒ **editing it cannot break the boot**, and a missing or unreadable file
+**degrades to the in-code default**, because its absence is an environment condition.
+
+⚠️ **This does not overturn "no rupee capital value exists in config."** It is a preflight **startup
+floor** in a file the app does not load — ⛔ not a capital value, not a sizing input, not an
+allocation, and not `cash >= used + reserved`, which stays refuted.
+
+### 🧪 Tests
+
+**PARITY pinned rather than asserted:** `ctx.is_paper` returns SKIPPED on the **first line**, before
+any broker call, so paper can never reach either predicate. The liveness wording is unchanged —
+`cash <= 0` still says *"no funds available"*, so "the account is empty" and "the account is small"
+stay distinguishable, and a guard pins that.
+
+| test | pre-fix | post-fix |
+|---|---|---|
+| `..._below_the_startup_floor_is_not_green` (cash `209.80`) | 🔴 **PASS returned** — the gap, demonstrated | ✅ FAIL |
+| `..._floor_is_config_driven_and_degrades_to_the_default` | 🔴 | ✅ |
+| `..._zero_still_says_no_funds_not_below_floor` | ✅ **control** | ✅ |
+| `..._floor_cannot_be_reached_in_paper` | ✅ **control** | ✅ |
+
+**`2 failed / 17 passed` pre-fix · `19 passed` post-fix · all preflight suites `179 passed`.**
+
+**FULL GATE on `ee3ff49`:** `PYTEST_RC=1` · **9F / 5,566P / 4S** · 866.48 s · ✅ **set-identical to
+the nine ids recorded at `645728d`, 0 new / 0 disappeared** · ⭐ arithmetic decomposes:
+**5,557 + 5 (`test_preflight_engine.py` 12→17) + 4 (`test_preflight_broker.py` 15→19) = 5,566.**
+
+---
+
+## §2 — `kite_funds_available` · 🔴 THE STOP AS IT STOOD BEFORE RAMA ANSWERED
+*(retained deliberately — it is the reasoning that produced the question he answered)*
 
 `broker.py:26` `EXPECTED_MIN_CASH = 0.0`; `:327` `if float(cash) > EXPECTED_MIN_CASH: _passed(...)`,
 else `_failed(...)`. Criticality `CRITICAL`.
