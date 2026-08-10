@@ -1,0 +1,38 @@
+# config/preflight.yaml — thresholds owned by the PRE-FLIGHT process.
+#
+# ⛔ NOT loaded by AppConfig. This file is deliberately outside `_CONFIG_FILES`
+# (core/config_loader.py), for the same reason config/security.yaml is: pre-flight
+# is a SEPARATE process, and every AppConfig model is `extra="forbid"`, so a key
+# added to system_config.yaml would need a pydantic field the trading app never
+# reads. The campaign has already deleted one set of such fields (`live_test_*`)
+# as misleading dead config; this avoids minting another.
+#
+# ⇒ Editing this file CANNOT break the boot. A missing or unreadable file
+# DEGRADES to the in-code default rather than failing a check, because its
+# absence is an environment condition (a fresh worktree, a partial deploy), not
+# a deliberate act.
+
+startup_floors:
+  # The minimum broker cash for the account to be considered tradeable at the
+  # start of a session.
+  #
+  # DECIDED BY RAMA, 10-Aug-2026, quoted: "minimum broker cash: Rs 2k or your
+  # opinion, but avoid spending time on it — no much of setting x or y amount
+  # when other config settings are master."
+  #
+  # ⛔ WHAT THIS IS NOT — and it matters, because every neighbouring number is
+  # one of these:
+  #   · NOT a sizing input. Sizing is governed by risk_per_trade_pct (1%),
+  #     max_concentration_pct (10%) and max_position_value_pct (40%), all
+  #     capital-relative, all in system_config.yaml. Those remain master.
+  #   · NOT an allocation or a bucket. The 70/30 split is untouched.
+  #   · NOT a replacement for the capital invariant. INV6 is what protects the
+  #     ledger; this only reports on the amount of cash present.
+  #   · NOT `cash >= used + reserved`. That predicate is REFUTED: after Fix 1 a
+  #     carried delivery position makes broker cash legitimately LOWER than
+  #     `used` (the money is in stock), so it would false-alarm every morning a
+  #     position is held.
+  #
+  # It is ALERT-ONLY, like every pre-flight check: nothing in the boot chain
+  # reads the pre-flight sentinel, so this cannot refuse to start the system.
+  min_broker_cash_rs: 2000

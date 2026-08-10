@@ -23,7 +23,42 @@ from typing import Any, Optional
 
 from scripts.preflight.base import Check, CheckContext, CheckResult, Criticality, FixResult
 
-EXPECTED_MIN_CASH = 0.0   # funds must be > this (cash sync sanity)
+EXPECTED_MIN_CASH = 0.0   # LIVENESS sentinel: funds must be > this (cash sync sanity)
+
+# FIX 2 (10-Aug-2026) — the ADEQUACY floor, which EXPECTED_MIN_CASH never was.
+# `> 0.0` asks "did the field come back with something in it"; it does not ask
+# "is there enough here to begin a trading day". On 10-Aug it saw net ₹209.80,
+# passed, and the account could not cover a ₹907.02 book.
+#
+# DECIDED BY RAMA, 10-Aug-2026, quoted: "minimum broker cash: Rs 2k or your
+# opinion, but avoid spending time on it — no much of setting x or y amount when
+# other config settings are master."  ⇒ ₹2,000, and deliberately nothing more
+# elaborate: this is a startup-safety floor, NOT a sizing limit, NOT an
+# allocation, and NOT a replacement for the capital invariant.
+#
+# Overridable from config/preflight.yaml so it can be changed without a code
+# change. That file is deliberately NOT in AppConfig's registry — see its header.
+MIN_BROKER_CASH_RS_DEFAULT = 2000.0
+
+
+def _min_broker_cash_rs(config_dir: Path) -> float:
+    """The startup-cash floor, from config/preflight.yaml, defaulted.
+
+    DEGRADE, NEVER BLOCK (failfast-vs-degrade): a missing or unreadable file is
+    an ENVIRONMENT condition — a fresh worktree, a partial deploy — not a
+    deliberate act, so fall back to the default rather than failing the funds
+    check for a reason that has nothing to do with the funds.
+    """
+    try:
+        import yaml
+        f = Path(config_dir) / "preflight.yaml"
+        if not f.exists():
+            return MIN_BROKER_CASH_RS_DEFAULT
+        data = yaml.safe_load(f.read_text(encoding="utf-8")) or {}
+        v = ((data.get("startup_floors") or {}).get("min_broker_cash_rs"))
+        return MIN_BROKER_CASH_RS_DEFAULT if v is None else float(v)
+    except Exception:  # noqa: BLE001 — a bad threshold file must not break the check
+        return MIN_BROKER_CASH_RS_DEFAULT
 
 
 # ── token / file helpers (monkeypatchable in tests) ─────────────────────────────
@@ -306,6 +341,23 @@ class MarginsCallCheck(Check):
 
 
 class FundsAvailableCheck(Check):
+    """Broker cash: is the field alive, AND is there enough to begin a day.
+
+    Those are two questions and this check only ever asked the first. FIX 2
+    (10-Aug-2026) adds the second, at Rama's ₹2,000, without disturbing the
+    first: `cash <= 0` still fails with exactly the wording it always had.
+
+    PARITY — LIVE-ONLY BY CONSTRUCTION, not by convention: `ctx.is_paper`
+    returns SKIPPED on the first line, before any broker call, so paper can
+    never reach either predicate. No paper rehearsal of the floor is possible.
+
+    ALERT-ONLY. `Criticality.CRITICAL` here sets how LOUD a failure is, not
+    whether anything stops: `report.py:44-51` uses is_blocking to roll up the
+    REPORT, and nothing in the boot chain reads the pre-flight sentinel
+    (main.py's only touchpoint launches a missed phase detached and never reads
+    a result). So a ₹209.80 morning is reported loudly and still starts.
+    """
+
     name = "kite_funds_available"
     group = "Broker"
     criticality = Criticality.CRITICAL
@@ -324,9 +376,21 @@ class FundsAvailableCheck(Check):
                 cash = (m.get("net") if isinstance(m, dict) else None)
             if cash is None:
                 return self._warn("margins returned no cash field")
-            if float(cash) > EXPECTED_MIN_CASH:
-                return self._passed(f"funds available: ₹{float(cash):,.0f}", cash=float(cash))
-            return self._failed(f"no funds available (cash ₹{float(cash):,.0f})", cash=float(cash))
+            cash = float(cash)
+            floor = _min_broker_cash_rs(ctx.config_dir)
+            # LIVENESS — unchanged wording, unchanged predicate.
+            if cash <= EXPECTED_MIN_CASH:
+                return self._failed(f"no funds available (cash ₹{cash:,.0f})",
+                                    cash=cash, min_broker_cash_rs=floor)
+            # ADEQUACY — the question this check did not ask.
+            if cash < floor:
+                return self._failed(
+                    f"broker cash ₹{cash:,.0f} is below the ₹{floor:,.0f} startup "
+                    f"floor — not a tradeable account this morning",
+                    cash=cash, min_broker_cash_rs=floor)
+            return self._passed(
+                f"funds available: ₹{cash:,.0f} (floor ₹{floor:,.0f})",
+                cash=cash, min_broker_cash_rs=floor)
         except Exception as exc:
             return self._failed(f"funds check failed: {exc}")
 

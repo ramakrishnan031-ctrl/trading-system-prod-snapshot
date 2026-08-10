@@ -167,6 +167,58 @@ def test_funds_available(tmp_path):
         _ctx(tmp_path, probe=_FakeProbe(marg={}))).status is Status.WARN
 
 
+# ── FIX 2: the ADEQUACY floor (Rama, 10-Aug-2026: Rs 2,000) ──────────────
+# RED-first. Against 645728d the first test below fails: EXPECTED_MIN_CASH is
+# 0.0, so Rs209.80 was PASSED. The three after it are green on BOTH trees.
+
+def test_funds_below_the_startup_floor_is_not_green(tmp_path):
+    """THE MEASURED CONDITION: broker net was Rs209.80 at the 10-Aug boot and
+    this check returned PASS. Rs209.80 is not a tradeable account."""
+    res = broker.FundsAvailableCheck().run(
+        _ctx(tmp_path, probe=_FakeProbe(marg={"available": {"cash": 209.80}})))
+    assert res.status is Status.FAIL, f"Rs209.80 still {res.status}: {res.detail}"
+    assert "startup floor" in res.detail
+    assert res.metrics["cash"] == 209.80
+    assert res.metrics["min_broker_cash_rs"] == broker.MIN_BROKER_CASH_RS_DEFAULT
+
+
+def test_funds_floor_is_config_driven_and_degrades_to_the_default(tmp_path):
+    """Overridable without a code change; and a MISSING file degrades to the
+    default rather than failing the check for a reason unrelated to funds."""
+    ctx = _ctx(tmp_path, probe=_FakeProbe(marg={"available": {"cash": 1500.0}}))
+    assert not (ctx.config_dir / "preflight.yaml").exists()
+    assert broker.FundsAvailableCheck().run(ctx).status is Status.FAIL   # 1500 < 2000 default
+
+    (ctx.config_dir / "preflight.yaml").write_text(
+        "startup_floors:\n  min_broker_cash_rs: 1000\n", encoding="utf-8")
+    res = broker.FundsAvailableCheck().run(ctx)
+    assert res.status is Status.PASS                                     # 1500 >= 1000 override
+    assert res.metrics["min_broker_cash_rs"] == 1000.0
+
+    (ctx.config_dir / "preflight.yaml").write_text(": not yaml :\n", encoding="utf-8")
+    res = broker.FundsAvailableCheck().run(ctx)
+    assert res.status is Status.FAIL                                     # back to the default
+    assert res.metrics["min_broker_cash_rs"] == broker.MIN_BROKER_CASH_RS_DEFAULT
+
+
+def test_funds_zero_still_says_no_funds_not_below_floor(tmp_path):
+    """MUST-NOT-CHANGE guard, green on BOTH trees: the LIVENESS failure keeps
+    its own wording. The floor must not swallow the distinction between "the
+    account is empty" and "the account is small"."""
+    res = broker.FundsAvailableCheck().run(
+        _ctx(tmp_path, probe=_FakeProbe(marg={"available": {"cash": 0.0}})))
+    assert res.status is Status.FAIL
+    assert "no funds available" in res.detail and "startup floor" not in res.detail
+
+
+def test_funds_floor_cannot_be_reached_in_paper(tmp_path):
+    """PARITY, pinned rather than asserted in prose: paper SKIPs before any
+    broker call, so neither predicate is reachable there."""
+    res = broker.FundsAvailableCheck().run(
+        _ctx(tmp_path, mode="paper", probe=_FakeProbe(marg={"available": {"cash": 1.0}})))
+    assert res.status is Status.SKIPPED and "paper mode" in res.detail
+
+
 def test_orders_endpoint(tmp_path):
     assert broker.OrdersEndpointCheck().run(_ctx(tmp_path, probe=_FakeProbe())).status is Status.PASS
     assert broker.OrdersEndpointCheck().run(
