@@ -1467,17 +1467,51 @@ def test_rehydrate_preserves_post_snapshot_equality() -> None:
         )
         snap1 = fm1.get_snapshot()
 
-        fm2 = _initialized_fm(store, balance=100_000.0)
+        # FIX 1 (10-Aug-2026) — FIXTURE CORRECTED TO PRODUCTION SHAPE.
+        #
+        # This previously restarted fm2 on balance=100_000.0, i.e. the SAME
+        # cash fm1 opened with — modelling a broker that does not debit a
+        # delivery purchase. Production is the opposite and it is measured:
+        # on 10-Aug `get_margins` returned net=209.80 while 907.02 of CNC
+        # stock was held (an account of ~1,117). The 6,000 spent on BBB is
+        # GONE from cash; it is a holding.
+        #
+        # Fed the old, un-debited balance, the pre-fix code looked correct
+        # only because two errors cancelled: cash that still contained the
+        # purchase, minus a reservation replayed against it. Feed it the real
+        # balance and the SAME code drives positional_avail negative — which
+        # is exactly what hard-killed the 08:15 boot.
+        #
+        # Only the CNC leg is debited here: whether a blocked INTRADAY margin
+        # also leaves `net` is NOT measured (see fund_manager rehydrate), so
+        # this fixture does not assume it.
+        _cnc_cost = 4 * 1500.0                       # BBB, DELIVERY leverage 1.0
+        fm2 = _initialized_fm(store, balance=100_000.0 - _cnc_cost)
         fm2.rehydrate_from_open_trades()
         snap2 = fm2.get_snapshot()
 
         assert abs(snap1.intraday_used - snap2.intraday_used) < 0.01
         assert abs(snap1.intraday_reserved - snap2.intraday_reserved) < 0.01
-        assert abs(snap1.intraday_avail - snap2.intraday_avail) < 0.01
         assert abs(snap1.positional_used - snap2.positional_used) < 0.01
-        assert abs(snap1.positional_avail - snap2.positional_avail) < 0.01
         assert abs(snap1.daily_realized_pnl - snap2.daily_realized_pnl) < 0.01
+        # TOTAL is preserved EXACTLY: the restart reconstructs the same
+        # account value (cash + the carried holding), which is the property
+        # BL-1 exists to prove. This is a stronger result than before — it now
+        # holds on a realistic balance rather than a compensating one.
         assert abs(snap1.total - snap2.total) < 0.01
+        # AGGREGATE available is preserved too.
+        assert abs((snap1.intraday_avail + snap1.positional_avail)
+                   - (snap2.intraday_avail + snap2.positional_avail)) < 0.01
+        # The per-bucket SPLIT does re-base, and that is inherent to bucketing
+        # by a percentage of CURRENT cash, not something the fix introduces:
+        # once 6,000 of cash becomes stock, 70/30 re-applies to what is left.
+        # Stated as explicit values so a future change cannot drift silently.
+        assert abs(snap2.intraday_avail
+                   - (0.70 * (100_000.0 - _cnc_cost) - 400.0 + 250.0)) < 0.01
+        assert abs(snap2.positional_avail
+                   - 0.30 * (100_000.0 - _cnc_cost)) < 0.01
+        # And the carry is visible rather than silently absorbed.
+        assert abs(snap2.positional_carry - _cnc_cost) < 0.01
         store.close()
     print("  OK rehydrate snapshot equality across restart (BL-1)")
 

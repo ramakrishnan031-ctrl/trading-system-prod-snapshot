@@ -215,6 +215,11 @@ class CapitalSnapshot:
     positional_used: float
     daily_realized_pnl: float
     ts: str   # ISO-8601 IST string
+    # FIX 1: how much of each bucket's reserved+used is margin the broker has
+    # ALREADY removed from `net` (a carried position). Defaulted so existing
+    # positional construction and every current consumer are unaffected.
+    intraday_carry: float = 0.0
+    positional_carry: float = 0.0
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -369,6 +374,29 @@ class FundManager:
         self._positional_reserved: float = 0.0
         self._positional_used: float = 0.0
 
+        # FIX 1 (10-Aug-2026) -- CARRIED-POSITION MARGIN, per bucket.
+        #
+        # The margin for open positions that the BROKER HAS ALREADY REMOVED
+        # from the `net` we re-base on. Buying delivery converts cash into a
+        # holding: the money leaves `net` permanently (measured 10-Aug --
+        # net 209.80 alongside 907.02 of stock, an account of 1,117). A
+        # blocked intraday margin is likewise already out of `net`.
+        #
+        # Without this, re-basing counts such a position TWICE -- once by its
+        # ABSENCE from `net`, once by its PRESENCE as a replayed reservation
+        # deducted from a bucket whose base is a fraction of that same,
+        # already-reduced cash. On 10-Aug that produced
+        # `0.30 * 209.80 - 907.02 = -844.08` and INV6 hard-killed BOTH books
+        # over a position that already existed and could not be undone.
+        #
+        # Set ONLY by rehydrate_from_open_trades (the one place prior-session
+        # positions are replayed) and consumed identically by the boot and by
+        # the 09:15 sync_from_broker, so both end with ONE meaning for these
+        # fields. Zero outside a rehydrated session => byte-identical to the
+        # previous arithmetic.
+        self._intraday_carry: float = 0.0
+        self._positional_carry: float = 0.0
+
         # FIX-051: _daily_pnl removed; read from fm_ledger SQL instead
         self._initialized: bool = False
 
@@ -453,6 +481,9 @@ class FundManager:
             self._positional_avail = broker_balance * self._positional_pct
             self._positional_reserved = 0.0
             self._positional_used = 0.0
+            # FIX 1: a fresh session carries nothing until rehydrate says so.
+            self._intraday_carry = 0.0
+            self._positional_carry = 0.0
             # FIX-051: _daily_pnl removed; read from SQL
             self._initialized = True
 
@@ -1390,6 +1421,15 @@ class FundManager:
             self._assert_initialized()
             old_total = self._total
 
+            # FIX 1: `broker_balance` is CASH. Any position carried into this
+            # session had its margin taken out of that cash by the broker
+            # already, so the account is cash + carry -- and re-basing on cash
+            # alone would deduct the carry a SECOND time, exactly as the
+            # 08:15 boot did on 10-Aug. Identical rule, identical fields as
+            # rehydrate_from_open_trades: ONE semantic, two call sites.
+            carry_total = self._intraday_carry + self._positional_carry
+            new_total = broker_balance + carry_total
+
             # BL-5: write-ahead. SYNC recomputes bucket availables from the
             # authoritative broker balance; the ledger row records the
             # total-level delta so rehydrate can distinguish a sync event
@@ -1398,18 +1438,21 @@ class FundManager:
             self._write_ledger(
                 ts=ts,
                 entry_type="SYNC",
-                amount=broker_balance - old_total,
+                amount=new_total - old_total,
                 bucket="both",
                 balance_before=old_total,
-                balance_after=broker_balance,
-                reason=f"broker sync: {old_total:.2f} -> {broker_balance:.2f}",
+                balance_after=new_total,
+                reason=f"broker sync: {old_total:.2f} -> {new_total:.2f}",
             )
 
             # In-memory mutation
-            self._total = broker_balance
-            # Recompute available = total - reserved - used, split by bucket pct
-            intraday_total = broker_balance * self._intraday_pct
-            positional_total = broker_balance * self._positional_pct
+            self._total = new_total
+            # Recompute available = base - reserved - used, per bucket. The
+            # base is the bucket's share of CASH plus its OWN carry (see
+            # _bucket_base); with no carry this is the previous
+            # `broker_balance * pct` unchanged.
+            intraday_total = self._bucket_base(_INTRADAY_BUCKET)
+            positional_total = self._bucket_base(_POSITIONAL_BUCKET)
 
             # H-1: silent max(0.0, ...) clamps removed. sync_from_broker was the
             # only mutator skipping _check_invariant; bucket overflow (broker
@@ -1424,7 +1467,8 @@ class FundManager:
             )
             self._log.info(
                 "fund_manager.sync_from_broker",
-                extra={"old_total": old_total, "new_total": broker_balance},
+                extra={"old_total": old_total, "new_total": new_total,
+                       "broker_cash": broker_balance, "carry": carry_total},
             )
 
             # C.1 (2026-04-25): collect drift events to publish AFTER lock
@@ -1435,12 +1479,17 @@ class FundManager:
             _pending_publishes: list[CapitalDriftDetected] = []
 
             # CapitalDriftDetected if significant TOTAL change (FM9)
-            delta = broker_balance - old_total
+            # FIX 1: compare like with like. `old_total` already includes the
+            # carry, so differencing it against raw broker CASH would report a
+            # phantom drift of exactly the carry on the first sync after a
+            # rehydrate -- a guaranteed false CAPITAL_DRIFT every morning a
+            # position is held.
+            delta = new_total - old_total
             if abs(delta) > 1.0:
                 _pending_publishes.append(CapitalDriftDetected(
                     source_module="fund_manager",
                     expected=old_total,
-                    actual=broker_balance,
+                    actual=new_total,
                     delta=delta,
                 ))
 
@@ -1559,6 +1608,8 @@ class FundManager:
                 positional_used=self._positional_used,
                 daily_realized_pnl=daily_pnl,
                 ts=now_ist().isoformat(),
+                intraday_carry=self._intraday_carry,
+                positional_carry=self._positional_carry,
             )
 
     def update_unrealized_mtm(self, trade_id: str, unrealized_pnl: float) -> None:
@@ -1726,10 +1777,77 @@ class FundManager:
             replayed_trades = 0
 
             # Phase 1: per-open-trade replay
+            # FIX 1: measure what Phase 1 commits to the POSITIONAL bucket, by
+            # difference. Taken from the partition itself rather than by
+            # re-deriving margins from `trades`, so it cannot disagree with
+            # what the replay actually applied (anomaly skips, qty/price
+            # fallbacks and all).
+            _positional_committed_before = (
+                self._positional_reserved + self._positional_used
+            )
             open_trades = self._store.get_all_open_trades()
             for trade in open_trades:
                 if self._replay_open_trade(trade, anomalies):
                     replayed_trades += 1
+
+            # FIX 1: un-double-count the carry.
+            #
+            # `initialize()` split BROKER CASH into the buckets, and Phase 1
+            # has just deducted these positions' margin from those buckets --
+            # but the broker had ALREADY removed that margin from the cash we
+            # split (the shares are bought; the money is gone from `net`).
+            # Deducting it again is what drove positional_avail to -844.08 on
+            # 10-Aug and hard-killed both books.
+            #
+            # Restore each bucket's available and lift `_total` from CASH to
+            # the true ACCOUNT value. The position is NOT forgotten: it stays
+            # in reserved/used at full value, and the carry is now named, so
+            # the exposure is more visible than before, not less. Net effect
+            # on free capital is ZERO -- the carry enters the base and is
+            # immediately consumed by reserved/used.
+            # SCOPED TO THE POSITIONAL BUCKET, DELIBERATELY -- and this is the
+            # conservative half of the fix, not an oversight.
+            #
+            # MEASURED (10-Aug, live): broker `net` was 209.80 while 907.02 of
+            # CNC stock was held -- an account of ~1,117. Delivery cash is GONE
+            # from `net`; the position is a HOLDING, not a claim on cash.
+            #
+            # NOT MEASURED: whether a blocked INTRADAY margin is likewise out
+            # of `net`. It almost certainly is, but the margins() capture that
+            # would prove it (MONDAY §3.6b) never ran -- no delivery entry
+            # occurred -- so it stays (I), not (P). Correcting intraday on an
+            # inference would change live sizing on a same-day crash restart
+            # using a broker property we have never observed.
+            #
+            # Leaving intraday alone is fail-safe in the only direction that
+            # matters: today it UNDER-states intraday availability, so the
+            # system trades smaller, never larger. Delivery is the reachable,
+            # measured, quarterly-recurring case (SEBI settlement sweep).
+            #
+            # To extend this to intraday: take the §3.6b margins() readings
+            # first, then populate _intraday_carry the same way. The field and
+            # _bucket_base already carry the semantics; only this assignment
+            # changes.
+            self._intraday_carry = 0.0
+            self._positional_carry = (
+                self._positional_reserved + self._positional_used
+                - _positional_committed_before
+            )
+            self._positional_avail += self._positional_carry
+            self._total += self._positional_carry
+            if self._positional_carry:
+                self._log.info(
+                    "fund_manager.rehydrate_carry",
+                    extra={
+                        "positional_carry": self._positional_carry,
+                        "total_after": self._total,
+                        "reason": (
+                            "margin already removed from broker net by the "
+                            "broker; re-added to the bucket base so it is not "
+                            "deducted twice"
+                        ),
+                    },
+                )
 
             # Phase 2: today's realized-PnL carryover. For each CLOSED trade
             # (whose RESERVE+COMMIT were NOT replayed in Phase 1 because the
@@ -2190,6 +2308,32 @@ class FundManager:
 
     # ── bucket helpers ────────────────────────────────────────────────────────
 
+    def _bucket_base(self, bucket: str) -> float:
+        """FIX 1: the capital base a bucket's partitions sum to.
+
+        = its share of BROKER CASH + the margin the broker has already taken
+          out of that cash for THIS bucket's carried positions.
+
+        Its own carry, NOT a pro-rata slice of the total carry: the money is
+        locked in one bucket's stock, so handing the other bucket 70% of it
+        would manufacture capacity out of someone else's holding. (That is
+        also why simply lifting `_total` and keeping `_total * pct` does not
+        work -- on 10-Aug it would have left positional at
+        `0.30 * 1,116.82 - 907.02 = -571.97`, still negative.)
+
+        `_total` is cash + carry, so `_total - carry_total` recovers the cash
+        part, and the bases still sum to `_total` exactly -- which is the
+        global identity `_check_invariant` actually enforces.
+
+        With no carry this returns `self._total * pct`, i.e. the previous
+        expression unchanged.
+        """
+        carry_total = self._intraday_carry + self._positional_carry
+        cash = self._total - carry_total
+        if bucket == _INTRADAY_BUCKET:
+            return cash * self._intraday_pct + self._intraday_carry
+        return cash * self._positional_pct + self._positional_carry
+
     def _bucket_for_intent(self, intent: str) -> str:
         if intent in _INTRADAY_INTENTS:
             return _INTRADAY_BUCKET
@@ -2287,7 +2431,7 @@ class FundManager:
                     margin_available=self._intraday_avail,
                     margin_reserved=self._intraday_reserved,
                     margin_used=self._intraday_used,
-                    cash_floor=self._total * self._intraday_pct,
+                    cash_floor=self._bucket_base(_INTRADAY_BUCKET),
                     realized_pnl_today=0.0,
                     bucket="intraday",
                     mutation_type=mutation_type,
@@ -2301,7 +2445,7 @@ class FundManager:
                     margin_available=self._positional_avail,
                     margin_reserved=self._positional_reserved,
                     margin_used=self._positional_used,
-                    cash_floor=self._total * self._positional_pct,
+                    cash_floor=self._bucket_base(_POSITIONAL_BUCKET),
                     realized_pnl_today=0.0,
                     bucket="positional",
                     mutation_type=mutation_type,
