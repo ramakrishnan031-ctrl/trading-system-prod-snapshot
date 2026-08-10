@@ -20,8 +20,13 @@ THE DEFECT (measured live, 10-Aug-2026 08:15:25.680, HARD_KILL):
     this is an accounting-semantics defect and not ledger corruption.
 
 THE TRIGGER IS PERIODIC, NOT RARE (Rama, 10-Aug): the SEBI quarterly
-settlement sweeps free cash to the bank. The first trading day after it, ANY
-carried CNC position reproduces this. Case A below IS that scenario.
+settlement sweeps free cash to the bank. The Rs8,773.78 that left the account
+over the weekend of 08/09-Aug-2026 (Fri net 8,983.58 -> Mon net 209.80, with
+Friday's realised P&L only -4.26 and the market shut) WAS that settlement --
+not a loss, not a withdrawal, not an error. It is scheduled and recurring, so
+it will keep its next appointment, and the first trading day after it ANY
+carried CNC position reproduces this. Case A below IS that scenario on the
+boot path; case H is the same sweep arriving through the 09:15 sync.
 
 THE RULE, one sentence, applied identically at boot-rehydrate and at the 09:15
 sync:
@@ -31,11 +36,28 @@ sync:
     reserved/used -- so it nets to zero available and stays fully visible as
     exposure.
 
-RED-first: against the pre-fix tree, A/C/D/E fail (A raises
-CapitalStateInconsistent; C/D/E see the double-deducted avail). B, F and G
-pass pre-fix and are MUST-NOT-CHANGE guards -- F pins that intraday is
-untouched, G pins that a genuine negative still kills. Do not delete them as
-"already green".
+RED-first, MEASURED against the pre-fix tree (capital/fund_manager.py at
+f963438, everything else unchanged) rather than asserted:
+
+    A   RED  CapitalStateInconsistent, NEGATIVE_MARGIN_AVAILABLE -1850.00
+    B   RED  total is 10,000 (cash) where the fix makes it 12,000 (account)
+    C   RED  same rehydrate violation as A
+    D   RED  same rehydrate violation as A
+    E   RED  same rehydrate violation as A
+    F   GREEN  <- control
+    F2  RED  the carry fields do not exist pre-fix (AttributeError)
+    G   GREEN  <- control
+    H   RED  CapitalInvariantViolation, NEGATIVE_MARGIN_AVAILABLE -1850.00,
+             raised out of sync_from_broker -- NOT out of the boot
+    H2  RED  at all five sweep depths
+
+F and G are the MUST-NOT-CHANGE guards: F pins that a no-carry session is
+byte-identical to today, G pins that a genuine negative still kills. Do not
+delete them as "already green" -- being green on BOTH trees is the whole
+point of them. Both had to be re-shaped on 10-Aug to earn that: as first
+committed neither could reach its own assertion pre-fix (F died on the new
+snapshot fields, G's setup raised in _boot_next_morning), so the file claimed
+two controls it did not have.
 
 Components -- REAL: StateStore (real schema + fm_ledger), FundManager (real
 initialize / reserve / commit_to_used / rehydrate / sync_from_broker /
@@ -57,7 +79,7 @@ from pathlib import Path
 import pytest
 
 from capital.fund_manager import FundManager
-from core.events import EventBus
+from core.events import CapitalDriftDetected, EventBus
 from core.exceptions import CapitalInvariantViolation, CapitalStateInconsistent
 from core.state_store import StateStore
 from core.time_authority import now_ist
@@ -85,9 +107,9 @@ def _store(tmp: Path) -> StateStore:
     return StateStore(tmp / "t.db", _SCHEMA)
 
 
-def _fm(store: StateStore, balance: float) -> FundManager:
+def _fm(store: StateStore, balance: float, bus: EventBus | None = None) -> FundManager:
     fm = FundManager(
-        state_store=store, bus=EventBus(), logger=logging.getLogger("t_fix1"),
+        state_store=store, bus=bus or EventBus(), logger=logging.getLogger("t_fix1"),
         intraday_bucket_pct=_INTRADAY_PCT, positional_bucket_pct=_POSITIONAL_PCT,
         daily_loss_limit_pct=0.10, leverage_map=_LEV, slm_margin_buffer_pct=0.0,
     )
@@ -147,9 +169,10 @@ def _carry_one_delivery_overnight(store) -> None:
     assert s0.positional_used == pytest.approx(_CARRY, abs=_TOL)
 
 
-def _boot_next_morning(store, broker_cash: float) -> FundManager:
+def _boot_next_morning(store, broker_cash: float,
+                       bus: EventBus | None = None) -> FundManager:
     """Day 1: the 08:15 boot -- fresh FundManager, fresh broker balance."""
-    fm = _fm(store, broker_cash)
+    fm = _fm(store, broker_cash, bus=bus)
     fm.rehydrate_from_open_trades()
     return fm
 
@@ -290,7 +313,14 @@ def test_e_boot_and_0915_sync_agree_exactly():
 
 # ─────────────────────────────────────────────────────────────────────────────
 # F — intraday behaviour BYTE-UNCHANGED when nothing is carried
-#     (MUST-NOT-CHANGE guard: green pre-fix and post-fix)
+#     TRUE MUST-NOT-CHANGE GUARD: green pre-fix AND post-fix, VERIFIED by
+#     running it with capital/fund_manager.py reverted to f963438.
+#
+#     It asserts nothing that did not exist before the fix. The
+#     intraday_carry/positional_carry fields are NEW, so asserting them here
+#     would make this file's only two-tree control die pre-fix with
+#     AttributeError -- i.e. it would stop being a control at all. Those
+#     assertions live in F2 below, which is post-fix-only by construction.
 # ─────────────────────────────────────────────────────────────────────────────
 def test_f_no_carry_is_byte_identical_to_today():
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
@@ -304,8 +334,6 @@ def test_f_no_carry_is_byte_identical_to_today():
             _INTRADAY_PCT * _DAY0_CASH, abs=_TOL)
         assert s.positional_avail == pytest.approx(
             _POSITIONAL_PCT * _DAY0_CASH, abs=_TOL)
-        assert s.intraday_carry == pytest.approx(0.0, abs=_TOL)
-        assert s.positional_carry == pytest.approx(0.0, abs=_TOL)
 
         # The 09:15 sync with no carry is likewise unchanged.
         fm.sync_from_broker(_DAY0_CASH)
@@ -313,18 +341,48 @@ def test_f_no_carry_is_byte_identical_to_today():
         assert s2.total == pytest.approx(_DAY0_CASH, abs=_TOL)
         assert s2.intraday_avail == pytest.approx(
             _INTRADAY_PCT * _DAY0_CASH, abs=_TOL)
+        assert s2.positional_avail == pytest.approx(
+            _POSITIONAL_PCT * _DAY0_CASH, abs=_TOL)
         _assert_global_identity(fm)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# F2 — with nothing carried, both carry fields read zero.
+#      Post-fix-only by construction: pre-fix the fields do not exist.
+# ─────────────────────────────────────────────────────────────────────────────
+def test_f2_no_carry_reports_zero_on_both_carry_fields():
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        store = _store(Path(tmp))
+        fm = _fm(store, _DAY0_CASH)
+        fm.rehydrate_from_open_trades()
+
+        s = fm.get_snapshot()
+        assert s.intraday_carry == pytest.approx(0.0, abs=_TOL)
+        assert s.positional_carry == pytest.approx(0.0, abs=_TOL)
+
+        fm.sync_from_broker(_DAY0_CASH)
+        s2 = fm.get_snapshot()
+        assert s2.intraday_carry == pytest.approx(0.0, abs=_TOL)
+        assert s2.positional_carry == pytest.approx(0.0, abs=_TOL)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # G — a GENUINELY invalid negative-capital case STILL hard-kills
-#     (MUST-NOT-CHANGE guard: the fix must not disarm INV6)
+#     TRUE MUST-NOT-CHANGE GUARD: green pre-fix AND post-fix, VERIFIED by
+#     running it with capital/fund_manager.py reverted to f963438.
+#
+#     It boots on _HIGH_CASH and drives the violation RELATIVE to whatever
+#     the snapshot reports, so the setup itself survives on both trees. An
+#     earlier form booted on _SWEPT_CASH and used an absolute overdraw
+#     figure: pre-fix that setup raised in _boot_next_morning, so the
+#     assertion under test was never reached and the guard could not have
+#     gone red for its own reason.
 # ─────────────────────────────────────────────────────────────────────────────
 def test_g_genuine_negative_capital_still_raises():
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         store = _store(Path(tmp))
         _carry_one_delivery_overnight(store)
-        fm = _boot_next_morning(store, _SWEPT_CASH)
+        fm = _boot_next_morning(store, _HIGH_CASH)
 
         # A wrong-bucket release drives positional_used negative while the
         # global books still balance (the M-C3 "borrow" shape). No carry
@@ -337,12 +395,136 @@ def test_g_genuine_negative_capital_still_raises():
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         store = _store(Path(tmp))
         _carry_one_delivery_overnight(store)
-        fm = _boot_next_morning(store, _SWEPT_CASH)
+        fm = _boot_next_morning(store, _HIGH_CASH)
 
-        # And a bucket genuinely overdrawn against real cash still raises:
-        # reserve beyond the cash-backed split.
-        fm._positional_avail -= _POSITIONAL_PCT * _SWEPT_CASH + 100.0
-        fm._positional_used += _POSITIONAL_PCT * _SWEPT_CASH + 100.0
-        fm._positional_used -= 2 * (_POSITIONAL_PCT * _SWEPT_CASH + 100.0)
+        # And a bucket genuinely overdrawn still raises: move whatever the
+        # bucket has available into `used`, plus 100 more. Expressed against
+        # the reported available so it overdraws on ANY base -- pre-fix
+        # (1,000) and post-fix (3,000) alike.
+        over = fm.get_snapshot().positional_avail + 100.0
+        fm._positional_avail -= over
+        fm._positional_used += over
         with pytest.raises(CapitalInvariantViolation):
             fm._check_invariant("test_overdrawn", "T-G2")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# H — CASE 8, THE SWEEP: cash leaves the account AFTER the carry is established,
+#     and the 09:15 sync is the one that meets it.
+#
+# WHAT THE SWEEP IS (Rama, 10-Aug-2026): the Rs8,773.78 that left the account
+# over the weekend of 08/09-Aug was the SEBI QUARTERLY SETTLEMENT -- the broker
+# returning unused client funds to the bank. NOT a loss, NOT a withdrawal, NOT
+# an error. It is SCHEDULED and RECURRING, so it will keep its next appointment,
+# and every carried CNC position meets it again when it does.
+#
+# THE BOOT HALF OF THIS CASE IS ALREADY CASE A ABOVE -- A establishes the carry
+# at _DAY0_CASH (10,000) and boots the next morning on _SWEPT_CASH (500), which
+# IS "cash leaves after the carry is established", arriving through
+# rehydrate_from_open_trades. What did NOT exist is the other door: case E
+# exercises sync_from_broker only at UNCHANGED cash and then at RISING cash.
+# A FALLING sync was never tested, and sync_from_broker calls _check_invariant
+# too -- so it is an independent firing site for the same mismatch, one that
+# aims at a RUNNING session with the market open rather than at a dead boot.
+#
+# RED-first: fails pre-fix. The pre-fix boot at 10,000 leaves positional_avail
+# at 3,000 - 2,000 = 1,000; the pre-fix sync at 500 recomputes it as
+# 0.30*500 - 2,000 = -1,850 -> INV6 -> CapitalInvariantViolation -> hard_kill of
+# a session that was healthy a moment earlier.
+# ─────────────────────────────────────────────────────────────────────────────
+def test_h_case8_settlement_sweep_lands_on_the_0915_sync():
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        store = _store(Path(tmp))
+        _carry_one_delivery_overnight(store)      # carry bought out of 10,000
+
+        bus = EventBus()
+        drifts: list[CapitalDriftDetected] = []
+        bus.subscribe(CapitalDriftDetected, drifts.append)
+
+        # 08:15 -- an ORDINARY morning. Normal cash, carry rehydrated, nothing
+        # wrong yet. This is the state the sweep arrives into.
+        #
+        # Deliberately a HEALTH precondition, not a post-fix value: it holds on
+        # BOTH trees (pre-fix the boot at high cash survives -- 3,000 - 2,000 =
+        # 1,000), so this test can only go red at the SYNC. Asserting the
+        # post-fix number here would make it fail before reaching the thing it
+        # exists to test.
+        fm = _boot_next_morning(store, _HIGH_CASH, bus=bus)
+        before = fm.get_snapshot()
+        assert before.positional_avail >= -_TOL
+        assert before.intraday_avail >= -_TOL
+        drifts.clear()   # isolate what the SYNC publishes
+
+        # 09:15 -- the settlement sweep has taken the free cash. The carry is
+        # untouched: the shares are still held, so the only operand that moved
+        # is cash. Pre-fix this raises and hard-kills.
+        fm.sync_from_broker(_SWEPT_CASH)
+
+        s = fm.get_snapshot()
+        assert s.positional_avail >= -_TOL, (
+            f"false negative-capital on the sync path: "
+            f"positional_avail={s.positional_avail}"
+        )
+        assert s.intraday_avail >= -_TOL
+        # The partition stays coherent: each bucket gets its share of the cash
+        # that actually exists, and nothing else.
+        assert s.positional_avail == pytest.approx(
+            _POSITIONAL_PCT * _SWEPT_CASH, abs=_TOL)
+        assert s.intraday_avail == pytest.approx(
+            _INTRADAY_PCT * _SWEPT_CASH, abs=_TOL)
+        # Surviving the sweep must not mean forgetting the position.
+        assert s.positional_used == pytest.approx(_CARRY, abs=_TOL)
+        assert s.positional_carry == pytest.approx(_CARRY, abs=_TOL)
+        assert s.total == pytest.approx(_SWEPT_CASH + _CARRY, abs=_TOL)
+        _assert_global_identity(fm)
+
+        # The sweep IS real money leaving the account, so it must STILL be
+        # reported as drift. Surviving it is not the same as not noticing it,
+        # and a fix that silenced this would be the worse defect.
+        fm_drifts = [d for d in drifts if d.source_module == "fund_manager"]
+        assert fm_drifts, "the sweep must still publish CapitalDriftDetected"
+        assert fm_drifts[-1].delta == pytest.approx(
+            _SWEPT_CASH - _HIGH_CASH, abs=_TOL)
+        # But it is NOT a bucket overflow. That escalating source is the false
+        # alarm the fix removes.
+        assert not [d for d in drifts
+                    if d.source_module == "fund_manager_bucket_overflow"], (
+            "bucket overflow published on an ordinary settlement sweep"
+        )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# H2 — the sweep's survival is STRUCTURAL, not a property of these numbers.
+#      Sweep the cash to nearly nothing, on both paths, and the partition is
+#      still coherent -- because the carry enters its own bucket's base and is
+#      immediately consumed by `used`, so positional_avail reduces to
+#      `pct * cash` for ANY cash >= 0. If this ever goes red, the fix is
+#      numeric rather than structural and the report must say so.
+# ─────────────────────────────────────────────────────────────────────────────
+@pytest.mark.parametrize("swept_cash", [0.0, 0.01, 1.0, 137.53, _SWEPT_CASH])
+def test_h2_case8_survives_any_depth_of_sweep_on_both_paths(swept_cash):
+    # the boot path
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        store = _store(Path(tmp))
+        _carry_one_delivery_overnight(store)
+        fm = _boot_next_morning(store, swept_cash)
+        s = fm.get_snapshot()
+        assert s.positional_avail == pytest.approx(
+            _POSITIONAL_PCT * swept_cash, abs=_TOL)
+        assert s.intraday_avail == pytest.approx(
+            _INTRADAY_PCT * swept_cash, abs=_TOL)
+        _assert_global_identity(fm)
+
+    # the 09:15 sync path, arriving into a healthy session
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        store = _store(Path(tmp))
+        _carry_one_delivery_overnight(store)
+        fm = _boot_next_morning(store, _HIGH_CASH)
+        fm.sync_from_broker(swept_cash)
+        s = fm.get_snapshot()
+        assert s.positional_avail == pytest.approx(
+            _POSITIONAL_PCT * swept_cash, abs=_TOL)
+        assert s.intraday_avail == pytest.approx(
+            _INTRADAY_PCT * swept_cash, abs=_TOL)
+        assert s.positional_carry == pytest.approx(_CARRY, abs=_TOL)
+        _assert_global_identity(fm)
