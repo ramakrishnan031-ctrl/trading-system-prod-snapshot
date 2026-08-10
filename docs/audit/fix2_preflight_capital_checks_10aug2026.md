@@ -82,7 +82,19 @@ Run with `scripts/preflight/checks/engine.py` reverted to `645728d`, tests uncha
 | `..._flat_book_passes` | ✅ **control** | ✅ |
 | `..._emits_a_real_nonzero_pct` · `..._div0_states_a_reason` · `..._is_alert_only_never_critical` · `..._degrades_and_never_raises` | ✅ **controls** | ✅ |
 
-**`3 failed / 14 passed` pre-fix · `17 passed` post-fix.**
+**`3 failed / 14 passed` pre-fix · `17 passed` post-fix · all preflight suites `175 passed`.**
+
+**FULL GATE** (Git Bash, `pytest tests/unit tests/integration`, working tree clean):
+**`PYTEST_RC=1` · 9F / 5,562P / 4S · 871.91 s.** ✅ **SET-IDENTICAL to the nine ids recorded at
+`645728d`** (`docs/audit/rulings_1_2_verification_07aug2026.md`) — **0 new, 0 disappeared.**
+⭐ The arithmetic **decomposes** rather than merely adding up: `5,557 baseline + 5 new = 5,562`, and
+the 5 are verified as `test_preflight_engine.py` going **12 → 17** test definitions.
+
+⚠️ **A provisioning trap, diagnosed rather than labelled *"PC-env"*:** a freshly-created worktree
+fails `kite_instruments_fresh` because **`config/instruments.csv` is gitignored (`.gitignore:39`)** —
+it is a downloaded artifact, not a tracked file. Copy it in when creating a worktree. The failing
+check is Phase-A `kite_instruments_fresh`; `capital_deployment` is a Phase-B Engine check and does
+not appear in that run at all. ⛔ **Not a regression, and it would have been the wrong answer.**
 
 ⚠️ **One correction made during the build, recorded rather than quietly fixed:** the
 "ordinary carried book" guard first also asserted the new wording, which made it red on the old tree
