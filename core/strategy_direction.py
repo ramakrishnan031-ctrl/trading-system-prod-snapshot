@@ -6,8 +6,10 @@ consumer (regime, ranking, allocator, analytics, reports, GUI) reads the same ST
 value instead of parsing the `_long`/`_short` name suffix — a rename or a condition change
 never changes a direction, because direction comes from the declared field, never the name.
 
-It also reads/writes the REGISTRATION + HEALTH registry
-(config/strategy_direction_registry.yaml). Three concepts are kept SEPARATE:
+It also reads/writes the REGISTRATION + HEALTH registry, which is SPLIT IN TWO:
+the git-TRACKED SEED (config/strategy_direction_registry.yaml, read-only in
+production) and the RUNTIME STATE (data_store/strategy_direction_registry.yaml,
+gitignored, the only thing production writes). Three concepts are kept SEPARATE:
     direction            LONG | SHORT            (authoritative; mirrors StrategyConfig.direction)
     registration_status  PENDING | CONFIRMED
     health               OK | DIRECTION_CONFLICT

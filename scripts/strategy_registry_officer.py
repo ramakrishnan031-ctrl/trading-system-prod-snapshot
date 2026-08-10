@@ -6,7 +6,9 @@ Mirrors the CRON OFFICER's auto-detect/notify pattern (scripts/cron_officer.py
 
   * enumerate the ACTUAL strategy set  = loaded YAMLs (StrategyConfig) ∪ distinct
     signals.scanner / signals.strategy;
-  * diff against config/strategy_direction_registry.yaml;
+  * diff against the runtime state (data_store/strategy_direction_registry.yaml),
+    falling back to the git-tracked SEED (config/strategy_direction_registry.yaml)
+    only while no state file exists yet — the first run after a deploy;
   * register each UNSEEN strategy PENDING (direction = StrategyConfig.direction) and NOTIFY
     (Telegram + email) with evidence;
   * advance PENDING -> CONFIRMED once the strategy has its first FILLED trade (silent);
