@@ -187,6 +187,92 @@ def test_capital_deployment_degrades_and_never_raises(tmp_path):
     assert res.status is Status.WARN and "unreadable" in res.detail
 
 
+# ── capital_deployment: FIX 2 -- it had no predicate at all ──────────────
+# RED-first. Against 645728d these two go red because the check returned
+# _passed() for ANY value; the three guards below them are green on BOTH
+# trees and must stay that way.
+
+def test_capital_deployment_the_live_10aug_shape_is_not_green(tmp_path):
+    """THE MEASURED CONDITION, with the live numbers of 10-Aug-2026.
+
+    Broker net at the 08:15 boot was 209.80 while two CNC positions carried
+    446.106 + 460.91632 = 907.02 of margin. The check printed
+    "capital deployed 432.3%" and PASSED, on the same boot the capital
+    invariant hard-killed on NEGATIVE_MARGIN_AVAILABLE -844.08.
+
+    432.3% is not a deployment level: the denominator is CASH and the
+    numerator includes money already converted into a holding. The check must
+    say so rather than print it as a percentage.
+    """
+    cash, legs = 209.80, (446.106, 460.91632)
+    db = _db_live_capital(tmp_path, opening=cash, open_margin=legs)
+    res = engine.CapitalDeploymentCheck().run(_ctx(tmp_path, db))
+
+    assert res.status is Status.WARN, (
+        f"the live 10-Aug shape is still reported as {res.status}: {res.detail}")
+    # Derived from the operands, not transcribed: the value is whatever these
+    # numbers make it, and the point is the STATUS, not the digits.
+    assert res.metrics["capital_deployed_pct"] == round(sum(legs) / cash * 100, 2)
+    assert "432.3%" in res.detail          # what the live run printed
+    # It must name the bound, both bases, and the cause -- not just go amber.
+    assert "over 100%" in res.detail
+    assert "opening cash" in res.detail
+    assert "different bases" in res.detail and "CARRIED" in res.detail
+    # And it stays alert-only: a WARN can never escalate a run to CRITICAL.
+    assert engine.CapitalDeploymentCheck.criticality is Criticality.WARN
+
+
+def test_capital_deployment_warns_the_moment_used_passes_opening(tmp_path):
+    """The bound is the capital identity, not a tuned number: strictly above
+    100% warns, exactly 100% does not."""
+    over = _db_live_capital(tmp_path / "over", opening=1000.0,
+                            open_margin=(1000.01,))
+    assert engine.CapitalDeploymentCheck().run(
+        _ctx(tmp_path / "over", over)).status is Status.WARN
+
+    exact = _db_live_capital(tmp_path / "exact", opening=1000.0,
+                             open_margin=(1000.0,))
+    res = engine.CapitalDeploymentCheck().run(_ctx(tmp_path / "exact", exact))
+    assert res.status is Status.PASS
+    assert res.metrics["capital_deployed_pct"] == 100.0
+
+
+def test_capital_deployment_an_ordinary_carried_book_still_passes(tmp_path):
+    """MUST-NOT-CHANGE guard: green pre-fix AND post-fix, VERIFIED by running
+    it with scripts/preflight/checks/engine.py reverted to 645728d.
+
+    A carried delivery position is NORMAL -- it must not alarm merely for
+    existing. 2,000 of carry against 10,000 of cash is 20% and says nothing.
+
+    Status and metrics only. An earlier form also asserted the new wording
+    here, which made the guard red on the old tree for a cosmetic reason --
+    i.e. it stopped being a two-tree control. The wording is pinned below
+    instead."""
+    db = _db_live_capital(tmp_path, opening=10000.0, open_margin=(2000.0,),
+                          pending_margin=(500.0,))
+    res = engine.CapitalDeploymentCheck().run(_ctx(tmp_path, db))
+    assert res.status is Status.PASS
+    assert res.metrics["capital_deployed_pct"] == 20.0
+
+
+def test_capital_deployment_pass_text_names_its_base(tmp_path):
+    """Every percentage carries its base or it is not a number. Post-fix-only
+    by construction: it pins wording the old check did not have."""
+    db = _db_live_capital(tmp_path, opening=10000.0, open_margin=(2000.0,))
+    res = engine.CapitalDeploymentCheck().run(_ctx(tmp_path, db))
+    assert res.status is Status.PASS
+    assert "of opening cash" in res.detail
+
+
+def test_capital_deployment_flat_book_passes(tmp_path):
+    """MUST-NOT-CHANGE: green pre-fix and post-fix. Nothing open, nothing
+    said."""
+    db = _db_live_capital(tmp_path, opening=10000.0)
+    res = engine.CapitalDeploymentCheck().run(_ctx(tmp_path, db))
+    assert res.status is Status.PASS
+    assert res.metrics["capital_deployed_pct"] == 0.0
+
+
 # ── ntp strict (Phase B escalation) ──────────────────────────────────────────────
 def test_ntp_strict(tmp_path, monkeypatch):
     chk = engine.NtpStrictCheck()

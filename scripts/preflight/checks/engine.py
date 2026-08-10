@@ -209,6 +209,43 @@ class CapitalDeploymentCheck(Check):
     REMAINING cash rather than the total, which grows without bound as the book
     fills. It never emitted a value in production (capital_snapshot has 0 rows),
     so no series and no consumer holds the old meaning.
+
+    FIX 2 (10-Aug-2026) -- IT HAD NO PREDICATE AT ALL. Every reachable path
+    below the div-0 guard returned _passed(), for any value. On 10-Aug it
+    printed "capital deployed 432.3%" and PASSED, on the same boot the capital
+    invariant hard-killed. A missing check leaves you uncertain; a tautological
+    one leaves you WRONGLY certain.
+
+    WHAT 432.3% ACTUALLY IS, and why no threshold was invented for it:
+    `opening` is the INIT row's balance_after, which fund_manager.initialize()
+    writes as broker CASH. `margin_used` sums trades.margin_reserved over
+    OPEN/PARTIAL/EXITING -- which, for a carried delivery position, is money the
+    broker has ALREADY converted into a holding and removed from that cash.
+    Numerator and denominator therefore sit on DIFFERENT BASES, and 432.3% is
+    that mismatch printed as a number, not a deployment level.
+
+    So the predicate is the bound the system ALREADY ENFORCES, not a new risk
+    appetite: every reservation is made against a bucket, the buckets partition
+    the same total (intraday_bucket_pct + positional_bucket_pct = 1.0), and
+    _check_invariant holds avail+reserved+used == cash_floor with all four
+    non-negative. Deployed margin can therefore NEVER exceed the capital it was
+    reserved from. `used > opening` is reachable ONLY when `used` counts a
+    position whose money is not in `opening` -- i.e. a carry. NO NUMBER IS
+    INVENTED HERE: the bound is 100%, and 100% is the sum of the split.
+
+    Still Criticality.WARN, deliberately: the 25-Jul ruling above stands
+    unchanged. This can report, and can never escalate a run to CRITICAL or
+    block trading. What changes is only that it CAN now be non-green.
+
+    NOT ADDRESSED HERE, and named rather than silently left: the printed
+    percentage still has a cash denominator, so it under-states the account
+    whenever a delivery position is carried. Correcting the base means
+    re-deriving Fix 1's carry rule inside preflight -- a SECOND site for one
+    semantic, which is the defect Fix 1 removed -- and it would need a product
+    split that trades cannot answer (there is no trades.product column; it lives
+    on orders via ENTRY-leg join, and a missing ENTRY row reads NULL). The
+    operands are printed with their bases instead, so the number is never read
+    as something it is not.
     """
 
     name = "capital_deployment"
@@ -240,13 +277,33 @@ class CapitalDeploymentCheck(Check):
                 "(non-positive or NaN)", margin_used=round(used, 2))
 
         pct = used / opening * 100.0
-        return self._passed(
-            f"capital deployed {pct:.1f}% (margin_used ₹{used:,.0f} / total ₹{opening:,.0f}; "
-            f"pending ₹{cap['margin_reserved']:,.0f})",
+        metrics = dict(
             capital_deployed_pct=round(pct, 2),
             margin_used=round(used, 2),
             margin_reserved=round(cap["margin_reserved"], 2),
             total_capital=round(opening, 2))
+
+        # FIX 2: the bound the capital invariant already enforces. Deployed
+        # margin cannot exceed the capital it was reserved from, so > 100% is
+        # not "heavily deployed" -- it is the two operands disagreeing about
+        # which base they are on. Say that, rather than printing a percentage
+        # of something the numerator is not a percentage of.
+        if used > opening:
+            return self._warn(
+                f"capital deployed {pct:.1f}% of opening CASH — over 100%, which the "
+                f"capital invariant makes impossible for positions reserved from this "
+                f"session (margin_used ₹{used:,.0f} > opening cash ₹{opening:,.0f}; "
+                f"pending ₹{cap['margin_reserved']:,.0f}). The excess is margin the "
+                f"broker already removed from cash for a CARRIED position, so these two "
+                f"figures are on different bases and the ratio is not a deployment level.",
+                **metrics)
+
+        # Every percentage carries its base or it is not a number.
+        return self._passed(
+            f"capital deployed {pct:.1f}% of opening cash "
+            f"(margin_used ₹{used:,.0f} / opening cash ₹{opening:,.0f}; "
+            f"pending ₹{cap['margin_reserved']:,.0f})",
+            **metrics)
 
 
 class NtpStrictCheck(Check):
