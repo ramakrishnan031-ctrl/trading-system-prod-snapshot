@@ -26,7 +26,23 @@ VALID_DIRECTIONS = {"LONG", "SHORT"}
 VALID_STATUSES = {"PENDING", "CONFIRMED"}
 VALID_HEALTH = {"OK", "DIRECTION_CONFLICT"}
 
-DEFAULT_REGISTRY_PATH = "config/strategy_direction_registry.yaml"
+# SEED (git-TRACKED, read-only in production) vs STATE (runtime, gitignored).
+#
+# The officer used to write its runtime state straight into the tracked config file.
+# The deployed work tree then differed from HEAD permanently, so system_manager's
+# `deployed_tree_check` raised a violation and its severity rule turned the whole EOD
+# report CRITICAL every day — an alarm that is always red is one nobody reads.
+#
+# ⛔ The tracked file is now a SEED and production NEVER writes it. State lives under
+# data_store/, which is already gitignored, so the deploy hook's `git checkout -f`
+# leaves it alone. ⛔ Untracking the seed instead was MEASURED to DELETE the live file
+# on the first deploy (checkout -f removes a path that was tracked at the old HEAD),
+# which is why the seed stays tracked rather than being ignored.
+DEFAULT_SEED_PATH = "config/strategy_direction_registry.yaml"
+DEFAULT_STATE_PATH = "data_store/strategy_direction_registry.yaml"
+
+# Back-compat alias: the pre-split name always meant the tracked file.
+DEFAULT_REGISTRY_PATH = DEFAULT_SEED_PATH
 
 
 # ── Canonical direction accessor (retires the name-suffix parse) ────────────────
@@ -63,24 +79,53 @@ def canonical_direction(name: str, config_dir: str | Path = "config") -> Optiona
 
 # ── Registration + health registry I/O ─────────────────────────────────────────
 
-def load_registry(path: str | Path = DEFAULT_REGISTRY_PATH) -> Dict[str, dict]:
-    """Return ``{name: {direction, registration_status, health, first_seen, evidence}}``.
-    Missing/unreadable → ``{}`` (fail-safe; the officer then treats every strategy as new)."""
-    p = Path(path)
+def _read_registry(p: Path) -> Optional[Dict[str, dict]]:
+    """Parse one registry YAML. ``None`` when it is missing or unreadable — distinct from
+    ``{}``, which is a file that parsed and legitimately holds no strategies."""
     if not p.is_file():
-        return {}
+        return None
     try:
         with open(p, encoding="utf-8") as fh:
             data = yaml.safe_load(fh) or {}
         strategies = data.get("strategies", {}) or {}
         return {str(k): dict(v or {}) for k, v in strategies.items()}
     except Exception:
-        return {}
+        return None
 
 
-def save_registry(registry: Dict[str, dict], path: str | Path = DEFAULT_REGISTRY_PATH) -> None:
-    """Atomically write the registry YAML. Called ONLY by the daily officer (owns writes)."""
+def load_registry(path: str | Path = DEFAULT_STATE_PATH,
+                  seed_path: str | Path | None = None) -> Dict[str, dict]:
+    """Return ``{name: {direction, registration_status, health, first_seen, evidence}}``.
+
+    ``path`` is the runtime STATE file. ``seed_path``, when given, is the git-tracked
+    SEED used ONLY as a fallback while the state file does not yet exist — the first
+    run on a freshly deployed machine. That fallback is what makes the split lossless:
+    the seed carries the original ``first_seen`` dates and the full row set, so a
+    migrating officer re-announces nothing as NEW and no provenance is lost.
+
+    ⛔ The seed is a FALLBACK, never an override: once state exists it wins outright,
+    otherwise every deploy would silently revert converged runtime state.
+
+    Missing/unreadable, with no usable seed → ``{}`` (fail-safe; the officer then treats
+    every strategy as new). ``seed_path`` is opt-in, so existing callers are unchanged.
+    """
+    found = _read_registry(Path(path))
+    if found is not None:
+        return found
+    if seed_path is not None:
+        seeded = _read_registry(Path(seed_path))
+        if seeded is not None:
+            return seeded
+    return {}
+
+
+def save_registry(registry: Dict[str, dict], path: str | Path = DEFAULT_STATE_PATH) -> None:
+    """Atomically write the registry YAML. Called ONLY by the daily officer (owns writes).
+
+    ⛔ Writes STATE, never the tracked seed. The parent is created because data_store/ is
+    gitignored, so a freshly checked-out tree may not carry it."""
     p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(p.suffix + ".tmp")
     with open(tmp, "w", encoding="utf-8") as fh:
         yaml.safe_dump({"strategies": dict(sorted(registry.items()))}, fh,

@@ -36,7 +36,7 @@ load_dotenv(_ROOT / ".env")
 from core import db_connect
 from core.logger import get_logger
 from core.strategy_direction import (
-    DEFAULT_REGISTRY_PATH, build_direction_map, load_registry, save_registry,
+    DEFAULT_SEED_PATH, DEFAULT_STATE_PATH, build_direction_map, load_registry, save_registry,
 )
 from core.time_authority import today_ist
 
@@ -217,11 +217,15 @@ def _notify(new_registered: List[str], new_conflicted: List[str],
 # ── Orchestration ───────────────────────────────────────────────────────────────
 
 def run(config_dir: Path, db_path: Path, registry_path: Path, today_iso: str, *,
+        seed_path: Optional[Path] = None,
         dry_run: bool = False, notify_fn: Optional[Callable] = None) -> dict:
     """Detect/register/confirm/conflict for one run. Returns a summary (also used by tests).
-    Writes the registry + notifies only when NOT dry_run."""
+    Writes the registry + notifies only when NOT dry_run.
+
+    ``registry_path`` is the runtime STATE file (gitignored). ``seed_path`` is the
+    git-tracked SEED, read ONLY when no state exists yet — the first run after a deploy."""
     direction_map = build_direction_map(config_dir)
-    registry = load_registry(registry_path)
+    registry = load_registry(registry_path, seed_path=seed_path)
 
     signal_names: Set[str] = set()
     filled: Set[str] = set()
@@ -260,7 +264,8 @@ def _parse_args(argv=None):
     p = argparse.ArgumentParser(prog="strategy_registry_officer")
     p.add_argument("--config-dir", default="config")
     p.add_argument("--db-path", default=str(_DEFAULT_DB))
-    p.add_argument("--registry", default=None, help="registry YAML (default: <config-dir>/strategy_direction_registry.yaml)")
+    p.add_argument("--registry", default=None,
+                   help="runtime STATE YAML (default: data_store/strategy_direction_registry.yaml)")
     p.add_argument("--dry-run", action="store_true")
     return p.parse_args(argv)
 
@@ -268,9 +273,13 @@ def _parse_args(argv=None):
 def main(argv=None) -> int:
     args = _parse_args(argv)
     config_dir = Path(args.config_dir)
-    registry_path = Path(args.registry) if args.registry else config_dir / Path(DEFAULT_REGISTRY_PATH).name
+    # STATE goes to data_store/ (gitignored) so an ordinary run never dirties the
+    # git-tracked config tree; the tracked SEED is read-only and fallback-only.
+    registry_path = (Path(args.registry) if args.registry
+                     else _ROOT / "data_store" / Path(DEFAULT_STATE_PATH).name)
+    seed_path = config_dir / Path(DEFAULT_SEED_PATH).name
     summary = run(config_dir, Path(args.db_path), registry_path, today_ist(),
-                  dry_run=args.dry_run)
+                  seed_path=seed_path, dry_run=args.dry_run)
     _log.info("strategy_registry_officer done", extra=summary)
     return 0
 
