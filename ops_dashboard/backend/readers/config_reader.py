@@ -104,6 +104,38 @@ def get_scan_webhook_map(cfg: dict) -> dict:
     return out
 
 
+def get_min_pass_score(cfg: dict) -> Optional[int]:
+    """The configured minimum score a signal must reach to be eligible.
+
+    Screen-04 labels this the **System Score** and shows it beside each signal's
+    own score. It is a per-signal FALLBACK only: the authoritative value is
+    `screener_results.eligible_score` (the threshold that actually applied to
+    that signal). This is read for rows written before that column existed.
+
+    Source order: config/scoring_weights.yaml `min_pass_score` (the scoring
+    config the screener uses), then system_config.yaml. Returns None if neither
+    is readable — the UI then renders '—' rather than a guessed number.
+    """
+    path = os.path.join(cfg["paths"]["config_dir"], "scoring_weights.yaml")
+    if os.path.isfile(path):
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                raw = yaml.safe_load(fh) or {}
+            v = raw.get("min_pass_score")
+            if v is not None:
+                return int(v)
+        except (OSError, yaml.YAMLError, TypeError, ValueError):
+            pass
+    try:
+        sysconf = get_system_config(cfg, "")
+        v = dotted(sysconf, "scoring.min_pass_score")
+        if v is None:
+            v = sysconf.get("min_pass_score") if isinstance(sysconf, dict) else None
+        return int(v) if v is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 def get_cron_jobs(cfg: dict) -> dict:
     """Parse config/cron_registry.yaml read-only → {job_name: {monitored,
     enabled, cron_expression, marker_name}} (M11 expected-heartbeat join).

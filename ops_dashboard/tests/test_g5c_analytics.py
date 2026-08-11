@@ -12,7 +12,8 @@ from datetime import timedelta
 from backend.readers import db_reader
 from backend.services import analytics_period, freshness
 
-from conftest import TODAY, YDAY, TENDAYS   # noqa: E402
+from conftest import (TODAY, YDAY, TENDAYS,                    # noqa: E402
+                      assert_signal_score_confined_to_screen04)
 
 
 # ── Period layer (anti-hallucination anchor) ─────────────────────────────────
@@ -160,9 +161,4 @@ def test_pinned_shapes_frozen_after_g5c(client):
 
 def test_no_signal_score_after_g5c():
     root = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend")
-    for dp, _dirs, files in os.walk(root):
-        for f in files:
-            if f.endswith(".min.js"):
-                continue
-            with open(os.path.join(dp, f), encoding="utf-8", errors="ignore") as fh:
-                assert "signal score" not in fh.read().lower(), os.path.join(dp, f)
+    assert_signal_score_confined_to_screen04(root)

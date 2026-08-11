@@ -11,6 +11,8 @@ import os
 from backend.readers import db_reader
 from backend.services import strategy_tower
 
+from conftest import assert_signal_score_confined_to_screen04   # noqa: E402
+
 
 # ── Additive readers — exact values on the seed ──────────────────────────────
 def test_scanner_for_trades_join(gui_config):
@@ -113,12 +115,7 @@ def test_honest_gap_strings_rendered(client):
 # ── ExportButton still OFF everywhere; no "Signal Score" after G5b work ──────
 def test_export_off_and_no_signal_score():
     root = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend")
-    for dp, _dirs, files in os.walk(root):
-        for f in files:
-            if f.endswith(".min.js"):
-                continue
-            with open(os.path.join(dp, f), encoding="utf-8", errors="ignore") as fh:
-                assert "signal score" not in fh.read().lower(), os.path.join(dp, f)
+    assert_signal_score_confined_to_screen04(root)
 
 
 def test_export_button_disabled_on_g5b_screens(client):

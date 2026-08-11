@@ -41,6 +41,20 @@ def get_signals():
         strategy=(request.args.get("strategy") or "").strip() or None,
         family=family,
     )
+    # Screen-04 shows TWO different quantities and they are not interchangeable:
+    #   signal_score = this signal's own score  (screener_results.score)
+    #   system_score = the minimum it had to reach (screener_results.eligible_score,
+    #                  falling back to the configured min_pass_score)
+    scores = db_reader.signal_scores(cfg, [r.get("signal_id") for r in rows])
+    min_pass = config_reader.get_min_pass_score(cfg)
+    for r in rows:
+        s = scores.get(r.get("signal_id")) or {}
+        r["signal_score"] = s.get("signal_score")
+        sys_score = s.get("system_score")
+        r["system_score"] = min_pass if sys_score is None else sys_score
+        # Rejections show the score that was reached vs the score required.
+        r["reject_score"] = r["signal_score"] if r.get("family") == "rejected" else None
+        r["required_score"] = r["system_score"] if r.get("family") == "rejected" else None
     # Denominator strip (the ~82% pre-insert drop stays visible).
     funnel = db_reader.webhook_funnel(cfg, today)
     return jsonify({
@@ -54,6 +68,11 @@ def get_signals():
             "note": "received/accepted/rejected = webhook_audit aggregates "
                     "(pre-insert dupes inside rejected; per-signal dupe detail = W9)",
         },
+        # Whole-day lifecycle counts for the KPI deck — computed over every
+        # stored signal, NOT over the capped `rows` below.
+        "counts": db_reader.signal_kpi_counts(cfg, today),
+        "min_pass_score": min_pass,
+        "row_cap": db_reader.list_signals_cap(),
         "count": len(rows),
         "rows": rows,
     })

@@ -826,3 +826,249 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 .strat-page .stlogic-item { display: inline-flex; align-items: center; gap: 7px; }
 .strat-page .stlogic-pill { padding: 2px 8px; font-size: 10.5px; font-weight: 700; border-radius: 5px; }
 .strat-page .stlogic-sep { color: var(--dim); }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   SCREEN-04 — SIGNALS (Birthplace of every trade)
+   Continues the Screen-02/03 language: .dash-page shell, .kc KPI cards,
+   .panel/.mc-panel sections, .flt-* filters, .st-* table + pager. Only the
+   screen-specific additions live here. Data text stays >= var(--dt-cell)/13px.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* Title block (mirrors .strat-page). The top margin is the deliberate breathing
+   space between the global summary-bar and the first section, on the same
+   12/14/16px rhythm the other screens use. */
+.sig-page .pg-title { display: flex; align-items: baseline; gap: 12px; margin: 12px 2px 14px; }
+.sig-page .pg-title h1 { font-size: 23px; font-weight: 800; letter-spacing: .02em; margin: 0; }
+.sig-page .pg-sub { font-size: 13px; color: var(--muted); }
+
+/* 9 lifecycle KPI cards */
+.sig-page .sk-deck { display: grid; grid-template-columns: repeat(9, 1fr); gap: 10px; margin-bottom: 14px; }
+@media (max-width: 1360px) { .sig-page .sk-deck { grid-template-columns: repeat(5, 1fr); } }
+@media (max-width: 1100px) { .sig-page .sk-deck { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 760px)  { .sig-page .sk-deck { grid-template-columns: repeat(2, 1fr); } }
+.sig-page .kc { min-height: 96px; gap: 7px; }
+.sig-page .kc-val { font-size: 26px; }
+.sig-page .kc-label { font-size: 11.5px; letter-spacing: .04em; text-transform: uppercase; }
+/* two tones the shared deck did not need before */
+.sig-page .kc-muted { border-top-color: var(--gray); }
+.sig-page .kc-muted .kc-ic { background: rgba(var(--t-gray), .3); color: var(--muted); }
+.sig-page .kc-muted .kc-val { color: var(--muted); }
+.sig-page .kc-purple { border-top-color: var(--purple); }
+.sig-page .kc-purple .kc-ic { background: rgba(var(--t-purple), .18); color: var(--purple); }
+.sig-page .kc-purple .kc-val { color: var(--purple); }
+
+/* Workspace: table column + detail rail */
+.sig-page .sig-work { display: grid; grid-template-columns: minmax(0, 1fr) 302px;
+  gap: 12px; align-items: start; margin-bottom: 14px; }
+@media (max-width: 1400px) { .sig-page .sig-work { grid-template-columns: minmax(0, 1fr); } }
+.sig-page .sig-left { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+
+/* Filters — two rows of four, actions pinned right */
+.sig-page .sig-flt { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px 14px; }
+@media (max-width: 1100px) { .sig-page .sig-flt { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.sig-page .flt-dr { display: flex; align-items: center; gap: 6px; }
+.sig-page .flt-dr .flt-c { min-width: 0; flex: 1 1 0; }
+.sig-page .flt-to { font-size: 12px; color: var(--dim); flex: 0 0 auto; }
+.sig-page .flt-reload { flex: 0 0 auto; width: 26px; height: 26px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--panel2); color: var(--muted);
+  cursor: pointer; font-size: 13px; line-height: 1; }
+.sig-page .flt-reload:hover { color: var(--text); border-color: var(--blue); }
+.sig-page .sig-flt-actions { display: flex; align-items: flex-end; justify-content: flex-end;
+  gap: 9px; grid-column: 4; }
+@media (max-width: 1100px) { .sig-page .sig-flt-actions { grid-column: 2; } }
+
+/* Table toolbar — segmented rows-per-page + export */
+.sig-page .sig-toolbar { display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 2px 0 10px; }
+.sig-page .sig-rpp { display: inline-flex; align-items: center; gap: 7px; }
+.sig-page .sig-rpp-k { font-size: 12.5px; color: var(--muted); }
+.sig-page .sig-rpp-b { min-width: 38px; padding: 4px 9px; font-size: 12.5px; font-weight: 600;
+  border: 1px solid var(--border); background: var(--panel2); color: var(--muted);
+  border-radius: 6px; cursor: pointer; font-variant-numeric: tabular-nums; }
+.sig-page .sig-rpp-b:hover { color: var(--text); }
+.sig-page .sig-rpp-b.is-on { background: rgba(var(--t-blue), .18); border-color: var(--blue); color: #7cb2ff; }
+
+/* Main table — the .st-* base rules are scoped to .strat-page, so Screen-04
+   restates them (same values) and then tightens density: 15 columns have to
+   fit the mockup's width without a horizontal scrollbar. */
+.sig-page .st-toolbar { display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; margin-bottom: 12px; }
+.sig-page .st-tbl { width: 100%; border-collapse: collapse; font-size: var(--dt-cell); }
+/* Headers WRAP (the mockup stacks "System / Score") — that is what keeps 15
+   columns inside the viewport while the data text stays at the 13px floor. */
+.sig-page .st-tbl th { text-align: left; padding: 8px 5px; font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .02em; color: var(--dim); line-height: 1.25;
+  border-bottom: 1px solid var(--border); white-space: normal; cursor: pointer;
+  user-select: none; vertical-align: bottom; }
+.sig-page .st-tbl th.rt { max-width: 62px; }
+.sig-page .st-tbl th.rt { text-align: right; }
+.sig-page .st-tbl th:hover { color: var(--muted); }
+.sig-page .st-arw { margin-left: 3px; color: var(--blue); }
+/* Drag-to-reorder affordances. The grip only appears on hover so the header
+   row stays as quiet as the approved mockup. */
+.sig-page .st-grip { display: inline-block; width: 0; overflow: hidden; opacity: 0;
+  color: var(--dim); font-size: 10px; vertical-align: 1px;
+  transition: width .12s ease, opacity .12s ease; }
+.sig-page .st-tbl th:hover .st-grip { width: 11px; opacity: .8; }
+.sig-page .st-tbl th.is-drag { opacity: .45; }
+.sig-page .st-tbl th.is-over { box-shadow: inset 2px 0 0 var(--blue); color: var(--muted); }
+.sig-page .st-tbl th { cursor: grab; }
+.sig-page .st-tbl th:active { cursor: grabbing; }
+.sig-page .sig-colreset { margin-left: 10px; padding: 3px 9px; font-size: 11.5px;
+  border: 1px solid var(--border); background: transparent; color: var(--muted);
+  border-radius: 6px; cursor: pointer; }
+.sig-page .sig-colreset:hover { color: var(--text); border-color: var(--blue); }
+.sig-page .st-tbl td { padding: 7px 5px; border-bottom: 1px solid var(--border-soft);
+  white-space: nowrap; }
+.sig-page .st-tbl th { padding-left: 5px; padding-right: 5px; }
+/* Long free-text columns are the ones that push the 15-column table past the
+   viewport, so they ellipsize; the full value stays in the row's title. */
+.sig-page .st-tbl td:nth-child(4),
+.sig-page .st-tbl td:nth-child(5) { max-width: 104px; overflow: hidden; text-overflow: ellipsis; }
+.sig-page .st-tbl .rt { text-align: right; font-variant-numeric: tabular-nums; }
+.sig-page .st-foot { display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; margin-top: 12px; }
+.sig-page .st-count { font-size: 12.5px; color: var(--muted); }
+.sig-page .st-pager { display: flex; align-items: center; gap: 6px; }
+.sig-page .st-pg { width: 30px; height: 30px; border-radius: 7px; background: var(--card);
+  color: var(--text); border: 1px solid var(--card-bd); cursor: pointer; font-size: 14px; line-height: 1; }
+.sig-page .st-pg[disabled] { opacity: .45; cursor: not-allowed; }
+.sig-page .btn-export { display: inline-flex; align-items: center; gap: 7px; height: 32px;
+  padding: 0 13px; font-size: 12.5px; font-weight: 600; border-radius: 8px; color: var(--pos);
+  background: rgba(var(--t-green), .12); border: 1px solid rgba(var(--t-green), .45); cursor: pointer; }
+.sig-page .btn-export[disabled] { opacity: .9; cursor: not-allowed; }
+.sig-page .ev-empty { padding: 26px 10px; text-align: center; color: var(--dim); font-size: 13px; }
+.sig-page .sig-row { cursor: pointer; }
+.sig-page .sig-row:hover { background: rgba(var(--t-blue), .06); }
+.sig-page .sig-row.is-sel { background: rgba(var(--t-blue), .12);
+  box-shadow: inset 2px 0 0 var(--blue); }
+.sig-page .sig-sym { font-weight: 700; letter-spacing: .01em; }
+.sig-page .sig-why { max-width: 116px; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; color: var(--muted); }
+.sig-page .sig-cap { padding: 9px 12px; font-size: 12px; color: var(--orange);
+  border-top: 1px solid var(--border); }
+
+/* Trade-type pill */
+.sig-page .tt-pill { display: inline-block; padding: 2px 8px; font-size: 11.5px; font-weight: 600;
+  border-radius: 5px; letter-spacing: .01em; }
+.sig-page .tt-Intraday { color: #7cb2ff; background: rgba(var(--t-blue), .16); }
+.sig-page .tt-Delivery { color: var(--purple); background: rgba(var(--t-purple), .18); }
+.sig-page .tt-none { color: var(--dim); background: transparent; }
+
+/* Direction */
+.sig-page .dir-txt { font-weight: 600; font-size: 12.5px; }
+.sig-page .dir-long  { color: var(--pos); }
+.sig-page .dir-short { color: var(--neg); }
+.sig-page .dir-none  { color: var(--dim); }
+
+/* Status pill (derived family) */
+.sig-page .sg-pill { display: inline-block; padding: 3px 9px; font-size: 11px; font-weight: 700;
+  letter-spacing: .03em; border-radius: 6px; }
+.sig-page .sg-accepted   { color: var(--pos);    background: rgba(var(--t-green), .16); }
+.sig-page .sg-rejected   { color: var(--neg);    background: rgba(var(--t-red), .16); }
+.sig-page .sg-duplicated { color: var(--muted);  background: rgba(var(--t-gray), .32); }
+.sig-page .sg-expired    { color: var(--dim);    background: rgba(var(--t-gray), .26); }
+
+/* Trade-result pill + legend dot share one palette */
+.sig-page .rs-pill { display: inline-block; padding: 3px 9px; font-size: 11px; font-weight: 700;
+  letter-spacing: .02em; border-radius: 6px; white-space: nowrap; }
+.sig-page .rs-received      { color: var(--pos);    background: rgba(var(--t-green), .12); }
+.sig-page .rs-accepted      { color: var(--pos);    background: rgba(var(--t-green), .15); }
+.sig-page .rs-rejected      { color: var(--neg);    background: rgba(var(--t-red), .15); }
+.sig-page .rs-duplicate     { color: var(--muted);  background: rgba(var(--t-gray), .3); }
+.sig-page .rs-expired       { color: var(--dim);    background: rgba(var(--t-gray), .24); }
+.sig-page .rs-order-created { color: var(--orange); background: rgba(var(--t-orange), .16); }
+.sig-page .rs-order-filled  { color: #7cb2ff;      background: rgba(var(--t-blue), .16); }
+.sig-page .rs-sl-hit        { color: var(--neg);    background: rgba(var(--t-red), .16); }
+.sig-page .rs-tgt-hit       { color: var(--pos);    background: rgba(var(--t-green), .16); }
+.sig-page .rs-trade-closed  { color: var(--purple); background: rgba(var(--t-purple), .18); }
+.sig-page .rs-none          { color: var(--dim);    background: transparent; }
+.sig-page .rs-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: 0 0 auto; }
+.sig-page .rsd-received      { background: var(--pos); }
+.sig-page .rsd-accepted      { background: var(--pos); }
+.sig-page .rsd-rejected      { background: var(--neg); }
+.sig-page .rsd-duplicate     { background: var(--muted); }
+.sig-page .rsd-expired       { background: var(--dim); }
+.sig-page .rsd-order-created { background: var(--orange); }
+.sig-page .rsd-order-filled  { background: var(--blue); }
+.sig-page .rsd-sl-hit        { background: var(--neg); }
+.sig-page .rsd-tgt-hit       { background: var(--pos); }
+.sig-page .rsd-trade-closed  { background: var(--purple); }
+
+/* Pager buttons (numbered, mockup style) */
+.sig-page .sig-pgb { min-width: 30px; font-variant-numeric: tabular-nums; }
+.sig-page .sig-pgb.is-on { background: var(--blue); border-color: var(--blue); color: #fff; }
+
+/* ── Signal Details rail ── */
+.sig-page .sig-detail { position: sticky; top: 8px; padding: 0; }
+.sig-page .sd-head { display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--border); }
+.sig-page .sd-head .mc-title { margin: 0; }
+.sig-page .sd-x { border: 0; background: transparent; color: var(--muted); cursor: pointer;
+  font-size: 14px; line-height: 1; padding: 2px 4px; }
+.sig-page .sd-x:hover { color: var(--text); }
+.sig-page .sd-empty { display: flex; flex-direction: column; align-items: center; gap: 8px;
+  padding: 34px 18px; color: var(--dim); font-size: 12.5px; text-align: center; }
+.sig-page .sd-empty-ic { font-size: 22px; color: var(--border); }
+.sig-page .sd-title { display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+  padding: 12px 14px 10px; }
+.sig-page .sd-sym { font-size: 15px; font-weight: 800; letter-spacing: .01em; }
+.sig-page .sd-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px;
+  padding: 2px 14px 12px; }
+.sig-page .sd-cell { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+/* With Scanner removed the grid holds an odd number of cells — the last one
+   spans the full width so the rail never shows a half-empty row. */
+.sig-page .sd-grid .sd-cell:last-child:nth-child(odd) { grid-column: 1 / -1; }
+.sig-page .sd-k { font-size: 11px; color: var(--dim); }
+.sig-page .sd-v { font-size: 13px; color: var(--text); overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.sig-page .sd-age { display: flex; align-items: center; gap: 8px; padding: 10px 14px;
+  border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.sig-page .sd-age .sd-k { flex: 1 1 auto; font-size: 12.5px; color: var(--muted); }
+.sig-page .sd-age-v { font-size: 13px; font-weight: 600; }
+.sig-page .age-chip { padding: 2px 8px; font-size: 11px; font-weight: 600; border-radius: 5px; }
+.sig-page .age-fresh   { color: var(--pos);    background: rgba(var(--t-green), .15); }
+.sig-page .age-warm    { color: var(--yellow); background: rgba(var(--t-yellow), .16); }
+.sig-page .age-stale   { color: var(--neg);    background: rgba(var(--t-red), .15); }
+.sig-page .age-expired { color: var(--dim);    background: rgba(var(--t-gray), .28); }
+.sig-page .sd-sec { padding: 12px 14px 6px; font-size: 11px; font-weight: 700;
+  letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.sig-page .sd-life { padding: 0 14px 4px; }
+.sig-page .sd-life .lc-step { grid-template-columns: 14px 1fr auto; padding: 5px 0; }
+.sig-page .sd-life .lc-label { font-size: 12.5px; }
+.sig-page .sd-life .lc-ts { font-size: 11.5px; }
+.sig-page .lc-unknown .lc-dot { background: var(--border); }
+.sig-page .lc-stop .lc-dot { background: var(--neg); }
+.sig-page .lc-nc { color: var(--dim); font-style: italic; }
+.sig-page .sd-note { margin: 0; padding: 2px 14px 10px; font-size: 11px; color: var(--dim); line-height: 1.5; }
+.sig-page .sd-rej { padding: 0 14px 12px; display: flex; flex-direction: column; gap: 8px; }
+.sig-page .sd-rline { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.sig-page .sd-rline .sd-k { font-size: 12.5px; color: var(--muted); }
+.sig-page .sd-full { display: flex; align-items: center; justify-content: center; gap: 8px;
+  margin: 4px 14px 14px; padding: 9px 12px; border-radius: 8px; font-size: 13px; font-weight: 600;
+  color: #fff; background: var(--blue); text-decoration: none; }
+.sig-page .sd-full:hover { filter: brightness(1.08); }
+
+/* ── Legend strip ── */
+.sig-page .sig-legend { display: grid; grid-template-columns: 0.9fr 1.1fr 1.6fr; gap: 12px; }
+@media (max-width: 1100px) { .sig-page .sig-legend { grid-template-columns: 1fr; } }
+.sig-page .lg-card { padding: 12px 14px; }
+.sig-page .lg-h { font-size: 11px; font-weight: 700; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--muted); margin-bottom: 10px; }
+.sig-page .lg-items { display: flex; flex-wrap: wrap; gap: 9px 18px; }
+.sig-page .lg-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 9px 12px; }
+@media (max-width: 1400px) { .sig-page .lg-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.sig-page .lg-i { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--muted); }
+.sig-page .lg-rows { display: flex; flex-direction: column; gap: 7px; }
+.sig-page .lg-r { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--muted); }
+.sig-page .lg-sep { color: var(--dim); }
+.sig-page .age-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: 0 0 auto; }
+.sig-page .age-dot.age-fresh   { background: var(--pos); }
+.sig-page .age-dot.age-warm    { background: var(--yellow); }
+.sig-page .age-dot.age-stale   { background: var(--neg); }
+.sig-page .age-dot.age-expired { background: var(--dim); }
+/* legend status pills (the .strat-page ones are scoped to that screen) */
+.sig-page .stlogic-pill { padding: 2px 8px; font-size: 10.5px; font-weight: 700; border-radius: 5px; }
+.sig-page .sts-ACTIVE { color: var(--pos);    background: rgba(var(--t-green), .15); }
+.sig-page .sts-QUIET  { color: var(--orange); background: rgba(var(--t-orange), .15); }
+.sig-page .sts-SILENT { color: var(--neg);    background: rgba(var(--t-red), .15); }

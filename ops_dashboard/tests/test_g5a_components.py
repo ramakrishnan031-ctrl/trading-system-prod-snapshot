@@ -12,6 +12,8 @@ import os
 
 from flask import render_template_string
 
+from conftest import assert_signal_score_confined_to_screen04   # noqa: E402
+
 
 def _render(app, snippet):
     with app.test_request_context():
@@ -125,21 +127,10 @@ def test_pinned_contract_counts_unmoved(client):
         "net_pnl", "win_rate", "expectancy", "success_rate"}
 
 
-# ── L8: no "Signal Score" anywhere in the frontend ───────────────────────────
+# ── L8: no "Signal Score" outside Screen-04 (superseded there on 11-Aug) ─────
 def test_no_signal_score_label_anywhere_in_frontend():
     root = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend")
-    offenders = []
-    for dp, _dirs, files in os.walk(root):
-        for f in files:
-            if f.endswith(".min.js"):
-                continue
-            try:
-                with open(os.path.join(dp, f), encoding="utf-8", errors="ignore") as fh:
-                    if "signal score" in fh.read().lower():
-                        offenders.append(os.path.join(dp, f))
-            except OSError:
-                continue
-    assert not offenders, "Signal Score label found (L8): " + ", ".join(offenders)
+    assert_signal_score_confined_to_screen04(root)
 
 
 # ── Framework wiring: components.js loaded + URL-free (I7 CDN discipline) ─────

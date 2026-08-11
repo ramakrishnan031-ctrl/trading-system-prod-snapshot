@@ -633,3 +633,33 @@ def client(app):
     with c.session_transaction() as sess:
         sess["user"] = "tester"   # authenticated session for API contract tests
     return c
+
+
+# ── L8 and its ONE authorised exception ──────────────────────────────────────
+# L8 (G5_REDESIGN_PHASE_B.md) locked a single "System Score" and dropped the
+# "Signal Score" label everywhere. Rama SUPERSEDED that FOR SCREEN-04 ONLY on
+# 11-Aug-2026: the approved Signals redesign shows two genuinely different
+# quantities, and both are read from real columns —
+#     System Score = the minimum score required for eligibility
+#                    (screener_results.eligible_score → config min_pass_score)
+#     Signal Score = this signal's own score (screener_results.score)
+# The sweep below is therefore NOT deleted: it still fails if the label appears
+# on any other screen, so the drop cannot be undone by accident where it was
+# deliberate. Widening this set needs the same kind of explicit decision.
+SIGNAL_SCORE_ALLOWED_FILES = {"signals.html"}
+
+
+def assert_signal_score_confined_to_screen04(frontend_root):
+    """Guard for L8 as amended: the label is permitted only in Screen-04."""
+    offenders = []
+    for dirpath, _dirs, files in os.walk(frontend_root):
+        for name in files:
+            if name.endswith(".min.js") or name in SIGNAL_SCORE_ALLOWED_FILES:
+                continue
+            path = os.path.join(dirpath, name)
+            with open(path, encoding="utf-8", errors="ignore") as fh:
+                if "signal score" in fh.read().lower():
+                    offenders.append(path)
+    assert not offenders, (
+        "'Signal Score' appears outside Screen-04 (L8 still applies there): "
+        + ", ".join(offenders))

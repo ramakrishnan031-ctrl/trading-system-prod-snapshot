@@ -501,8 +501,12 @@ def recent_events(cfg: dict, limit: int = 10) -> list:
 # G2b-1 — Strategy Control Tower (services/strategy_tower.py)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _bucket_case_sql() -> str:
+def _bucket_case_sql(prefix: str = "") -> str:
     """Signal-status → family bucket (docs/G2b1_strategy_attribution.md §0.3).
+
+    prefix qualifies the column when the query joins another table that also has
+    a `status` (e.g. "s." when signals is aliased alongside trades). Default ""
+    keeps every existing single-table caller byte-identical.
 
     expired    = REJECTED_EXPIRED / legacy EXPIRED (processor age gate)
     duplicated = DUPLICATE (post-insert race only; bulk dedup is pre-insert)
@@ -510,13 +514,14 @@ def _bucket_case_sql() -> str:
     accepted   = everything else (QUEUED/PROCESSING/RESERVED/PROCESSED*/PASSED/
                  TRADED/ACCEPTED/GATE_*/RETEST_*)
     """
+    c = prefix + "status"
     return (
         "CASE "
-        "WHEN status IN ('REJECTED_EXPIRED','EXPIRED') THEN 'expired' "
-        "WHEN status = 'DUPLICATE' THEN 'duplicated' "
-        "WHEN status GLOB 'REJECTED*' OR status GLOB 'DROPPED_*' "
-        "  OR status GLOB 'SKIPPED_*' "
-        "  OR status IN ('QUEUE_FULL','PLACEMENT_FAILED','TIMEOUT') THEN 'rejected' "
+        "WHEN " + c + " IN ('REJECTED_EXPIRED','EXPIRED') THEN 'expired' "
+        "WHEN " + c + " = 'DUPLICATE' THEN 'duplicated' "
+        "WHEN " + c + " GLOB 'REJECTED*' OR " + c + " GLOB 'DROPPED_*' "
+        "  OR " + c + " GLOB 'SKIPPED_*' "
+        "  OR " + c + " IN ('QUEUE_FULL','PLACEMENT_FAILED','TIMEOUT') THEN 'rejected' "
         "ELSE 'accepted' END"
     )
 
@@ -648,6 +653,12 @@ def strategy_open_capital(cfg: dict) -> dict:
 _LIST_CAP = 500
 
 
+def list_signals_cap() -> int:
+    """The row cap the list endpoints apply. Surfaced so a screen can tell the
+    operator its table is truncated instead of quietly showing a partial day."""
+    return _LIST_CAP
+
+
 def list_signals(cfg: dict, today: str, scanner: Optional[str] = None,
                  strategy: Optional[str] = None, family: Optional[str] = None,
                  limit: int = _LIST_CAP) -> list:
@@ -657,16 +668,37 @@ def list_signals(cfg: dict, today: str, scanner: Optional[str] = None,
     bucket (attribution doc §0.3).
     """
     sql = (
-        "SELECT signal_id, received_at, scanner, strategy, symbol, status, "
-        "rejection_reason, fingerprint, " + _bucket_case_sql() + " AS family "
-        "FROM signals WHERE received_at LIKE ?"
+        "SELECT s.signal_id, s.received_at, s.expires_at, s.scanner, s.strategy, "
+        "s.symbol, s.status, s.rejection_reason, s.fingerprint, s.trade_id, "
+        # Signal→trade join (schema.sql: trades.signal_id FK). LEFT: a signal
+        # that never became a trade keeps every trade field NULL → renders '—'.
+        "t.direction AS direction, t.status AS trade_status, "
+        "t.exit_reason AS exit_reason, t.entry_time AS entry_time, "
+        "t.exit_time AS exit_time, t.net_pnl AS net_pnl, "
+        "CAST((julianday(t.exit_time) - julianday(t.entry_time)) * 86400 AS INTEGER) "
+        "  AS trade_duration_sec, "
+        # Trade Type comes from orders.product — there is NO trades.product
+        # column. Correlated subquery (not a join) so a trade with several legs
+        # cannot multiply the signal row. NULL when the ENTRY row is missing,
+        # which renders '—' rather than silently reading as Intraday.
+        "(SELECT o.product FROM orders o WHERE o.trade_id = t.trade_id "
+        "   AND o.leg = 'ENTRY' ORDER BY o.placed_at LIMIT 1) AS product, "
+        # Entry-order stamps feed the lifecycle timeline in the detail drawer,
+        # so the drawer needs no second request per row.
+        "(SELECT o.placed_at FROM orders o WHERE o.trade_id = t.trade_id "
+        "   AND o.leg IN ('ENTRY','CO') ORDER BY o.placed_at LIMIT 1) AS order_placed_at, "
+        "(SELECT o.filled_at FROM orders o WHERE o.trade_id = t.trade_id "
+        "   AND o.leg IN ('ENTRY','CO') ORDER BY o.placed_at LIMIT 1) AS order_filled_at, "
+        + _bucket_case_sql("s.") + " AS family "
+        "FROM signals s LEFT JOIN trades t ON t.signal_id = s.signal_id "
+        "WHERE s.received_at LIKE ?"
     )
     params: list = [today + "%"]
     if scanner:
-        sql += " AND scanner = ?"
+        sql += " AND s.scanner = ?"
         params.append(scanner)
     if strategy:
-        sql += " AND strategy = ?"
+        sql += " AND s.strategy = ?"
         params.append(strategy)
     if family:
         sql = "SELECT * FROM (" + sql + ") WHERE family = ?"
@@ -674,7 +706,50 @@ def list_signals(cfg: dict, today: str, scanner: Optional[str] = None,
     sql += " ORDER BY received_at DESC LIMIT ?"
     params.append(max(1, min(int(limit), _LIST_CAP)))
     with _ro(cfg) as conn:
-        return [dict(r) for r in conn.execute(sql, tuple(params)).fetchall()]
+        rows = [dict(r) for r in conn.execute(sql, tuple(params)).fetchall()]
+    for r in rows:
+        r["trade_type"] = _trade_type_of(r.get("product"))
+        r["trade_result"] = _signal_result_of(r)
+    return rows
+
+
+# MIS and CO are both intraday products; CNC is delivery. Anything else (or a
+# missing ENTRY order) stays None so the UI shows '—' instead of guessing.
+_PRODUCT_TRADE_TYPE = {"MIS": "Intraday", "CO": "Intraday", "CNC": "Delivery"}
+
+
+def _trade_type_of(product) -> Optional[str]:
+    if not product:
+        return None
+    return _PRODUCT_TRADE_TYPE.get(str(product).strip().upper())
+
+
+def _signal_result_of(row: dict) -> str:
+    """Full lifecycle result for a signal row (spec: do NOT stop at Accepted/
+    Rejected). Derived only from stored signal/trade fields — never inferred."""
+    fam = row.get("family")
+    if fam == "expired":
+        return "Expired"
+    if fam == "duplicated":
+        return "Duplicate"
+    if fam == "rejected":
+        return "Rejected"
+    if not row.get("trade_id"):
+        # The spec's lifecycle starts at Received, one step before Accepted:
+        # QUEUED is stored-but-not-yet-screened. Read from the status column,
+        # not inferred.
+        return "Received" if (row.get("status") or "").strip().upper() == "QUEUED" else "Accepted"
+    reason = (row.get("exit_reason") or "").strip().upper()
+    if reason == "SL_HIT":
+        return "SL Hit"
+    if reason == "TGT_HIT":
+        return "TGT Hit"
+    status = (row.get("trade_status") or "").strip().upper()
+    if status.startswith("CLOSED"):
+        return "Trade Closed"
+    if row.get("entry_time"):
+        return "Order Filled"
+    return "Order Created"
 
 
 def list_orders(cfg: dict, today: str, leg: Optional[str] = None,
@@ -1416,6 +1491,97 @@ def screener_scores(cfg: dict, signal_ids) -> dict:
         except sqlite3.OperationalError:
             return {}
     return {r["signal_id"]: (int(r["score"]) if r["score"] is not None else None) for r in rows}
+
+
+def signal_scores(cfg: dict, signal_ids) -> dict:
+    """{signal_id: {"signal_score": int|None, "system_score": int|None}}.
+
+    Screen-04 shows TWO different numbers and they are NOT the same quantity:
+      * signal_score = `screener_results.score`         — THIS signal's own score.
+      * system_score = `screener_results.eligible_score` — the minimum score the
+        signal had to reach to be eligible (v14: per-strategy min_score threshold).
+
+    `eligible_score` is a v14 column: on an older DB (and in the test fixture)
+    it does not exist, so the SELECT is retried without it and system_score
+    comes back None — the caller then falls back to the configured
+    `min_pass_score`. Nothing here is ever fabricated.
+    """
+    ids = tuple(dict.fromkeys(s for s in (signal_ids or []) if s))
+    if not ids:
+        return {}
+    inc = _in_clause(ids)
+    with _ro(cfg) as conn:
+        try:
+            rows = conn.execute(
+                "SELECT signal_id, MAX(score) AS score, MAX(eligible_score) AS eligible "
+                "FROM screener_results WHERE signal_id IN (" + inc + ") GROUP BY signal_id",
+                ids,
+            ).fetchall()
+        except sqlite3.OperationalError:
+            try:
+                rows = conn.execute(
+                    "SELECT signal_id, MAX(score) AS score, NULL AS eligible "
+                    "FROM screener_results WHERE signal_id IN (" + inc + ") GROUP BY signal_id",
+                    ids,
+                ).fetchall()
+            except sqlite3.OperationalError:
+                return {}
+    out: dict = {}
+    for r in rows:
+        out[r["signal_id"]] = {
+            "signal_score": int(r["score"]) if r["score"] is not None else None,
+            "system_score": int(r["eligible"]) if r["eligible"] is not None else None,
+        }
+    return out
+
+
+def signal_kpi_counts(cfg: dict, today: str) -> dict:
+    """Whole-day lifecycle counts for the Screen-04 KPI deck.
+
+    Computed in SQL over EVERY stored signal for the date — deliberately NOT
+    from the returned row list, which is capped at _LIST_CAP and would make the
+    cards silently under-report on a heavy day.
+
+    `total` counts STORED signals. It is NOT the webhook `received` count in the
+    denominator block (that one includes pre-insert duplicates) — the two are
+    different denominators and must never be conflated.
+    """
+    fam = _bucket_case_sql("s.")
+    with _ro(cfg) as conn:
+        rows = conn.execute(
+            "SELECT " + fam + " AS family, COUNT(*) AS n FROM signals s "
+            "WHERE s.received_at LIKE ? GROUP BY family",
+            (today + "%",),
+        ).fetchall()
+        by_family = {r["family"]: int(r["n"]) for r in rows}
+        trade_row = conn.execute(
+            "SELECT "
+            "  COUNT(t.trade_id) AS created, "
+            "  SUM(CASE WHEN t.entry_time IS NOT NULL THEN 1 ELSE 0 END) AS filled, "
+            "  SUM(CASE WHEN UPPER(COALESCE(t.exit_reason,'')) = 'SL_HIT' "
+            "           THEN 1 ELSE 0 END) AS sl_hit, "
+            "  SUM(CASE WHEN UPPER(COALESCE(t.exit_reason,'')) = 'TGT_HIT' "
+            "           THEN 1 ELSE 0 END) AS tgt_hit, "
+            "  SUM(CASE WHEN UPPER(COALESCE(t.status,'')) LIKE 'CLOSED%' "
+            "           THEN 1 ELSE 0 END) AS closed "
+            "FROM signals s JOIN trades t ON t.signal_id = s.signal_id "
+            "WHERE s.received_at LIKE ?",
+            (today + "%",),
+        ).fetchone()
+    t = dict(trade_row) if trade_row else {}
+    total = sum(by_family.values())
+    return {
+        "total": total,
+        "accepted": by_family.get("accepted", 0),
+        "rejected": by_family.get("rejected", 0),
+        "duplicate": by_family.get("duplicated", 0),
+        "expired": by_family.get("expired", 0),
+        "order_created": int(t.get("created") or 0),
+        "order_filled": int(t.get("filled") or 0),
+        "sl_hit": int(t.get("sl_hit") or 0),
+        "tgt_hit": int(t.get("tgt_hit") or 0),
+        "trade_closed": int(t.get("closed") or 0),
+    }
 
 
 def trade_story_parts(cfg: dict, trade_id: str) -> dict:

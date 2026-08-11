@@ -1,72 +1,628 @@
 {% extends "base.html" %}
-{% block title %}Signals{% endblock %}
+{% block title %}Signals — Control Tower{% endblock %}
 {% block nav_signals %}active{% endblock %}
 {% block content %}
-<div x-data="signalsPage()" x-init="load()" @ops-refresh.window="load()">
-  <section class="panel">
-    <h2 class="panel-title">Signals <span class="panel-sub" x-text="data.date || ''"></span></h2>
+{# Screen-04 Signals — "the birthplace of every trade".
+   Design language reused from Screen-02/03: .dash-page shell, .kc KPI cards,
+   .panel/.mc-panel sections, .flt-* filters, .st-* table + pager, tableMixin.
+   Global header (Trader/Mode/Kill/Phase/Broker ID/Client Name … Trading Date/
+   Current Time/Log out) is base.html's summary-bar — untouched here.
 
-    <!-- Denominator strip: the pre-insert ~82% drop stays visible -->
-    <div class="denom-strip" x-show="data.denominator" x-cloak>
-      <div class="dn"><span>Received (webhook)</span><b x-text="data.denominator ? data.denominator.received : ''"></b></div>
-      <div class="dn"><span>Accepted</span><b x-text="data.denominator ? data.denominator.accepted : ''"></b></div>
-      <div class="dn"><span>Rejected (incl. pre-insert dupes)</span><b x-text="data.denominator ? data.denominator.rejected : ''"></b></div>
-      <div class="dn"><span>Stored</span><b x-text="data.denominator ? data.denominator.stored : ''"></b></div>
-      <div class="dn"><span>Stored dupes</span><b x-text="data.denominator ? data.denominator.duplicated_stored : ''"></b></div>
+   Two scores, deliberately distinct (Rama, 11-Aug):
+     System Score = the minimum score required for eligibility today
+     Signal Score = this signal's own score
+   Both come from real columns; neither is ever synthesised. #}
+{% from "components.html" import export_button %}
+<div x-data="signalsPage()" x-init="boot()" @ops-refresh.window="boot()"
+     class="dash-page sig-page">
+
+  <!-- ── Title ── -->
+  <div class="pg-title">
+    <h1>Signals</h1>
+    <span class="pg-sub">Birthplace of every trade</span>
+  </div>
+
+  <!-- ═══ LIFECYCLE KPI DECK (9) ═══ -->
+  <div class="sk-deck sig-deck">
+    <template x-for="k in kpiCards()" :key="k.key">
+      <div class="kc" :class="'kc-' + k.tone">
+        <div class="kc-top">
+          <span class="kc-ic" :class="'ic-' + k.tone" x-html="sigIcon(k.key)"></span>
+          <span class="kc-label" x-text="k.label"></span>
+        </div>
+        <span class="kc-val num" x-text="k.val"></span>
+        <div class="kc-foot"><span class="kc-sub" :class="k.subClass || ''" x-text="k.sub"></span></div>
+      </div>
+    </template>
+  </div>
+
+  <!-- ═══ WORKSPACE: filters + table (left) · signal details (right) ═══ -->
+  <div class="sig-work">
+    <div class="sig-left">
+
+      <!-- ═══ FILTERS ═══ -->
+      <section class="panel mc-panel">
+        <div class="mc-head"><h2 class="mc-title">Filters</h2></div>
+        <div class="flt-row sig-flt">
+          <label class="flt-field flt-daterange">
+            <span class="flt-k">Date Range</span>
+            <span class="flt-dr">
+              <input class="flt-c" type="date" x-model="f.from_date">
+              <span class="flt-to">to</span>
+              <input class="flt-c" type="date" x-model="f.to_date">
+              <button class="flt-reload" type="button" title="Reload for this date"
+                      @click="applyFilters()" aria-label="Reload">⟳</button>
+            </span>
+          </label>
+          <label class="flt-field">
+            <span class="flt-k">Symbol</span>
+            <select class="flt-c" x-model="f.symbol">
+              <option value="">All Symbols</option>
+              <template x-for="s in symbolOptions()" :key="s"><option :value="s" x-text="s"></option></template>
+            </select>
+          </label>
+          <label class="flt-field">
+            <span class="flt-k">Strategy</span>
+            <select class="flt-c" x-model="f.strategy">
+              <option value="">All Strategies</option>
+              <template x-for="s in strategyOptions()" :key="s"><option :value="s" x-text="s"></option></template>
+            </select>
+          </label>
+          <label class="flt-field">
+            <span class="flt-k">Trade Type</span>
+            <select class="flt-c" x-model="f.trade_type">
+              <option value="">All Types</option>
+              <option value="Intraday">Intraday</option>
+              <option value="Delivery">Delivery</option>
+            </select>
+          </label>
+          <label class="flt-field">
+            <span class="flt-k">Direction</span>
+            <select class="flt-c" x-model="f.direction">
+              <option value="">All Directions</option>
+              <option value="LONG">Long</option>
+              <option value="SHORT">Short</option>
+            </select>
+          </label>
+          <label class="flt-field">
+            <span class="flt-k">Status</span>
+            <select class="flt-c" x-model="f.status">
+              <option value="">All Status</option>
+              <template x-for="s in statusOptions()" :key="s"><option :value="s" x-text="s"></option></template>
+            </select>
+          </label>
+          <label class="flt-field">
+            <span class="flt-k">Signal Result</span>
+            <select class="flt-c" x-model="f.result">
+              <option value="">All Results</option>
+              <template x-for="s in RESULTS" :key="s"><option :value="s" x-text="s"></option></template>
+            </select>
+          </label>
+          <div class="flt-actions sig-flt-actions">
+            <button class="btn-ghost" type="button" @click="resetFilters()">Reset Filters</button>
+            <button class="btn-primary" type="button" @click="applyFilters()">Apply Filters</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══ MAIN TABLE ═══ -->
+      <section class="panel mc-panel">
+        <div class="st-toolbar sig-toolbar">
+          <span class="sig-rpp">
+            <span class="sig-rpp-k">Rows per page:</span>
+            <template x-for="n in tPageSizes" :key="n">
+              <button class="sig-rpp-b" type="button" :class="tPageSize === n ? 'is-on' : ''"
+                      @click="tPageSize = n; tPage = 1" x-text="n"></button>
+            </template>
+            <button class="sig-colreset" type="button" x-show="!isDefaultOrder()" x-cloak
+                    @click="resetCols()"
+                    title="Restore the default column order">↺ Reset column order</button>
+          </span>
+          {{ export_button("Export XLSX") }}
+        </div>
+
+        <div class="tbl-scroll">
+          {# Header AND body both iterate the same `cols` array, so a reordered
+             heading necessarily carries its data with it — the two can never
+             drift apart. Sorting stays keyed on c.key, independent of order. #}
+          <table class="st-tbl sig-tbl">
+            <thead><tr>
+              <template x-for="(c, ci) in cols" :key="c.key">
+                <th :class="[c.num ? 'rt' : '', dragKey === c.key ? 'is-drag' : '',
+                             overKey === c.key ? 'is-over' : '']"
+                    draggable="true" role="button" tabindex="0"
+                    :title="c.label + ' — click to sort, drag to reorder'"
+                    @dragstart="onDragStart(c.key, $event)"
+                    @dragover.prevent="overKey = c.key"
+                    @dragleave="overKey === c.key && (overKey = '')"
+                    @drop.prevent="onDrop(c.key)"
+                    @dragend="onDragEnd()"
+                    @click="headClick(c.key)" @keyup.enter="tSort(c.key)">
+                  <span class="st-grip" aria-hidden="true">⠿</span><span x-text="c.label"></span><span
+                        class="st-arw" x-text="tArrow(c.key)"></span>
+                </th>
+              </template>
+            </tr></thead>
+            <tbody>
+              <template x-for="r in tPaged(filtered())" :key="r.signal_id">
+                <tr class="sig-row" :class="sel && sel.signal_id === r.signal_id ? 'is-sel' : ''"
+                    tabindex="0" @click="select(r)" @keyup.enter="select(r)">
+                  <template x-for="c in cols" :key="c.key">
+                    <td :class="cellCls(c)" :title="c.kind === 'why' ? (r.rejection_reason || '') : ''">
+                      <template x-if="c.kind === 'type'">
+                        <span class="tt-pill" :class="'tt-' + (r.trade_type || 'none')"
+                              x-text="r.trade_type || '—'"></span>
+                      </template>
+                      <template x-if="c.kind === 'dir'">
+                        <span class="dir-txt" :class="dirCls(r.direction)"
+                              x-text="r.direction ? cap(r.direction) : '—'"></span>
+                      </template>
+                      <template x-if="c.kind === 'status'">
+                        <span class="sg-pill" :class="'sg-' + r.family" x-text="r.status_label"></span>
+                      </template>
+                      <template x-if="c.kind === 'result'">
+                        <span class="rs-pill" :class="'rs-' + slug(r.trade_result)"
+                              x-text="r.trade_result"></span>
+                      </template>
+                      <template x-if="!c.kind || c.kind === 'text' || c.kind === 'why'
+                                      || c.kind === 'sym' || c.kind === 'num' || c.kind === 'dur'">
+                        <span x-text="cellText(c, r)"></span>
+                      </template>
+                    </td>
+                  </template>
+                </tr>
+              </template>
+              <tr x-show="!filtered().length" x-cloak>
+                <td :colspan="cols.length" class="ev-empty">No signals match the current filters.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="st-foot">
+          <span class="st-count" x-text="pageInfo()"></span>
+          <div class="st-pager">
+            <button class="st-pg" type="button" @click="tPage = Math.max(1, tPage-1)" :disabled="tPage<=1">‹</button>
+            <template x-for="p in pageWindow()" :key="p">
+              <button class="st-pg sig-pgb" type="button"
+                      :class="p === tPage ? 'is-on' : ''" :disabled="p === '…'"
+                      @click="p !== '…' && (tPage = p)" x-text="p"></button>
+            </template>
+            <button class="st-pg" type="button" @click="tPage = Math.min(tPageCount(filtered()), tPage+1)"
+                    :disabled="tPage >= tPageCount(filtered())">›</button>
+          </div>
+        </div>
+        <div class="sig-cap" x-show="data.count >= (data.row_cap || 500)" x-cloak>
+          ⚠ Showing the most recent <span x-text="data.row_cap || 500"></span> stored signals for this
+          date — the day holds <span class="num" x-text="fmtInt(counts().total)"></span>. Narrow the
+          filters to see the rest.
+        </div>
+      </section>
     </div>
 
-    <div class="filters">
-      <input class="flt" type="date" x-model="fDate" @change="load()">
-      <input class="flt" placeholder="scanner" x-model.debounce.400ms="fScanner" @change="load()">
-      <input class="flt" placeholder="strategy" x-model.debounce.400ms="fStrategy" @change="load()">
-      <select class="flt" x-model="fFamily" @change="load()">
-        <option value="">all families</option>
-        <option value="accepted">accepted</option>
-        <option value="rejected">rejected</option>
-        <option value="duplicated">duplicated</option>
-        <option value="expired">expired</option>
-      </select>
-      <span class="panel-sub" x-text="(data.count != null ? data.count : 0) + ' rows'"></span>
-    </div>
+    <!-- ═══ SIGNAL DETAILS (right rail) ═══ -->
+    <aside class="panel mc-panel sig-detail">
+      <div class="sd-head">
+        <h2 class="mc-title">Signal Details</h2>
+        <button class="sd-x" type="button" @click="sel = null" x-show="sel" x-cloak
+                aria-label="Close">✕</button>
+      </div>
 
-    <table class="cap-table">
-      <thead><tr><th>Time</th><th>Scanner</th><th>Strategy</th><th>Symbol</th>
-        <th>Status</th><th>Reject reason</th><th>Dupe</th></tr></thead>
-      <tbody>
-        <template x-for="s in data.rows || []" :key="s.signal_id">
-          <tr :class="'fam-' + s.family">
-            <td class="ev-ts" x-text="tstr(s.received_at)"></td>
-            <td x-text="s.scanner"></td>
-            <td x-text="s.strategy"></td>
-            <td x-text="s.symbol"></td>
-            <td><span class="fam-pill" :class="'famp-' + s.family" x-text="s.status"></span></td>
-            <td class="wrapcell" x-text="dash(s.rejection_reason)"></td>
-            <td><span x-show="s.family === 'duplicated'" x-cloak class="cap-inert">DUP</span></td>
-          </tr>
+      <div class="sd-empty" x-show="!sel" x-cloak>
+        <span class="sd-empty-ic">◎</span>
+        <span>Select any signal row to see its full lifecycle.</span>
+      </div>
+
+      <div x-show="sel" x-cloak>
+        <div class="sd-title">
+          <span class="sd-sym" x-text="sel && sel.symbol"></span>
+          <span class="sg-pill" :class="sel ? 'sg-' + sel.family : ''" x-text="sel && sel.status_label"></span>
+          <span class="rs-pill" :class="sel ? 'rs-' + slug(sel.trade_result) : ''" x-text="sel && sel.trade_result"></span>
+        </div>
+
+        <div class="sd-grid">
+          <div class="sd-cell"><span class="sd-k">Strategy</span><span class="sd-v" x-text="sel && sel.strategy"></span></div>
+          <div class="sd-cell"><span class="sd-k">Trading Date</span><span class="sd-v num" x-text="sel && sel.date"></span></div>
+          <div class="sd-cell"><span class="sd-k">Time</span><span class="sd-v num" x-text="sel && sel.time"></span></div>
+          <div class="sd-cell"><span class="sd-k">Trade Type</span><span class="sd-v" x-text="sel && (sel.trade_type || '—')"></span></div>
+          <div class="sd-cell"><span class="sd-k">System Score</span><span class="sd-v num" x-text="sel && dash(sel.system_score)"></span></div>
+          <div class="sd-cell"><span class="sd-k">Signal Score</span><span class="sd-v num" x-text="sel && dash(sel.signal_score)"></span></div>
+          <div class="sd-cell"><span class="sd-k">Direction</span>
+            <span class="sd-v dir-txt" :class="sel ? dirCls(sel.direction) : ''"
+                  x-text="sel && (sel.direction ? cap(sel.direction) : '—')"></span></div>
+        </div>
+
+        <div class="sd-age">
+          <span class="sd-k">Signal Age</span>
+          <span class="sd-age-v num" x-text="sel && ageText(sel)"></span>
+          <span class="age-chip" :class="sel ? 'age-' + ageBand(sel) : ''" x-text="sel && ageBandLabel(sel)"></span>
+        </div>
+
+        <div class="sd-sec">Signal Lifecycle</div>
+        <ol class="lifecycle sd-life">
+          <template x-for="(st, li) in lifecycle(sel)" :key="li">
+            <li class="lc-step" :class="'lc-' + st.state">
+              <span class="lc-dot" aria-hidden="true"></span>
+              <span class="lc-label" x-text="st.label"></span>
+              <span class="lc-ts num" :class="st.state === 'unknown' ? 'lc-nc' : ''" x-text="st.ts_text"></span>
+            </li>
+          </template>
+        </ol>
+        <p class="sd-note" x-show="hasUncaptured(sel)" x-cloak>
+          Validation / Risk / Capital stage timings are not persisted (G-2) — shown honestly as
+          <em>not captured</em>, never invented.
+        </p>
+
+        <div class="sd-sec">Rejection Info</div>
+        <div class="sd-rej">
+          <div class="sd-rline"><span class="sd-k">Reject Reason</span>
+            <span class="sd-v" x-text="sel && dash(sel.rejection_reason)"></span></div>
+          <div class="sd-rline"><span class="sd-k">Reject Score</span>
+            <span class="sd-v num" x-text="sel && dash(sel.reject_score)"></span></div>
+          <div class="sd-rline"><span class="sd-k">Required Score</span>
+            <span class="sd-v num" x-text="sel && dash(sel.required_score)"></span></div>
+        </div>
+
+        <a class="sd-full" :href="sel && sel.trade_id ? ('/trades?trade=' + sel.trade_id) : '/trades'">
+          View Full Details <span aria-hidden="true">→</span>
+        </a>
+      </div>
+    </aside>
+  </div>
+
+  <!-- ═══ LEGENDS ═══ -->
+  <div class="sig-legend">
+    <section class="panel mc-panel lg-card">
+      <div class="lg-h">Signal Age</div>
+      <div class="lg-items">
+        <span class="lg-i"><span class="age-dot age-fresh"></span>0–30 sec</span>
+        <span class="lg-i"><span class="age-dot age-warm"></span>30–120 sec</span>
+        <span class="lg-i"><span class="age-dot age-stale"></span>&gt;120 sec</span>
+        <span class="lg-i"><span class="age-dot age-expired"></span>Expired</span>
+      </div>
+    </section>
+
+    <section class="panel mc-panel lg-card">
+      <div class="lg-h">Status Logic</div>
+      <div class="lg-rows">
+        <span class="lg-r"><span class="sts-ACTIVE stlogic-pill">ACTIVE</span><span class="lg-sep">:</span>Signal within 30 mins</span>
+        <span class="lg-r"><span class="sts-QUIET stlogic-pill">QUIET</span><span class="lg-sep">:</span>30 mins – 1.5 hrs</span>
+        <span class="lg-r"><span class="sts-SILENT stlogic-pill">SILENT</span><span class="lg-sep">:</span>No signal entire day</span>
+      </div>
+    </section>
+
+    <section class="panel mc-panel lg-card lg-wide">
+      <div class="lg-h">Signal Result Legend</div>
+      <div class="lg-items lg-grid">
+        <template x-for="r in RESULTS" :key="r">
+          <span class="lg-i"><span class="rs-dot" :class="'rsd-' + slug(r)"></span><span x-text="r"></span></span>
         </template>
-        <tr x-show="!data.rows || data.rows.length === 0" x-cloak>
-          <td colspan="7" class="ev-empty">No stored signals for the selected filters.</td>
-        </tr>
-      </tbody>
-    </table>
-  </section>
+      </div>
+    </section>
+  </div>
+
 </div>
 
 <script>
 function signalsPage() {
-  return Object.assign(pageBase("/api/signals"), {
-    fDate: "", fScanner: "", fStrategy: "", fFamily: "",
-    qs() {
-      const p = new URLSearchParams();
-      if (this.fDate) p.set("date", this.fDate);
-      if (this.fScanner) p.set("scanner", this.fScanner);
-      if (this.fStrategy) p.set("strategy", this.fStrategy);
-      if (this.fFamily) p.set("family", this.fFamily);
-      const s = p.toString();
-      return s ? "?" + s : "";
-    },
-    tstr(ts) { return ts ? String(ts).replace("T", " ").slice(11, 19) : "—"; },
-  });
+  return Object.assign(
+    pageBase("/api/signals"),
+    tableMixin({ defaultSize: 200, pageSizes: [50, 100, 200, 500], sortKey: "", sortDir: -1 }),
+    {
+      sel: null,
+      /* The spec's full lifecycle — 10 states, starting at Received. */
+      RESULTS: ["Received", "Accepted", "Rejected", "Duplicate", "Expired",
+                "Order Created", "Order Filled", "SL Hit", "TGT Hit", "Trade Closed"],
+      f:  { from_date: "", to_date: "", symbol: "", strategy: "",
+            trade_type: "", direction: "", status: "", result: "" },
+      af: { symbol: "", strategy: "", trade_type: "", direction: "",
+            status: "", result: "" },
+
+      /* DEFAULT ORDER — fixed by Rama, 11-Aug. Scanner is deliberately absent:
+         in this system Strategy and Scanner carry the same data, so the column,
+         its filter and its detail row were all removed from Screen-04.
+         `kind` drives BOTH the cell renderer and the drag-reorder, so a column
+         and its data are one unit. */
+      DEFAULT_COLS: [
+        { key: "date",             label: "Trading Date",   kind: "num" },
+        { key: "time",             label: "Time",           kind: "num" },
+        { key: "strategy",         label: "Strategy",       kind: "text" },
+        { key: "symbol",           label: "Symbol",         kind: "sym" },
+        { key: "trade_type",       label: "Trade Type",     kind: "type" },
+        { key: "direction",        label: "Direction",      kind: "dir" },
+        { key: "system_score",     label: "System Score",   kind: "num", num: true },
+        { key: "signal_score",     label: "Signal Score",   kind: "num", num: true },
+        { key: "status_label",     label: "Status",         kind: "status" },
+        { key: "rejection_reason", label: "Reject Reason",  kind: "why" },
+        { key: "reject_score",     label: "Reject Score",   kind: "num", num: true },
+        { key: "required_score",   label: "Required Score", kind: "num", num: true },
+        { key: "trade_result",     label: "Trade Result",   kind: "result" },
+        { key: "trade_duration_sec", label: "Trade Duration", kind: "dur", num: true },
+      ],
+      cols: [],
+      dragKey: "", overKey: "", _dragEndAt: 0,
+      COLS_KEY: "screen04.signals.colOrder.v1",
+
+      /* The date filter is the only SERVER-side one (the endpoint is date-scoped);
+         everything else narrows the loaded rows client-side, same as Screen-03. */
+      qs() { return this.f.from_date ? ("?date=" + this.f.from_date) : ""; },
+
+      /* ── column order: default → restored → drag-reordered ─────────────── */
+      initCols() {
+        this.cols = this.DEFAULT_COLS.slice();
+        let saved = null;
+        try { saved = JSON.parse(window.localStorage.getItem(this.COLS_KEY) || "null"); }
+        catch (e) { saved = null; }              /* storage blocked/corrupt → default */
+        if (!Array.isArray(saved) || !saved.length) return;
+        /* Rebuild from the CURRENT definitions: unknown keys are dropped and
+           columns added by a later build are appended, so a stale saved order
+           can never hide a column or resurrect a removed one (e.g. scanner). */
+        const byKey = {};
+        this.DEFAULT_COLS.forEach(c => { byKey[c.key] = c; });
+        const next = [];
+        saved.forEach(k => { if (byKey[k] && next.indexOf(byKey[k]) === -1) next.push(byKey[k]); });
+        this.DEFAULT_COLS.forEach(c => { if (next.indexOf(c) === -1) next.push(c); });
+        if (next.length === this.DEFAULT_COLS.length) this.cols = next;
+      },
+      saveCols() {
+        try { window.localStorage.setItem(this.COLS_KEY, JSON.stringify(this.cols.map(c => c.key))); }
+        catch (e) { /* private mode / quota — reordering still works this session */ }
+      },
+      isDefaultOrder() {
+        return this.cols.every((c, i) => c.key === this.DEFAULT_COLS[i].key);
+      },
+      resetCols() {
+        this.cols = this.DEFAULT_COLS.slice();
+        try { window.localStorage.removeItem(this.COLS_KEY); } catch (e) {}
+      },
+      onDragStart(key, ev) {
+        this.dragKey = key;
+        if (ev && ev.dataTransfer) {
+          ev.dataTransfer.effectAllowed = "move";
+          try { ev.dataTransfer.setData("text/plain", key); } catch (e) {}
+        }
+      },
+      onDrop(targetKey) {
+        const from = this.cols.findIndex(c => c.key === this.dragKey);
+        const to = this.cols.findIndex(c => c.key === targetKey);
+        this.overKey = "";
+        if (from < 0 || to < 0 || from === to) return;
+        const next = this.cols.slice();
+        next.splice(to, 0, next.splice(from, 1)[0]);
+        this.cols = next;
+        this.saveCols();
+        this._dragEndAt = Date.now();          /* suppress the sort-click that may follow */
+      },
+      onDragEnd() { this.dragKey = ""; this.overKey = ""; this._dragEndAt = Date.now(); },
+      /* A drag must never be read as a sort click. */
+      headClick(key) { if (Date.now() - this._dragEndAt < 250) return; this.tSort(key); },
+
+      /* ── cell rendering (driven by the same column list as the header) ──── */
+      cellCls(c) {
+        if (c.kind === "sym") return "sig-sym";
+        if (c.kind === "why") return "sig-why";
+        if (c.num) return "rt num";
+        if (c.kind === "num") return "num";
+        return "";
+      },
+      cellText(c, r) {
+        if (c.kind === "dur") return this.durTxt(r.trade_duration_sec);
+        return this.dash(r[c.key]);
+      },
+
+      async boot() { if (!this.cols.length) this.initCols(); await this.load(); this.afterLoad(); },
+      afterLoad() {
+        /* Show the date the API actually served rather than an empty picker. */
+        if (!this.f.from_date && this.data.date) {
+          this.f.from_date = this.data.date;
+          this.f.to_date = this.data.date;
+        }
+        /* Keep the detail rail on the same signal across refreshes; open the
+           first row on the initial load so the rail is never a dead panel. */
+        const rows = this.filtered();
+        if (this.sel) {
+          const again = rows.find(r => r.signal_id === this.sel.signal_id);
+          this.sel = again || null;
+        }
+        if (!this.sel && rows.length) this.sel = rows[0];
+      },
+
+      counts() { return this.data.counts || {}; },
+
+      rowsMapped() {
+        return (this.data.rows || []).map(r => {
+          const ts = String(r.received_at || "");
+          return {
+            signal_id: r.signal_id,
+            date: this.dmy(ts.slice(0, 10)),
+            iso_date: ts.slice(0, 10),
+            time: ts.slice(11, 19) || "—",
+            received_at: r.received_at,
+            symbol: r.symbol, strategy: r.strategy,
+            trade_type: r.trade_type, direction: r.direction,
+            system_score: r.system_score, signal_score: r.signal_score,
+            family: r.family, status: r.status,
+            status_label: this.statusLabel(r),
+            rejection_reason: r.rejection_reason,
+            reject_score: r.reject_score, required_score: r.required_score,
+            trade_result: r.trade_result,
+            trade_duration_sec: r.trade_duration_sec,
+            trade_id: r.trade_id,
+            order_placed_at: r.order_placed_at, order_filled_at: r.order_filled_at,
+            entry_time: r.entry_time, exit_time: r.exit_time, exit_reason: r.exit_reason,
+            expires_at: r.expires_at,
+          };
+        });
+      },
+
+      /* Status column shows the derived family (matches the legend), not the raw
+         open-set status string — the raw value stays in the row for the drawer. */
+      statusLabel(r) {
+        const m = { accepted: "ACCEPTED", rejected: "REJECTED",
+                    duplicated: "DUPLICATE", expired: "EXPIRED" };
+        return m[r.family] || String(r.status || "—");
+      },
+
+      filtered() {
+        const a = this.af;
+        return this.rowsMapped().filter(r => {
+          if (a.symbol && r.symbol !== a.symbol) return false;
+          if (a.strategy && r.strategy !== a.strategy) return false;
+          if (a.trade_type && r.trade_type !== a.trade_type) return false;
+          if (a.direction && String(r.direction || "").toUpperCase() !== a.direction) return false;
+          if (a.status && r.status_label !== a.status) return false;
+          if (a.result && r.trade_result !== a.result) return false;
+          return true;
+        });
+      },
+      applyFilters() {
+        this.af = { symbol: this.f.symbol, strategy: this.f.strategy,
+                    trade_type: this.f.trade_type, direction: this.f.direction,
+                    status: this.f.status, result: this.f.result };
+        this.tPage = 1; this.sel = null; this.boot();
+      },
+      resetFilters() {
+        this.f = { from_date: this.data.date || "", to_date: this.data.date || "",
+                   symbol: "", strategy: "", trade_type: "", direction: "",
+                   status: "", result: "" };
+        this.af = { symbol: "", strategy: "", trade_type: "", direction: "",
+                    status: "", result: "" };
+        this.tPage = 1; this.sel = null; this.boot();
+      },
+      uniq(key) { return [...new Set(this.rowsMapped().map(r => r[key]).filter(Boolean))].sort(); },
+      symbolOptions()   { return this.uniq("symbol"); },
+      strategyOptions() { return this.uniq("strategy"); },
+      statusOptions()   { return this.uniq("status_label"); },
+
+      select(r) { this.sel = (this.sel && this.sel.signal_id === r.signal_id) ? null : r; },
+
+      /* ── KPI deck: whole-day counts from the API (never the capped rows) ── */
+      kpiCards() {
+        const c = this.counts(), t = Number(c.total || 0);
+        const pct = (n) => t ? (Math.round(1000 * Number(n || 0) / t) / 10) + "%" : "0.0%";
+        return [
+          { key: "total",   tone: "info",  label: "Total Signals", val: this.fmtInt(c.total),   sub: "Today" },
+          { key: "accepted",tone: "pos",   label: "Accepted",      val: this.fmtInt(c.accepted),sub: pct(c.accepted), subClass: "txt-green" },
+          { key: "rejected",tone: "neg",   label: "Rejected",      val: this.fmtInt(c.rejected),sub: pct(c.rejected), subClass: "txt-red" },
+          { key: "duplicate",tone:"muted", label: "Duplicate",     val: this.fmtInt(c.duplicate),sub: pct(c.duplicate) },
+          { key: "created", tone: "warn",  label: "Order Created", val: this.fmtInt(c.order_created), sub: pct(c.order_created), subClass: "txt-orange" },
+          { key: "filled",  tone: "pos",   label: "Order Filled",  val: this.fmtInt(c.order_filled),  sub: pct(c.order_filled),  subClass: "txt-green" },
+          { key: "slhit",   tone: "info",  label: "SL Hit",        val: this.fmtInt(c.sl_hit),   sub: pct(c.sl_hit) },
+          { key: "tgthit",  tone: "pos",   label: "TGT Hit",       val: this.fmtInt(c.tgt_hit),  sub: pct(c.tgt_hit), subClass: "txt-green" },
+          { key: "closed",  tone: "purple",label: "Trade Closed",  val: this.fmtInt(c.trade_closed), sub: pct(c.trade_closed) },
+        ];
+      },
+
+      /* ── signal age ── */
+      ageSec(r) {
+        if (!r || !r.received_at) return null;
+        const t = Date.parse(String(r.received_at).replace(" ", "T"));
+        if (Number.isNaN(t)) return null;
+        return Math.max(0, Math.round((Date.now() - t) / 1000));
+      },
+      ageBand(r) {
+        if (!r) return "expired";
+        if (r.family === "expired") return "expired";
+        const s = this.ageSec(r);
+        if (s === null) return "expired";
+        if (s <= 30) return "fresh";
+        if (s <= 120) return "warm";
+        return "stale";
+      },
+      ageBandLabel(r) {
+        return { fresh: "0–30 sec", warm: "30–120 sec", stale: ">120 sec", expired: "Expired" }[this.ageBand(r)];
+      },
+      ageText(r) {
+        if (!r || r.family === "expired") return "expired";
+        const s = this.ageSec(r);
+        if (s === null) return "—";
+        if (s < 60) return s + " sec";
+        if (s < 3600) return Math.round(s / 60) + " min";
+        if (s < 86400) return Math.round(s / 3600) + " hr";
+        return Math.round(s / 86400) + " d";
+      },
+
+      /* ── lifecycle: real stamps only; the three unpersisted stages (G-2) are
+            shown as "not captured" rather than guessed. ── */
+      lifecycle(r) {
+        if (!r) return [];
+        const NC = "not captured";
+        const step = (label, ts) => ({
+          label, state: ts ? "done" : "pending",
+          ts_text: ts ? String(ts).replace("T", " ").slice(11, 19) : "—",
+        });
+        const nc = (label) => ({ label, state: "unknown", ts_text: NC });
+        const out = [step("Signal Received", r.received_at), nc("Validated"),
+                     nc("Risk Passed"), nc("Capital Passed")];
+        if (r.family === "rejected" || r.family === "duplicated" || r.family === "expired") {
+          out.push({ label: this.statusLabel(r) === "DUPLICATE" ? "Duplicate" : this.cap(r.family),
+                     state: "stop", ts_text: String(r.received_at || "").replace("T", " ").slice(11, 19) || "—" });
+          return out;
+        }
+        out.push(step("Order Created", r.order_placed_at));
+        out.push(step("Order Filled", r.order_filled_at || r.entry_time));
+        if (r.exit_reason === "SL_HIT")      out.push(step("SL Hit", r.exit_time));
+        else if (r.exit_reason === "TGT_HIT") out.push(step("TGT Hit", r.exit_time));
+        else if (r.exit_time)                 out.push(step(this.cap(r.exit_reason || "Exit"), r.exit_time));
+        out.push(step("Trade Closed", r.exit_time));
+        return out;
+      },
+      hasUncaptured(r) { return !!r; },
+
+      /* ── formatting ── */
+      fmtInt(v) { return Number(v || 0).toLocaleString("en-IN"); },
+      dash(v) { return (v === null || v === undefined || v === "") ? "—" : v; },
+      cap(s) { s = String(s || ""); return s ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : "—"; },
+      slug(s) { return String(s || "none").toLowerCase().replace(/[^a-z0-9]+/g, "-"); },
+      dirCls(d) { const u = String(d || "").toUpperCase();
+        return u === "SHORT" ? "dir-short" : (u === "LONG" ? "dir-long" : "dir-none"); },
+      dmy(iso) {
+        if (!iso || iso.length < 10) return "—";
+        const MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+        return iso.slice(8, 10) + "-" + MON[parseInt(iso.slice(5, 7), 10) - 1] + "-" + iso.slice(0, 4);
+      },
+      durTxt(sec) {
+        if (sec === null || sec === undefined) return "—";
+        const s = Number(sec); if (Number.isNaN(s) || s < 0) return "—";
+        const h = Math.floor(s / 3600), m = Math.round((s % 3600) / 60);
+        return h ? (h + "h " + String(m).padStart(2, "0") + "m") : (m + "m");
+      },
+      pageInfo() {
+        const n = this.filtered().length;
+        if (!n) return "Showing 0 to 0 of 0 entries";
+        const from = (this.tPage - 1) * this.tPageSize + 1;
+        const to = Math.min(n, this.tPage * this.tPageSize);
+        return "Showing " + from + " to " + to + " of " + this.fmtInt(n) + " entries";
+      },
+      /* 1 2 3 … last, matching the mockup's pager */
+      pageWindow() {
+        const last = this.tPageCount(this.filtered()), cur = this.tPage, out = [];
+        if (last <= 5) { for (let i = 1; i <= last; i++) out.push(i); return out; }
+        out.push(1);
+        let a = Math.max(2, cur - 1), b = Math.min(last - 1, cur + 1);
+        if (cur <= 3) { a = 2; b = 4; }
+        if (cur >= last - 2) { a = last - 3; b = last - 1; }
+        if (a > 2) out.push("…");
+        for (let i = a; i <= b; i++) out.push(i);
+        if (b < last - 1) out.push("…");
+        out.push(last);
+        return out;
+      },
+      sigIcon(k) { return SIG_ICONS[k] || SIG_ICONS.total; },
+    });
 }
+
+const _SG = 'stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"';
+const SIG_ICONS = {
+  total:     `<svg viewBox="0 0 24 24" ${_SG}><circle cx="12" cy="12" r="2"/><path d="M7.5 16.5a6 6 0 0 1 0-9M16.5 7.5a6 6 0 0 1 0 9"/></svg>`,
+  accepted:  `<svg viewBox="0 0 24 24" ${_SG}><path d="M20 6L9 17l-5-5"/></svg>`,
+  rejected:  `<svg viewBox="0 0 24 24" ${_SG}><path d="M18 6L6 18M6 6l12 12"/></svg>`,
+  duplicate: `<svg viewBox="0 0 24 24" ${_SG}><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>`,
+  created:   `<svg viewBox="0 0 24 24" ${_SG}><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h4"/></svg>`,
+  filled:    `<svg viewBox="0 0 24 24" ${_SG}><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M8.5 12.5l2.5 2.5 4.5-5"/></svg>`,
+  slhit:     `<svg viewBox="0 0 24 24" ${_SG}><path d="M3 7l6 6 4-4 8 8"/><path d="M21 17v-5h-5"/></svg>`,
+  tgthit:    `<svg viewBox="0 0 24 24" ${_SG}><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/></svg>`,
+  closed:    `<svg viewBox="0 0 24 24" ${_SG}><circle cx="12" cy="12" r="9"/><path d="M8.5 12.5l2.5 2.5 4.5-5"/></svg>`,
+};
 </script>
 {% endblock %}

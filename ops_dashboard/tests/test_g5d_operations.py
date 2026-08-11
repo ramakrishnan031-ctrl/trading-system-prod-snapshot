@@ -9,6 +9,8 @@ import os
 
 from backend.services import operations
 
+from conftest import assert_signal_score_confined_to_screen04   # noqa: E402
+
 _FRONTEND = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend")
 
 
@@ -117,9 +119,4 @@ def test_hard_kill_blink_still_single():
 
 
 def test_no_signal_score_after_g5d():
-    for dp, _dirs, files in os.walk(_FRONTEND):
-        for f in files:
-            if f.endswith(".min.js"):
-                continue
-            with open(os.path.join(dp, f), encoding="utf-8", errors="ignore") as fh:
-                assert "signal score" not in fh.read().lower(), os.path.join(dp, f)
+    assert_signal_score_confined_to_screen04(_FRONTEND)
