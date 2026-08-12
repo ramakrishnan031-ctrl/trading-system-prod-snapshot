@@ -727,21 +727,26 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 .strat-page .ic-neg  { background: rgba(var(--t-red), .16); color: var(--neg); }
 .strat-page .ic-warn { background: rgba(var(--t-orange), .16); color: var(--orange); }
 
-/* Filters */
-.strat-page .flt-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 14px; }
-.strat-page .flt-field { display: flex; flex-direction: column; gap: 5px; min-width: 150px; flex: 1 1 150px; }
-.strat-page .flt-k { font-size: 12px; font-weight: 600; color: var(--muted); }
-.strat-page .flt-c { height: 36px; padding: 0 10px; font-size: 13px; color: var(--text);
+/* Filters — Screen-03 owns this language; Screen-04 SHARES the same rules rather
+   than restating the values, so the two panels cannot drift apart. The Signals
+   markup already uses the identical classes (.flt-row/.flt-field/.flt-k/.flt-c/
+   .flt-actions); only the scope was missing, which is why its controls fell back
+   to browser defaults. ⛔ No value changed — Screen-03 renders byte-identically. */
+.strat-page .flt-row, .sig-page .flt-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 14px; }
+.strat-page .flt-field, .sig-page .flt-field { display: flex; flex-direction: column; gap: 5px; min-width: 150px; flex: 1 1 150px; }
+.strat-page .flt-k, .sig-page .flt-k { font-size: 12px; font-weight: 600; color: var(--muted); }
+.strat-page .flt-c, .sig-page .flt-c { height: 36px; padding: 0 10px; font-size: 13px; color: var(--text);
   background: var(--card); border: 1px solid var(--card-bd); border-radius: 8px; font-family: inherit; }
-.strat-page .flt-c:focus { outline: none; border-color: var(--blue); }
-.strat-page .flt-sm { height: 30px; padding: 0 8px; width: auto; min-width: 58px; }
-.strat-page .flt-actions { display: flex; gap: 10px; align-items: flex-end; margin-left: auto; }
-.strat-page .btn-ghost, .strat-page .btn-primary { height: 36px; padding: 0 16px; font-size: 13px; font-weight: 600;
+.strat-page .flt-c:focus, .sig-page .flt-c:focus { outline: none; border-color: var(--blue); }
+.strat-page .flt-sm, .sig-page .flt-sm { height: 30px; padding: 0 8px; width: auto; min-width: 58px; }
+.strat-page .flt-actions, .sig-page .flt-actions { display: flex; gap: 10px; align-items: flex-end; margin-left: auto; }
+.strat-page .btn-ghost, .strat-page .btn-primary,
+.sig-page .btn-ghost, .sig-page .btn-primary { height: 36px; padding: 0 16px; font-size: 13px; font-weight: 600;
   border-radius: 8px; cursor: pointer; font-family: inherit; }
-.strat-page .btn-ghost { background: transparent; color: var(--muted); border: 1px solid var(--card-bd); }
-.strat-page .btn-ghost:hover { color: var(--text); border-color: var(--blue); }
-.strat-page .btn-primary { background: var(--blue); color: #fff; border: 1px solid var(--blue); }
-.strat-page .btn-primary:hover { filter: brightness(1.08); }
+.strat-page .btn-ghost, .sig-page .btn-ghost { background: transparent; color: var(--muted); border: 1px solid var(--card-bd); }
+.strat-page .btn-ghost:hover, .sig-page .btn-ghost:hover { color: var(--text); border-color: var(--blue); }
+.strat-page .btn-primary, .sig-page .btn-primary { background: var(--blue); color: #fff; border: 1px solid var(--blue); }
+.strat-page .btn-primary:hover, .sig-page .btn-primary:hover { filter: brightness(1.08); }
 
 /* Strategy hierarchy */
 .strat-page .hier-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
@@ -863,9 +868,9 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 @media (max-width: 1400px) { .sig-page .sig-work { grid-template-columns: minmax(0, 1fr); } }
 .sig-page .sig-left { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 
-/* Filters — two rows of four, actions pinned right */
-.sig-page .sig-flt { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px 14px; }
-@media (max-width: 1100px) { .sig-page .sig-flt { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+/* Filters — the Screen-03 flex-wrap row (shared rules above). The old 4-column
+   grid is GONE: it fought .flt-row's flex and left dead space in every cell,
+   because the fields it sized were never receiving .flt-field's stacking. */
 .sig-page .flt-dr { display: flex; align-items: center; gap: 6px; }
 .sig-page .flt-dr .flt-c { min-width: 0; flex: 1 1 0; }
 .sig-page .flt-to { font-size: 12px; color: var(--dim); flex: 0 0 auto; }
@@ -873,9 +878,10 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
   border: 1px solid var(--border); background: var(--panel2); color: var(--muted);
   cursor: pointer; font-size: 13px; line-height: 1; }
 .sig-page .flt-reload:hover { color: var(--text); border-color: var(--blue); }
-.sig-page .sig-flt-actions { display: flex; align-items: flex-end; justify-content: flex-end;
-  gap: 9px; grid-column: 4; }
-@media (max-width: 1100px) { .sig-page .sig-flt-actions { grid-column: 2; } }
+/* Actions ride .flt-actions' `margin-left:auto` (shared with Screen-03); the old
+   `grid-column` pin is gone with the grid. Date Range needs more room than a
+   150px field because it holds two date inputs plus the reload button. */
+.sig-page .flt-daterange { flex: 1 1 280px; min-width: 280px; }
 
 /* Table toolbar — segmented rows-per-page + export */
 .sig-page .sig-toolbar { display: flex; align-items: center; justify-content: space-between;
