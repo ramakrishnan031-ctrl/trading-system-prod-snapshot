@@ -252,11 +252,16 @@
           <!-- ⛔ NOT a chart of invented data. An intraday MTM curve needs a live
                price the GUI cannot reach; the panel says so rather than drawing
                a line that would look measured. -->
+          <!-- Copy is kept SHORT on purpose: it has to fit the card beside three
+               shorter panels. The full reasoning lives in the Overview tab of the
+               detail rail; this states the fact and its cause, nothing more. -->
           <div class="od-line od-na-block pos-na">
-            <b>MTM is not available to this screen.</b>
-            An intraday MTM curve needs a live price, and the dashboard reads only the
-            local database — it makes no broker call. <em x-text="sm.mtm ? sm.mtm.reason : ''"></em>
-            Today's <b>realized</b> P&amp;L is shown in the KPI deck and is a different quantity.
+            <p><b>MTM is not available to this screen.</b>
+              An intraday MTM curve needs a live price; the dashboard reads only
+              the local database.</p>
+            <p class="pos-na-reason" x-text="sm.mtm ? sm.mtm.reason : ''"></p>
+            <p>Today's <b>realized</b> P&amp;L is in the KPI deck — a different
+              quantity.</p>
           </div>
         </section>
 
@@ -308,7 +313,7 @@
             <button type="button" :class="tab==='overview' ? 'is-on':''" @click="tab='overview'">Overview</button>
             <button type="button" :class="tab==='lifecycle'? 'is-on':''" @click="tab='lifecycle'">Lifecycle</button>
             <button type="button" :class="tab==='sltgt'    ? 'is-on':''" @click="tab='sltgt'">SL / TGT</button>
-            <button type="button" :class="tab==='risk'     ? 'is-on':''" @click="tab='risk'">Risk &amp; Reward</button>
+            <button type="button" :class="tab==='risk'     ? 'is-on':''" @click="tab='risk'">Risk / RR</button>
           </div>
 
           <!-- ── OVERVIEW ── -->

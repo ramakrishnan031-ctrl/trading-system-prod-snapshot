@@ -1315,3 +1315,24 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 /* The table is wider than Orders (four System/Broker pairs), so the columns
    stay compact and the existing .ord-scroll keeps it scrolled, ⛔ never clipped. */
 .pos-page .pos-tbl th, .pos-page .pos-tbl td { white-space: nowrap; }
+
+/* The unavailable blocks are prose, so they need paragraph rhythm — without it
+   the injected reason string runs into the sentence after it. */
+.pos-page .pos-na p { margin: 0 0 7px; }
+.pos-page .pos-na p:last-child { margin-bottom: 0; }
+.pos-page .pos-na-reason { color: var(--dim); font-style: italic; }
+
+/* Screen-05's detail rail was sized for THREE tabs; Positions has four
+   (Overview · Lifecycle · SL/TGT · Risk & Reward) and at 302px the labels wrapped
+   to two and three lines. Tighten padding/tracking and forbid the wrap so all
+   four sit on one row. ⛔ Font-size is NOT reduced below Screen-05's 10.5px —
+   the readability floor stands. */
+.pos-page .od-tabs { gap: 3px; padding: 4px 8px 10px; }
+.pos-page .od-tabs button { padding: 5px 3px; letter-spacing: 0; white-space: nowrap; }
+
+/* Screen-05 sets `.od-na-block b { display: block }` so the panel's lead-in sits
+   on its own line. Positions reuses that block for prose with INLINE emphasis,
+   which inherited the rule and pushed single words onto their own lines. Keep
+   the lead-in behaviour, make emphasis inside later paragraphs inline again. */
+.pos-page .pos-na p b { display: inline; margin-bottom: 0; }
+.pos-page .pos-na p:first-child b { display: block; margin-bottom: 6px; }
