@@ -370,6 +370,59 @@ status/direction/type colours intact.
 
 ---
 
+### Entry 8
+
+| Field | Value |
+|---|---|
+| **Date/time** | 2026-08-12 23:52 IST |
+| **Commit** | `fb4bfe199fcbab533559c6c4f0200ac22eb8ee4b` |
+| **Short** | `fb4bfe1` |
+| **Branch** | `feat/screen06-positions` |
+| **Screen** | Screen-06 Positions — R:R column |
+| **Pushed** | **NO** |
+| **Deployed** | **NO** |
+| **Reason** | Special no-deployment window |
+
+**Change summary** — adds **R:R between the TGT group and SL Points**, the last
+outstanding table correction. Action remains the final column.
+
+- **Source**: each strategy's own `config/strategies/<name>.yaml` →
+  **`tgt_risk_reward`**. ⛔ Not derived from prices, ⛔ no global, ⛔ no default.
+  Missing field → `—`.
+- **Reuses the existing path** rather than adding a second one (section 5):
+  `config_reader` projects the field, `trading.py` reads the projection. ⭐ A test
+  asserts **exactly two modules participate** and that nobody but `config_reader`
+  globs the strategy directory, so a competing reader fails loudly.
+- **Rendering**: `1.5:1` / `2:1` (a whole number drops its `.0`) through **one
+  shared helper** the table and the detail rail both call — the same ratio can
+  never be printed two ways. The price-derived ratio stays a **separate** number
+  labelled *"implied by levels"* in the detail card.
+- **`colOrder` key v2 → v3**: a stored v2 order would append the reinstated column
+  at the **end** (`initCols` appends unknown keys) and it would never appear in
+  its intended place.
+
+**⚠️ Worth knowing before reviewing on real data**
+
+**All 16 production strategies currently configure `tgt_risk_reward: 1.5`**, so on
+the live screen **every row will read `1.5:1`** and will *look* like a hard-coded
+constant. It is not. ⭐ The test therefore proves per-strategy sourcing using
+**three different fixture values (1.5 / 2.0 / 3.0) plus one strategy with none** —
+a test written against production values could not tell a per-strategy read from a
+constant.
+
+**Width holds.** The column is centred, carries no currency symbol, and is narrow
+enough that **1920px and 1680px still show the whole table with no horizontal
+scrollbar** (`SCROLLW == CLIENTW` at both). ⛔ Nothing was removed to make room.
+
+**Verification** — suite **485 passed / 1 failed** (known environmental
+`kiteconnect` check). Read from the rendered DOM, TCS on `first_pullback_short`:
+`[17] TGT Broker 3205.00 · [18] R:R "1.5:1" · [19] SL Points 25.20 ·
+[20] TGT Points 59.80 · [21] LTP n/a · [22] Unrealised n/a · [23] Close`.
+Other strategies: `gap_fade_long` → `2:1`, `range_breakout_long` → `3:1`,
+`vwap_bounce_long` → `—`.
+
+---
+
 ## ⚠️ Carried forward for tomorrow's deployment review
 
 1. **`/api/export/orders` does not exist.** Screen-05's *Export XLSX* button navigates
