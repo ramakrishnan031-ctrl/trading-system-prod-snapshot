@@ -556,3 +556,56 @@ def test_view_full_details_exists_and_is_read_only(tpl: str) -> None:
     # it is a read view — no action wiring inside it
     full_block = body.split("VIEW FULL DETAILS", 1)[1].split("ACTION — CLOSE POSITION", 1)[0]
     assert "openAction" not in full_block and "pos-act" not in full_block
+
+
+# ── 13 · currency symbol placement + width ──────────────────────────────────
+def test_table_cells_carry_no_currency_symbol(tpl: str) -> None:
+    """₹ belongs in the COLUMN HEADING, ⛔ not repeated on every cell.
+
+    The renderer must use num() for monetary kinds. ⛔ money()/rs() there would
+    put ₹ back into the cells (and cost ~10px on each of ten numeric columns,
+    which is width this table needs).
+    """
+    body = _body(tpl)
+    cellfn = body.split("cell(r, c) {", 1)[1].split("statusPill(", 1)[0]
+    for kind in ('c.kind === "rs"', 'c.kind === "ltp"', 'c.kind === "unreal"'):
+        assert kind in cellfn
+    # every monetary branch formats with num(), never money()/rs()
+    assert "this.rs(v)" not in cellfn, "table cells must not use the ₹ formatter"
+    assert "this.money(v)" not in cellfn, "table cells must not use the ₹ formatter"
+    assert cellfn.count("this.num(v)") >= 3
+
+
+def test_num_formatter_has_no_symbol_and_keeps_precision(tpl: str) -> None:
+    body = _body(tpl)
+    fn = body.split("num(v) {", 1)[1].split("},", 1)[0]
+    assert "₹" not in fn, "the table formatter must not emit a currency symbol"
+    assert "toFixed(2)" in fn, "precision must be unchanged"
+
+
+def test_monetary_headings_keep_the_symbol(tpl: str) -> None:
+    """⛔ The symbol is REMOVED FROM CELLS, ⛔ not from the screen."""
+    block = tpl.split("DEFAULT_COLS: [", 1)[1].split("],", 1)[0]
+    for lbl in ('label: "SL Points ₹"', 'label: "TGT Points ₹"',
+                'label: "LTP ₹"', 'label: "Unrealised ₹"'):
+        assert lbl in block, f"heading lost its currency symbol: {lbl}"
+    for grp in ('group: "Entry ₹"', 'group: "SL ₹"', 'group: "TGT ₹"'):
+        assert grp in block
+
+
+def test_detail_card_keeps_the_symbol(tpl: str) -> None:
+    """The detail card labels sit BESIDE their values, not above a column, so
+    they keep ₹ — via rs(). ⛔ The cell rule must not leak into the rail."""
+    body = _body(tpl)
+    rail = body.split('class="od-tabs"', 1)[1]
+    assert "rs(sel.sl_initial)" in rail and "rs(sel.tgt_initial)" in rail
+
+
+def test_detail_is_a_drawer_so_the_table_gets_full_width(tpl: str) -> None:
+    """The 302px rail was reserved whether or not anything was selected. It is
+    now an overlay shown only on selection — ⛔ the interaction is unchanged."""
+    body = _body(tpl)
+    assert "pos-drawer" in body
+    assert re.search(r'class="panel mc-panel ord-detail pos-drawer"[^>]*x-show="sel"', body)
+    # ⛔ the ability to inspect a selection must survive
+    assert "Position Details" in body and "View Full Details" in body

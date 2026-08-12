@@ -1411,3 +1411,56 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
   gap: 4px 12px; padding: 4px 0 8px; }
 @media (max-width: 780px) { .pos-page .pos-full-grid { grid-template-columns: minmax(0, 1fr); } }
 .pos-page .pos-full-na { margin: 0 16px 12px; }
+
+/* ── Screen-06 final polish: full-width table, drawer detail ───────────────── */
+
+/* The table takes the WHOLE content width. Screen-05's grid reserved 302px for
+   a permanently-visible detail rail; Positions has 22 columns and needs that
+   width, so the detail became an overlay drawer instead (see below). */
+.pos-page .ord-work { grid-template-columns: minmax(0, 1fr); }
+
+/* Detail as a right-hand drawer. ⛔ No backdrop on purpose: the operator can
+   keep reading the table while it is open, which a modal would prevent. */
+.pos-page .ord-detail.pos-drawer {
+  position: fixed; top: 12px; right: 12px; bottom: 12px; width: 340px;
+  z-index: 55; overflow-y: auto; padding: 0;
+  border-radius: 12px; box-shadow: -14px 0 40px rgba(0, 0, 0, .5);
+}
+@media (max-width: 700px) {
+  .pos-page .ord-detail.pos-drawer { left: 12px; width: auto; }
+}
+
+/* Compact enough to fit 22 columns at a normal desktop width, ⛔ without going
+   below the readable floor: cells stay at 12px and headers at 11px, the same
+   sizes Screen-05 already ships and that were accepted there. Only the
+   horizontal padding is tightened. */
+.pos-page .pos-tbl { width: 100%; }
+.pos-page .pos-tbl th { padding: 7px 4px; }
+.pos-page .pos-tbl td { padding: 0 4px; font-size: 12px; }
+/* the two widest text columns get room; everything else stays tight */
+.pos-page .pos-tbl th:nth-child(3), .pos-page .pos-tbl td:nth-child(3) { max-width: 150px;
+  overflow: hidden; text-overflow: ellipsis; }
+.pos-page .pos-tbl .pos-act { padding: 2px 8px; font-size: 11px; }
+
+/* ⛔ The scrollbar is NOT removed — it is the responsive fallback below the
+   width where 22 columns genuinely cannot fit. At a normal desktop viewport
+   nothing scrolls; on a narrow window this is what keeps the data reachable
+   rather than clipped. */
+
+/* WIDTH RECLAMATION — measured, not guessed. At a 1920px viewport the content
+   box is 1649px and the table wanted 1862px. The binding constraint was the
+   HEADERS, not the data: "TGT POINTS ₹" is far wider than "70.00". So the
+   labels WRAP (which is exactly how the spreadsheet prints them) instead of
+   being abbreviated — ⛔ no heading loses a word. */
+.pos-page .pos-tbl th { white-space: normal; line-height: 1.15; vertical-align: bottom; }
+.pos-page .pos-tbl th > span:not(.st-grip):not(.st-arw) { display: inline-block; }
+.pos-page .pos-tbl th, .pos-page .pos-tbl td { padding: 6px 3px; }
+/* the drag grip only takes space while the header is hovered (Screen-04's trick) */
+.pos-page .pos-tbl .st-grip { width: 0; opacity: 0; overflow: hidden; display: inline-block;
+  transition: width .12s ease, opacity .12s ease; }
+.pos-page .pos-tbl th:hover .st-grip { width: 10px; opacity: .7; }
+/* Strategy is the one genuinely long text field — cap it and ellipsize, with the
+   full value still available in the row's detail card. ⛔ Nothing else truncates. */
+.pos-page .pos-tbl td:nth-child(3) { max-width: 132px; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.pos-page .pos-tbl .pill { padding: 1px 6px; font-size: 10.5px; }

@@ -281,17 +281,18 @@
       </div>
     </div>
 
-    <!-- ═══ POSITION DETAILS (right rail — the approved Orders/Signals card) ═══ -->
-    <aside class="panel mc-panel ord-detail">
+    <!-- ═══ POSITION DETAILS ═══
+         ⭐ AN OVERLAY DRAWER, not a permanent rail. The rail reserved 302px of
+         width whether or not anything was selected, and this table needs that
+         width to fit without a horizontal scrollbar. It slides over the page on
+         selection, so the interaction is unchanged — ⛔ nothing was removed, and
+         the empty-state placeholder is gone because a drawer that is not open
+         has nothing to say. -->
+    <aside class="panel mc-panel ord-detail pos-drawer" x-show="sel" x-cloak>
       <div class="od-head">
         <h2 class="mc-title">Position Details</h2>
         <button class="od-x" type="button" @click="sel = null" x-show="sel" x-cloak
                 aria-label="Close">✕</button>
-      </div>
-
-      <div class="od-empty" x-show="!sel" x-cloak>
-        <span class="od-empty-ic">◎</span>
-        <span>Select any position row to see its full lifecycle.</span>
       </div>
 
       <template x-if="sel">
@@ -682,6 +683,19 @@ function positionsPage() {
       rows() { return (this.data && this.data.rows) || []; },
       k(key) { const v = this.kpi[key]; return (v === null || v === undefined) ? "—" : v; },
       rs(v) { return (v === null || v === undefined || v === "") ? "—" : this.money(v); },
+      /* TABLE CELLS CARRY NO CURRENCY SYMBOL — the column heading does (ENTRY ₹,
+         SL ₹, LTP ₹ …). Repeating ₹ on every cell costs ~10px per numeric column
+         across ten of them, which is width this table needs, and it tells the
+         reader nothing the heading has not already said.
+         ⛔ TABLE-ONLY: the detail card and the close dialog keep `rs()`/`money()`,
+         because there the label sits beside the value, not above a column.
+         ⛔ Precision is unchanged — two decimals, and the sign is preserved. */
+      num(v) {
+        if (v === null || v === undefined || v === "") return "—";
+        const n = Number(v);
+        if (!isFinite(n)) return "—";
+        return (n < 0 ? "-" : "") + Math.abs(n).toFixed(2);
+      },
       pct(v) { return (v === null || v === undefined) ? "—" : Number(v).toFixed(2) + "%"; },
       dirLabel(d) { const s = String(d || "").toUpperCase();
         return s === "LONG" ? "Long" : s === "SHORT" ? "Short" : "—"; },
@@ -863,7 +877,7 @@ function positionsPage() {
           return '<button class="pos-act" type="button" title="Close this position">Close</button>';
         }
         if (c.kind === "age") return this.age(r);
-        if (c.kind === "rs")  return this.rs(v);
+        if (c.kind === "rs")  return this.num(v);          /* ⛔ no ₹ in cells */
         /* R:R is the STRATEGY-CONFIGURED ratio (strategy.yaml tgt_risk_reward),
            ⛔ not derived from prices and ⛔ not reversed for shorts. */
         if (c.kind === "rr")  return (v === null || v === undefined) ? "—" : v + " : 1";
@@ -873,12 +887,12 @@ function positionsPage() {
         if (c.kind === "ltp")
           return (v === null || v === undefined)
                ? '<span class="pos-nolive" title="No live broker price source (G4)">n/a</span>'
-               : this.money(v);
+               : this.num(v);
         if (c.kind === "unreal") {
           if (v === null || v === undefined)
             return '<span class="pos-nolive" title="Needs LTP — no live broker price source (G4)">n/a</span>';
           const cls = Number(v) > 0 ? "v-pos" : Number(v) < 0 ? "v-neg" : "v-zero";
-          return '<span class="' + cls + '">' + this.money(v) + "</span>";
+          return '<span class="' + cls + '">' + this.num(v) + "</span>";
         }
         if (c.kind === "pct") return (v === null || v === undefined) ? "—" : Number(v).toFixed(2) + "%";
         if (c.kind === "pctpos")
