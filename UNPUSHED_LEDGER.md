@@ -121,7 +121,7 @@ the wrong ref gets pushed; Screen-06 therefore gets its own correctly-named bran
 | Field | Value |
 |---|---|
 | **Date/time** | 2026-08-12 20:12 IST |
-| **Commit** | **the branch tip** — verify with `git rev-parse HEAD` on `feat/screen06-positions` |
+| **Commit** | `5f7b6e08b25b0e85e408a00538d0e53417a50f7e` (recorded by Entry 4, which followed it) |
 | **Branch** | `feat/screen06-positions` |
 | **Screen** | — (process artefact) |
 | **Pushed** | **NO** |
@@ -134,9 +134,51 @@ the wrong ref gets pushed; Screen-06 therefore gets its own correctly-named bran
 the branch.
 
 📌 **A ledger entry cannot contain its own commit hash** — writing the hash changes
-it. This entry is the last one, so its SHA is defined as **the branch tip**, which is
-one `git rev-parse` away and cannot go stale the way a copied hash can. ⛔ Do not
-"fix" this by amending: that produces exactly the dead hash it is correcting.
+it. The rule that works: **the next entry records the previous one's SHA**, and the
+final entry's SHA is the branch tip, one `git rev-parse` away. ⛔ Do not "fix" a
+self-hash by amending: that produces exactly the dead hash it is correcting.
+
+---
+
+### Entry 4
+
+| Field | Value |
+|---|---|
+| **Date/time** | 2026-08-12 20:26 IST |
+| **Commit** | `3dfb0b59c9404096d2fabf8169730c4ef4c47ded` |
+| **Short** | `3dfb0b5` |
+| **Branch** | `feat/screen06-positions` |
+| **Screen** | Screen-06 Positions (render defects) |
+| **Pushed** | **NO** |
+| **Deployed** | **NO** |
+| **Reason** | Special no-deployment window |
+
+**Change summary** — three defects that **only a render exposed**; the test suite
+was green throughout, because none of them is a data or contract defect:
+
+1. The MTM panel's injected reason string ran into the sentence after it.
+2. That panel's copy was then taller than its card and the last line clipped.
+3. The detail rail's tab bar was built for Screen-05's **three** tabs; Positions has
+   four, so "SL / TGT" wrapped to three lines and "Risk & Reward" to two.
+   Also fixed: Screen-05's `.od-na-block b { display: block }` (a lead-in heading
+   rule) was inherited by inline emphasis and pushed single words onto their own
+   lines.
+
+📌 **The lesson worth keeping:** the contract tests could not have caught any of
+these. They verify *what the screen says*; only rendering it verifies *that it can
+be read*. A screen is not verified until it has been looked at.
+
+**Verification** — rendered in headless Edge against a local fixture server
+(`127.0.0.1:8599`, scratchpad-only launcher, ⛔ never the VM service) and the
+screenshots read: KPI deck, filters, status strip, the four System/Broker column
+pairs, the detail card on Lifecycle and SL/TGT, and all four summary panels.
+Suite unchanged at **444 passed / 1 failed** (the known environmental
+`kiteconnect` isolation check).
+
+⭐ **The pairs are demonstrably working on real data**: TCS renders
+`SL (System) ₹3,290.00` against `SL (Broker) ₹3,289.55` — a genuine
+system-vs-broker mismatch surfaced rather than smoothed — while HDFCBANK renders
+an em-dash where no SL leg exists.
 
 ---
 
