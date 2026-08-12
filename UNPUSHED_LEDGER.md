@@ -182,6 +182,71 @@ an em-dash where no SL leg exists.
 
 ---
 
+### Entry 5
+
+| Field | Value |
+|---|---|
+| **Date/time** | 2026-08-12 20:52 IST |
+| **Commit** | `a0be1706230b567e98b71a404790c2d20bc9f847` |
+| **Short** | `a0be170` |
+| **Branch** | `feat/screen06-positions` |
+| **Screen** | Screen-06 Positions — table reworked to `position screen.xlsx` |
+| **Pushed** | **NO** |
+| **Deployed** | **NO** |
+| **Reason** | Special no-deployment window |
+
+**Change summary**
+
+- **Columns to the spreadsheet.** SL/TGT distance % → **SL POINTS / TGT POINTS in ₹
+  per share** (notes 2/3: per-qty everywhere except Unrealised), from the **system**
+  levels and direction-aware. Adds **R:R**, **LTP**, **Unrealised**, **Action**.
+  Drops Capital Used / Risk / Highest Profit / Highest Drawdown / Pos Age from the
+  table — the spreadsheet omits them and they remain in the detail card.
+- **R:R is strategy-configured** (note 4), from `strategy.yaml` `tgt_risk_reward`.
+  ⛔ Not reversed for shorts. The price-derived ratio survives in the detail card
+  *beside* it as "implied by levels".
+- **Action** opens a close dialog (CMP or manual per-qty price) with a live estimate.
+- **SL/TGT keep "Broker", not "Filled"** — per section C, unchanged.
+
+**⚠️ Two defects found while doing this, both worth recording**
+
+1. **`config_reader.get_strategies` projects an explicit field whitelist** that did
+   not include `tgt_risk_reward`, so the first implementation silently returned
+   `None` for **every** strategy. A test that only checked "R:R is None when
+   unconfigured" would have passed on a completely broken read — which is why the
+   paired test that **sets** the key and asserts the value appears was added.
+   The field is now projected **with no default**: a strategy configuring no ratio
+   shows `—` rather than inheriting `order_placer`'s `2.0` fallback.
+2. **A CSS specificity defect the render exposed**: `.ord-page .od-kv b` is
+   `(0,2,1)` and beat `.pos-page .v-pos` `(0,2,0)`, so **every signed value in the
+   detail rail rendered plain white** — Net P&L, Highest Profit/Drawdown, and the
+   dialog's estimated P&L. It was visible in a screenshot I had already taken and
+   I did not catch it the first time. The spreadsheet requires the sign to be
+   legible by colour (note 6), so this is a correctness fix, not polish.
+
+**⛔ Data-integrity positions held**
+
+- **LTP and Unrealised are not faked.** No live-price source exists, so both render
+  an explicit `n/a`. The unrealised arithmetic is implemented **and tested**
+  — `(ltp − entry_filled) × qty` for LONG, mirrored for SHORT, against the
+  **filled** entry — so it is already correct the day a live price is wired in.
+  Colour-by-sign is in place for that day. ⛔ Never fed a stale or system price.
+- **The Action dialog cannot execute and says so.** The dashboard's only POST route
+  is `/login` and every DB connection is read-only, so the confirm button is
+  disabled and CMP is disabled for want of a price. ⭐ A new test **asserts that
+  POST-route fact**, so the dialog's claim fails loudly if a write path ever appears.
+
+**Verification** — suite **458 passed / 1 failed** (the known environmental
+`kiteconnect` check). Rendered and read: per-share points correct in both
+directions (**TCS SHORT** entry 3264.80 → SL ₹25.20 / TGT ₹59.80; **RELIANCE LONG**
+₹65.00/₹65.00), R:R shows `2:1` and `1.5:1` where configured and `—` where not,
+LTP/Unrealised show `n/a`, and the dialog's estimate `(2900.50−2845.30)×75 =
+₹4,140.00` renders green. ⭐ The detail card now shows **R:R (strategy config)
+1.5:1** against **R:R (implied by levels) 1:1** — a real gap, surfaced rather than
+collapsed.
+
+---
+
 ## ⚠️ Carried forward for tomorrow's deployment review
 
 1. **`/api/export/orders` does not exist.** Screen-05's *Export XLSX* button navigates
