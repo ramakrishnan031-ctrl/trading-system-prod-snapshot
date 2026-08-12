@@ -1882,23 +1882,55 @@ def _expected_rr(entry, sl, tgt, direction) -> Optional[float]:
     return round(reward / risk, 2)
 
 
-def _pct_from_entry(entry, level) -> Optional[float]:
-    """Distance of a level from the SYSTEM ENTRY, as a percentage OF ENTRY.
+def _level_points(entry, level, direction, is_sl: bool) -> Optional[float]:
+    """SL/TGT distance in RUPEES PER SHARE from the SYSTEM entry (spreadsheet
+    columns "SL POINTS (₹)" / "TGT POINTS (₹)").
 
-    📌 THE BASE IS ENTRY, AND THE COLUMN SAYS SO. The reference design measures
-    SL/TGT proximity from the LIVE PRICE — that quantity CANNOT be computed
-    here: ops_dashboard has ZERO live-price call sites (measured 12-Aug) and
-    /api/positions already declares ltp/mtm/unrealized/current_rr UNAVAILABLE
-    ('Pending Broker Source', G4). ⛔ Entry-distance is NOT proximity-to-LTP and
-    is never labelled as if it were.
+    📌 PER SHARE, NOT PER POSITION — spreadsheet note 2/3: "₹ denotes in all
+    places per qty basis (except: unrealised)". ⛔ Never multiplied by qty here.
+
+    📌 FROM THE SYSTEM LEVELS, NOT THE BROKER ONES (section E): these columns
+    describe what the system intended. A broker-derived distance would be a
+    different quantity and would need its own, differently-labelled column.
+
+    Direction-aware, so a correctly-placed level yields a POSITIVE distance:
+        LONG   sl = entry - sl_level    tgt = tgt_level - entry
+        SHORT  sl = sl_level - entry    tgt = entry - tgt_level
+    ⛔ Returns None (not 0.0) when an operand is missing — a zero would read as
+    "the stop sits exactly at entry", which is a measurement, not an absence.
     """
     try:
         e, v = float(entry), float(level)
     except (TypeError, ValueError):
         return None
-    if e == 0:
+    is_long = str(direction or "").upper() == "LONG"
+    d = (e - v) if (is_sl == is_long) else (v - e)
+    return round(abs(d), 2)
+
+
+def position_unrealised(entry_filled, ltp, qty, direction) -> Optional[float]:
+    """Unrealised P&L for the WHOLE position (the one total-value column).
+
+    📌 THE EXCEPTION TO THE PER-SHARE RULE — spreadsheet note 6:
+        LONG   (ltp - entry_filled) * qty
+        SHORT  (entry_filled - ltp) * qty
+    ⭐ Against the FILLED entry, ⛔ never the system entry — unrealised measures
+    what the position is actually worth against what was actually paid.
+
+    ⛔⛔ THIS FUNCTION IS CORRECT AND CURRENTLY UNREACHABLE WITH A REAL `ltp`.
+    ops_dashboard has ZERO live-price call sites, so every caller passes
+    ltp=None and gets None back. It exists, and is tested, so that the day a
+    live-price source is wired in, the arithmetic is already pinned — ⛔ it must
+    NEVER be fed a stale or system price to make the column look populated.
+    """
+    if ltp is None or entry_filled is None or not qty:
         return None
-    return round(abs(e - v) / e * 100.0, 2)
+    try:
+        e, p, q = float(entry_filled), float(ltp), int(qty)
+    except (TypeError, ValueError):
+        return None
+    per_share = (p - e) if str(direction or "").upper() == "LONG" else (e - p)
+    return round(per_share * q, 2)
 
 
 def position_screen_rows(cfg: dict, today: str, limit: int = _LIST_CAP) -> list:
@@ -1943,10 +1975,24 @@ def position_screen_rows(cfg: dict, today: str, limit: int = _LIST_CAP) -> list:
         r["qty_position"] = r.get("qty_filled")
 
         entry_sys = r.get("entry_target_price")
+        direction = r.get("direction")
+        # Per-share rupee distances from the SYSTEM levels (spreadsheet §E).
+        r["sl_points"] = _level_points(entry_sys, r.get("sl_initial"), direction, True)
+        r["tgt_points"] = _level_points(entry_sys, r.get("tgt_initial"), direction, False)
+        # Derived R:R is kept for the detail card as a CROSS-CHECK against the
+        # strategy-configured ratio the table shows. ⛔ They are two different
+        # quantities and the table never silently substitutes one for the other.
         r["expected_rr"] = _expected_rr(
-            entry_sys, r.get("sl_initial"), r.get("tgt_initial"), r.get("direction"))
-        r["sl_dist_pct"] = _pct_from_entry(entry_sys, r.get("sl_initial"))
-        r["tgt_dist_pct"] = _pct_from_entry(entry_sys, r.get("tgt_initial"))
+            entry_sys, r.get("sl_initial"), r.get("tgt_initial"), direction)
+
+        # ⛔⛔ LTP AND UNREALISED HAVE NO SOURCE IN THIS BUILD and are set to
+        # None here rather than omitted, so the shape of a row never changes
+        # when a live-price source is finally wired in. The arithmetic lives in
+        # position_unrealised() and is already tested; only `ltp` is missing.
+        r["ltp"] = None
+        r["ltp_at"] = None
+        r["unrealised"] = position_unrealised(
+            r.get("entry_actual_price"), r["ltp"], r.get("qty_filled"), direction)
 
         # Capital used: the recorded position value, else FILLED qty x the price
         # that actually applied (fill price when we have one, else the system

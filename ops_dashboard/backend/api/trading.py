@@ -230,6 +230,14 @@ def _position_rows_enriched(cfg, today: str) -> list:
     scores = db_reader.signal_scores(cfg, [r.get("signal_id") for r in rows])
     min_pass = config_reader.get_min_pass_score(cfg)
 
+    # R:R IS STRATEGY-CONFIGURED, ⛔ NOT DERIVED FROM PRICES (spreadsheet note 4:
+    # "R:R — refers to ratio as per each strategy.yaml wise"). Read from
+    # config/strategies/*.yaml → `tgt_risk_reward`. ⛔ A strategy without one
+    # yields None and renders '—'; ⛔ we never fall back to a price-derived
+    # ratio, which would silently answer a different question.
+    # ⛔ NOT reversed for SHORT — the configured ratio is the configured ratio.
+    strategies = config_reader.get_strategies(cfg)
+
     for r in rows:
         tid = str(r.get("trade_id"))
         bx = exits.get(tid) or {}
@@ -246,6 +254,12 @@ def _position_rows_enriched(cfg, today: str) -> list:
         r["signal_score"] = sc.get("signal_score")
         sys_score = sc.get("system_score")
         r["system_score"] = min_pass if sys_score is None else sys_score
+
+        rr = (strategies.get(r.get("strategy")) or {}).get("tgt_risk_reward")
+        try:
+            r["rr_configured"] = float(rr) if rr is not None else None
+        except (TypeError, ValueError):
+            r["rr_configured"] = None
     return rows
 
 
@@ -292,9 +306,10 @@ _POS_EXPORT_COLS = [
     ("Entry Price (Filled)", "entry_actual_price"),
     ("SL (System)", "sl_initial"), ("SL (Broker)", "sl_broker"),
     ("TGT (System)", "tgt_initial"), ("TGT (Broker)", "tgt_broker"),
-    ("SL Dist % (from entry)", "sl_dist_pct"),
-    ("TGT Dist % (from entry)", "tgt_dist_pct"),
-    ("Expected RR", "expected_rr"),
+    ("SL Points (Rs/share)", "sl_points"),
+    ("TGT Points (Rs/share)", "tgt_points"),
+    ("R:R (strategy)", "rr_configured"),
+    ("LTP", "ltp"), ("Unrealised", "unrealised"),
     ("Capital Used", "capital_used"), ("Risk Amount", "risk_amount"),
     ("Highest Profit %", "mfe_pct"), ("Highest Drawdown %", "mae_pct"),
     ("Exit Price", "exit_price"), ("Exit Reason", "exit_reason"),

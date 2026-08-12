@@ -59,6 +59,10 @@ def test_scanner_is_not_an_export_column() -> None:
 
 
 # ── 2 · the approved column order ───────────────────────────────────────────
+# The user's spreadsheet ("position screen.xlsx", 12-Aug-2026) is the authority
+# for this list. ⛔ Capital Used / Risk / Highest Profit / Highest Drawdown /
+# Position Age are deliberately NOT table columns — they live in the detail card,
+# which is where the spreadsheet leaves them.
 APPROVED = [
     # common head, identical to Screens 04/05 — ⛔ no Scanner between them
     "date", "time", "strategy", "symbol", "trade_type", "direction",
@@ -68,10 +72,10 @@ APPROVED = [
     "entry_target_price", "entry_actual_price",         # Entry group: System / Filled
     "sl_initial", "sl_broker",                          # SL group:    System / Broker
     "tgt_initial", "tgt_broker",                        # TGT group:   System / Broker
-    "sl_dist_pct", "tgt_dist_pct", "expected_rr",
-    "capital_used", "risk_amount",
-    "mfe_pct", "mae_pct",
-    "pos_age", "actions",
+    "sl_points", "tgt_points",                          # per-share ₹ distances
+    "rr_configured",                                    # strategy.yaml, not derived
+    "ltp", "unrealised",                                # unavailable in this build
+    "actions",
 ]
 
 
@@ -199,12 +203,17 @@ def test_api_publishes_the_unavailable_contract(client, today) -> None:
     assert body["unavailable"]["reason"]
 
 
-def test_no_live_price_column_exists(tpl: str) -> None:
-    """⛔ LTP / Current Value / Unrealized / MTM must not be table columns. An
-    always-empty column implies the value exists and merely happened to be
-    blank — the screen says WHY instead."""
+def test_only_the_requested_live_columns_exist(tpl: str) -> None:
+    """The spreadsheet asks for LTP and Unrealised BY NAME, so they are columns —
+    rendered as an explicit unavailable marker (see the renderer test below).
+
+    ⛔ The OTHER live-derived values are still not columns: Current Value,
+    Unrealized %, MTM and Current RR were never requested in the table, and an
+    always-empty column implies the value exists and merely happened to be blank.
+    """
     cols = _default_cols(tpl)
-    for banned in ("ltp", "current_value", "unrealized_pnl", "unrealized_pct",
+    assert "ltp" in cols and "unrealised" in cols
+    for banned in ("current_value", "unrealized_pnl", "unrealized_pct",
                    "mtm", "current_rr"):
         assert banned not in cols
 
@@ -217,10 +226,53 @@ def test_expected_rr_is_none_when_risk_is_not_positive() -> None:
     assert db_reader._expected_rr(100, 90, 120, "LONG") == pytest.approx(2.0)
 
 
-def test_pct_from_entry_uses_entry_as_its_base() -> None:
-    assert db_reader._pct_from_entry(100, 90) == pytest.approx(10.0)
-    assert db_reader._pct_from_entry(0, 90) is None
-    assert db_reader._pct_from_entry(None, 90) is None
+def test_points_are_per_share_and_direction_aware() -> None:
+    """⛔ PER SHARE, never multiplied by qty (spreadsheet notes 2/3), and
+    direction-aware so a correctly-placed level is a POSITIVE distance."""
+    # LONG entry 100, sl 90, tgt 120
+    assert db_reader._level_points(100, 90, "LONG", True) == pytest.approx(10.0)
+    assert db_reader._level_points(100, 120, "LONG", False) == pytest.approx(20.0)
+    # SHORT entry 100, sl 110, tgt 80 — same magnitudes, mirrored levels
+    assert db_reader._level_points(100, 110, "SHORT", True) == pytest.approx(10.0)
+    assert db_reader._level_points(100, 80, "SHORT", False) == pytest.approx(20.0)
+    # ⛔ absent operand is absent, NOT zero
+    assert db_reader._level_points(None, 90, "LONG", True) is None
+    assert db_reader._level_points(100, None, "LONG", True) is None
+
+
+def test_points_come_from_system_levels_not_broker(gui_config, today) -> None:
+    """Section E: the points columns describe what the SYSTEM intended."""
+    rows = {r["trade_id"]: r for r in db_reader.position_screen_rows(gui_config, today)}
+    r = rows["trd_c1"]          # entry 1000, sl_initial 990, LONG
+    assert r["sl_points"] == pytest.approx(10.0)
+    # the broker SL is 989.5 — if points were computed from it we would see 10.5
+    assert r["sl_points"] != pytest.approx(10.5)
+
+
+def test_unrealised_formula_is_right_but_unreachable_without_ltp() -> None:
+    """⭐ The arithmetic is pinned NOW so it is correct the day a live-price
+    source exists. ⛔ Until then every caller passes ltp=None and gets None."""
+    # LONG: (ltp - filled entry) * qty
+    assert db_reader.position_unrealised(100.0, 110.0, 5, "LONG") == pytest.approx(50.0)
+    # SHORT: (filled entry - ltp) * qty
+    assert db_reader.position_unrealised(100.0, 90.0, 5, "SHORT") == pytest.approx(50.0)
+    # losses stay negative (the UI colours on the sign)
+    assert db_reader.position_unrealised(100.0, 90.0, 5, "LONG") == pytest.approx(-50.0)
+    # ⛔ no LTP ⇒ no number
+    assert db_reader.position_unrealised(100.0, None, 5, "LONG") is None
+    assert db_reader.position_unrealised(None, 110.0, 5, "LONG") is None
+    assert db_reader.position_unrealised(100.0, 110.0, 0, "LONG") is None
+
+
+def test_rows_never_carry_a_fabricated_ltp(gui_config, today) -> None:
+    """⛔ THE CENTRAL DATA RULE for these two columns: no live source exists, so
+    ltp and unrealised must be None on every row — ⛔ never 0.0, and ⛔ never
+    quietly back-filled from a system or last-known price."""
+    rows = db_reader.position_screen_rows(gui_config, today)
+    assert rows
+    for r in rows:
+        assert r["ltp"] is None
+        assert r["unrealised"] is None
 
 
 def test_unrecognised_exit_reason_never_becomes_sl_or_tgt() -> None:
@@ -283,3 +335,115 @@ def test_positions_page_renders(client) -> None:
     html = r.get_data(as_text=True)
     assert "positionsPage()" in html
     assert "pos-page" in html and "ord-page" in html   # reuse of Screen-05's language
+
+
+# ── 10 · spreadsheet spec: R:R, LTP/Unrealised, Action ──────────────────────
+def test_rr_is_strategy_configured_not_price_derived(gui_config, today, client) -> None:
+    """Spreadsheet note 4: "R:R — refers to ratio as per each strategy.yaml".
+
+    ⛔ The table's R:R must be the CONFIGURED ratio. The fixture strategies have
+    no `tgt_risk_reward`, so it must be None — ⛔ NOT silently replaced by the
+    price-derived ratio, which the same rows DO have.
+    """
+    body = client.get(f"/api/positions/screen?date={today}").get_json()
+    rows = body["rows"]
+    assert rows
+    assert all(r["rr_configured"] is None for r in rows), \
+        "no fixture strategy configures tgt_risk_reward, so R:R must be unavailable"
+    # ⭐ and the price-derived one IS present — proving the table is not just
+    # showing that value under a different name.
+    assert any(r["expected_rr"] is not None for r in rows)
+
+
+def test_rr_is_read_when_the_strategy_configures_it(tmp_path, gui_config, today) -> None:
+    """⭐ NON-VACUOUS COUNTERPART: add tgt_risk_reward to a strategy file and the
+    value must appear. Without this, the test above could pass on a broken read."""
+    import os
+    import yaml
+    from backend.api import trading
+
+    sdir = os.path.join(gui_config["paths"]["config_dir"], "strategies")
+    path = os.path.join(sdir, "gap_fade_long.yaml")
+    with open(path, encoding="utf-8") as fh:
+        data = yaml.safe_load(fh)
+    data["tgt_risk_reward"] = 2.0
+    with open(path, "w", encoding="utf-8") as fh:
+        yaml.safe_dump(data, fh, sort_keys=False)
+
+    rows = trading._position_rows_enriched(gui_config, today)
+    gap = [r for r in rows if r["strategy"] == "gap_fade_long"]
+    assert gap, "fixture must have gap_fade_long positions"
+    assert all(r["rr_configured"] == pytest.approx(2.0) for r in gap)
+    # a strategy WITHOUT the key stays unavailable — ⛔ no global default leaks in
+    other = [r for r in rows if r["strategy"] == "vwap_bounce_long"]
+    assert other and all(r["rr_configured"] is None for r in other)
+
+
+def test_rr_is_not_reversed_for_shorts(tmp_path, gui_config, today) -> None:
+    """Section F: ⛔ do not reverse the configured ratio for short positions."""
+    import os
+    import yaml
+    from backend.api import trading
+
+    sdir = os.path.join(gui_config["paths"]["config_dir"], "strategies")
+    for name in ("gap_fade_long", "vwap_bounce_long"):
+        p = os.path.join(sdir, f"{name}.yaml")
+        with open(p, encoding="utf-8") as fh:
+            d = yaml.safe_load(fh)
+        d["tgt_risk_reward"] = 2.5
+        with open(p, "w", encoding="utf-8") as fh:
+            yaml.safe_dump(d, fh, sort_keys=False)
+    rows = trading._position_rows_enriched(gui_config, today)
+    vals = [r["rr_configured"] for r in rows if r["strategy"] in
+            ("gap_fade_long", "vwap_bounce_long")]
+    assert vals, "fixture must have positions on both strategies"
+    assert all(v == pytest.approx(2.5) for v in vals), \
+        "same configured ratio regardless of direction"
+
+
+def test_ltp_and_unrealised_render_unavailable_not_zero(tpl: str) -> None:
+    """⛔ The cell renderer must emit an explicit marker, ⛔ never a 0 or a blank
+    that would read as a measured value."""
+    body = _body(tpl)
+    assert 'c.kind === "ltp"' in body and 'c.kind === "unreal"' in body
+    assert "pos-nolive" in body
+    # colour-by-sign is present for the day a real value arrives
+    for cls in ("v-pos", "v-neg", "v-zero"):
+        assert cls in body
+
+
+def test_action_column_exists_and_cannot_execute(tpl: str) -> None:
+    """Section G: the Action control is UI flow only. The dashboard has no write
+    path (its only POST route is /login and the DB is read-only), so the dialog
+    must say so and the confirm must be disabled. ⛔ No fabricated close."""
+    body = _body(tpl)
+    assert 'class="pos-act"' in body, "each row needs an Action control"
+    assert "pos-modal" in body, "Action must open a dialog"
+    assert "openAction(" in body and "rowClick(" in body
+    assert "cannot place the order" in body, "the dialog must state it cannot execute"
+    # the confirm button is disabled, and the CMP option too (no live price)
+    assert re.search(r'btn-primary"[^>]*disabled', body), "confirm must be disabled"
+    assert re.search(r'value="cmp"[^>]*disabled', body), "CMP needs a live price it lacks"
+
+
+def test_no_write_route_exists_in_the_whole_dashboard() -> None:
+    """⭐ The guarantee the dialog's wording rests on, asserted rather than
+    assumed: /login is the ONLY POST endpoint anywhere in the app."""
+    import os
+    import re as _re
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    posts = []
+    for dirpath, _d, files in os.walk(os.path.join(root, "backend")):
+        for name in files:
+            if not name.endswith(".py"):
+                continue
+            p = os.path.join(dirpath, name)
+            with open(p, encoding="utf-8", errors="ignore") as fh:
+                for n, line in enumerate(fh, 1):
+                    if _re.search(r'methods\s*=\s*\[[^\]]*["\']POST["\']', line):
+                        posts.append(f"{os.path.relpath(p, root)}:{n}")
+    # login + logout are the only two, and both are SESSION routes — neither
+    # writes trading data, and there is no order path anywhere.
+    assert all("auth.py" in p for p in posts), \
+        f"a write route appeared outside auth — the dialog's claim must be revisited: {posts}"
+    assert len(posts) == 2, f"expected exactly login+logout, got: {posts}"

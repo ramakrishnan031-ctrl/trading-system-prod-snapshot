@@ -74,6 +74,11 @@ def get_strategies(cfg: dict) -> dict:
             "max_concurrent_positions": int(s.get("max_concurrent_positions", 2)),
             "entry_start_time": s.get("entry_start_time"),
             "entry_end_time": s.get("entry_end_time"),
+            # Screen-06 R:R column. ⛔ NO DEFAULT — a strategy that does not
+            # configure a ratio must come back None so the UI can show '—'.
+            # Defaulting to 2.0 here (order_placer's fallback) would put a
+            # number on screen that the strategy never asked for.
+            "tgt_risk_reward": s.get("tgt_risk_reward"),
         }
     return out
 

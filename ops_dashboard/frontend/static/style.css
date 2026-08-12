@@ -1336,3 +1336,55 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
    the lead-in behaviour, make emphasis inside later paragraphs inline again. */
 .pos-page .pos-na p b { display: inline; margin-bottom: 0; }
 .pos-page .pos-na p:first-child b { display: block; margin-bottom: 6px; }
+
+/* ── Screen-06: LTP / Unrealised / Action (spreadsheet spec, 12-Aug-2026) ──── */
+
+/* The unavailable marker for LTP and Unrealised. Deliberately legible rather
+   than faint: it carries information (there is no live source), and a washed-out
+   glyph would read as a rendering glitch instead of a stated fact. */
+.pos-page .pos-nolive { color: var(--dim); font-style: italic; }
+.pos-page .v-zero { color: var(--muted); font-variant-numeric: tabular-nums; }
+
+.pos-page .pos-act { padding: 3px 10px; border-radius: 6px; cursor: pointer;
+  background: rgba(var(--t-blue), .12); border: 1px solid var(--blue);
+  color: #7cb2ff; font-size: 11.5px; font-weight: 700; white-space: nowrap; }
+.pos-page .pos-act:hover { background: rgba(var(--t-blue), .22); }
+
+/* ── Close-position dialog. ⛔ UI flow only — the dashboard has no order path. */
+.pos-page .pos-modal { position: fixed; inset: 0; z-index: 60; display: flex;
+  align-items: center; justify-content: center; padding: 20px;
+  background: rgba(0, 0, 0, .58); }
+.pos-page .pos-modal-box { width: min(460px, 100%); max-height: 90vh; overflow-y: auto;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, .55); }
+.pos-page .pos-modal-head { display: flex; align-items: center; gap: 10px;
+  padding: 14px 16px 10px; border-bottom: 1px solid var(--card-bd); }
+.pos-page .pos-modal-head .mc-title { margin: 0; }
+.pos-page .pos-modal-head .od-x { margin-left: auto; }
+.pos-page .pos-modal-kv { padding-top: 12px; }
+.pos-page .pos-modal-opts { display: flex; flex-direction: column; gap: 8px;
+  padding: 4px 16px 10px; }
+.pos-page .pos-opt { display: flex; align-items: flex-start; gap: 9px;
+  font-size: 13px; color: var(--text); cursor: pointer; }
+.pos-page .pos-opt.is-off { color: var(--dim); cursor: not-allowed; }
+.pos-page .pos-opt em { display: block; font-style: normal; font-size: 12px;
+  color: var(--dim); margin-top: 2px; }
+.pos-page .pos-modal-price { display: flex; flex-direction: column; gap: 5px;
+  padding: 0 16px 12px; }
+.pos-page .pos-modal-price.is-off { opacity: .5; }
+.pos-page .pos-modal-warn { margin: 0 16px 12px; border-radius: 8px;
+  background: rgba(var(--t-orange), .08); border: 1px solid rgba(var(--t-orange), .35); }
+.pos-page .pos-modal-foot { display: flex; justify-content: flex-end; gap: 8px;
+  padding: 0 16px 16px; }
+.pos-page .pos-modal-foot .btn-primary[disabled] { opacity: .45; cursor: not-allowed; }
+
+/* SPECIFICITY FIX — the signed-value colours were losing inside the detail card.
+   `.ord-page .od-kv b` is (0,2,1) and beat `.pos-page .v-pos` (0,2,0), so every
+   signed figure in the rail — Net P&L, Highest Profit/Drawdown, the close
+   dialog's estimate — rendered plain white. ⭐ The spreadsheet REQUIRES the
+   sign to be legible by colour (note 6: negative red, positive green, zero
+   grey), so this is a correctness fix, not a polish one. Table cells were never
+   affected: there the class sits on a <span> that nothing out-specifies. */
+.pos-page .od-kv b.v-pos, .pos-page .v-pos { color: var(--pos); }
+.pos-page .od-kv b.v-neg, .pos-page .v-neg { color: var(--neg); }
+.pos-page .od-kv b.v-zero, .pos-page .v-zero { color: var(--muted); }
