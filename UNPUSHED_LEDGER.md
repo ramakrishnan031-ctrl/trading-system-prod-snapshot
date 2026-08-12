@@ -310,6 +310,66 @@ preview therefore runs on fixture data.
 
 ---
 
+### Entry 7
+
+| Field | Value |
+|---|---|
+| **Date/time** | 2026-08-12 23:18 IST |
+| **Commit** | `f765573d14c9fca9375a00848bd79a4e2405303c` |
+| **Short** | `f765573` |
+| **Branch** | `feat/screen06-positions` |
+| **Screen** | Screen-06 Positions — final UI polish |
+| **Pushed** | **NO** |
+| **Deployed** | **NO** |
+| **Reason** | Special no-deployment window |
+
+**Change summary**
+
+- **₹ removed from every table cell**, kept in the column headings (`ENTRY ₹`,
+  `SL ₹`, `TGT ₹`, `SL POINTS ₹`, `TGT POINTS ₹`, `LTP ₹`, `UNREALISED ₹`).
+  ⛔ The **detail card and close dialog KEEP theirs** — there the label sits beside
+  the value, not above a column. Precision and sign unchanged.
+- **The table now fits without a horizontal scrollbar** at normal desktop widths.
+
+**📏 Measured first, then changed — the diagnosis is the useful part**
+
+At a 1920px viewport the content box is **1649px** and the table wanted **1862px**.
+Two things were eating it, and only one was obvious:
+
+1. **The detail rail reserved 302px permanently**, selected or not. It is now an
+   overlay **drawer**. ⛔ Nothing removed — same card, same tabs, same *View Full
+   Details* — and deliberately **no backdrop**, so the table stays readable while
+   it is open.
+2. ⭐ **The binding constraint on several columns was the HEADER, not the data** —
+   `"TGT POINTS ₹"` is far wider than `"70.00"`. Headers now **wrap** (exactly how
+   the spreadsheet prints them) rather than being abbreviated, so ⛔ **no heading
+   loses a word**. Grip collapses until hover; padding 6px/3px; Strategy — the one
+   genuinely long text field — capped at 132px with an ellipsis, full value still
+   in the detail card.
+
+**Result, measured at three widths**
+
+| viewport | scrollWidth | clientWidth | overflow |
+|---|---|---|---|
+| 1920px | 1649 | 1649 | **no** |
+| 1680px | 1409 | 1409 | **no** |
+| 1440px | 1257 | 1169 | yes — narrow-viewport fallback |
+
+The table's natural width went **1862 → 1257**. ⛔ The scrollbar is **not removed**;
+it is now only the narrow-window fallback, which is what keeps data *reachable*
+rather than *clipped*.
+
+**⛔ How this was NOT achieved** — no column hidden, no heading abbreviated, no value
+truncated or moved into a tooltip, no font below the sizes Screen-05 already ships.
+
+**Verification** — suite **479 passed / 1 failed** (known environmental
+`kiteconnect` check). Rendered and read: all 22 columns visible end-to-end with
+no scrollbar, ₹ absent from cells and present in headings, drawer opens with the
+detail card intact and its own ₹ retained, Action still last, groups still aligned,
+status/direction/type colours intact.
+
+---
+
 ## ⚠️ Carried forward for tomorrow's deployment review
 
 1. **`/api/export/orders` does not exist.** Screen-05's *Export XLSX* button navigates
