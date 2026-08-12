@@ -43,6 +43,7 @@ def test_scanner_has_no_filter_or_binding(tpl: str) -> None:
 # ── 2 · the approved column order ───────────────────────────────────────────
 APPROVED = [
     "date", "time", "strategy", "symbol", "trade_type", "direction",
+    "system_score", "signal_score",          # after Direction, before Broker Order ID
     "order_id", "status_label",
     "qty_requested", "qty_filled",          # Qty group: System / Filled
     "entry_target_price", "sl_initial", "tgt_initial",
@@ -120,3 +121,32 @@ def test_trade_type_maps_product_not_a_guess() -> None:
     assert db_reader._trade_type_of_product("CNC") == "Delivery"
     assert db_reader._trade_type_of_product("NRML") == "Delivery"
     assert db_reader._trade_type_of_product(None) == ""
+
+
+# ── 4 · top KPIs count FILLED ORDERS ONLY (Rama, 12-Aug) ────────────────────
+def test_total_orders_and_value_are_filled_only(monkeypatch) -> None:
+    """⛔ Cancelled/Rejected/Expired must contribute NOTHING to either KPI.
+
+    RED-first: if the filter is dropped, total_orders becomes 4 and
+    total_order_value picks up the rejected/cancelled rows.
+    """
+    import sys
+    sys.path.insert(0, os.path.join(_HERE, ".."))
+    from backend.readers import db_reader
+
+    rows = [
+        {"order_result": "Filled",       "order_value": 100.0, "charges": 1.0},
+        {"order_result": "Filled",       "order_value": 200.0, "charges": 2.0},
+        {"order_result": "Rejected",     "order_value": None,  "charges": None},
+        {"order_result": "Cancelled",    "order_value": 999.0, "charges": 9.0},
+        {"order_result": "Partial Fill", "order_value": 500.0, "charges": 5.0},
+    ]
+    monkeypatch.setattr(db_reader, "order_screen_rows", lambda *a, **k: rows)
+    k = db_reader.order_kpis({}, "2026-08-12")
+
+    assert k["total_orders"] == 2                 # filled only, NOT 5
+    assert k["total_order_value"] == 300.0        # 100+200 — no cancelled 999, no partial 500
+    assert k["all_orders"] == 5                   # kept, so percentages stay meaningful
+    assert k["filled"] == 2
+    assert k["filled_pct"] == 40.0                # 2/5 — base is ALL orders
+    assert k["cancelled"] == 1

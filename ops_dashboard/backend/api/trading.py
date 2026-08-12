@@ -107,8 +107,19 @@ def get_orders_screen():
     today = _date_param()
     rows = db_reader.order_screen_rows(cfg, today)
     ctx = db_reader.order_exec_context(cfg, [r.get("order_id") for r in rows])
+    # Same two score quantities Screen-04 shows, from the same reader — ⛔ no
+    # scoring logic is invented here:
+    #   signal_score = this signal's own score (screener_results.score)
+    #   system_score = the minimum it had to reach (eligible_score, falling back
+    #                  to the configured min_pass_score)
+    scores = db_reader.signal_scores(cfg, [r.get("signal_id") for r in rows])
+    min_pass = config_reader.get_min_pass_score(cfg)
     for r in rows:
         r["exec"] = ctx.get(str(r.get("order_id"))) or None
+        sc = scores.get(r.get("signal_id")) or {}
+        r["signal_score"] = sc.get("signal_score")
+        sys_score = sc.get("system_score")
+        r["system_score"] = min_pass if sys_score is None else sys_score
     return jsonify({
         "date": today,
         "count": len(rows),

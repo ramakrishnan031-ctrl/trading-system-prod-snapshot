@@ -646,7 +646,12 @@ def client(app):
 # The sweep below is therefore NOT deleted: it still fails if the label appears
 # on any other screen, so the drop cannot be undone by accident where it was
 # deliberate. Widening this set needs the same kind of explicit decision.
-SIGNAL_SCORE_ALLOWED_FILES = {"signals.html"}
+# WIDENED ONCE, 12-Aug-2026, by explicit decision (Rama): Screen-05 Orders
+# shows System Score + Signal Score between Direction and Broker Order ID,
+# reusing Screen-04's reader and terminology. The guard is NARROWED, ⛔ not
+# deleted — it still fails on every other screen, so the drop cannot be
+# undone by accident where it was deliberate.
+SIGNAL_SCORE_ALLOWED_FILES = {"signals.html", "orders.html"}
 
 
 def assert_signal_score_confined_to_screen04(frontend_root):

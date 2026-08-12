@@ -1082,7 +1082,7 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 
 /* ═══════════════════════════════════════════════════════════════════════════
    SCREEN-05 ORDERS (approved revision, 12-Aug-2026)
-   Filters/buttons ride the SHARED .flt-*/.btn-* rules above (Screen-03 owns the
+   Filters/buttons ride the SHARED .flt- and .btn- rules above (Screen-03 owns the
    values). ⛔ Scanner has no rule here because it has no column. The .st-* table
    base is scoped to .strat-page, so — exactly as Screen-04 had to — Screen-05
    restates it at the SAME values and then sets its own density.

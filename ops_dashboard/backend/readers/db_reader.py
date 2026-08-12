@@ -1743,21 +1743,34 @@ def _order_result_of(r: dict) -> str:
 def order_kpis(cfg: dict, today: str) -> dict:
     """The eight KPI cards. Order-value totals are ENTRY ONLY, by construction."""
     rows = order_screen_rows(cfg, today)
-    total = len(rows)
+    all_orders = len(rows)
 
     def _n(res):
         return sum(1 for r in rows if r.get("order_result") == res)
 
     filled, partial = _n("Filled"), _n("Partial Fill")
     rejected, cancelled = _n("Rejected"), _n("Cancelled")
-    values = [r["order_value"] for r in rows if r.get("order_value") is not None]
-    charges = [r["charges"] for r in rows if r.get("charges") is not None]
 
+    # RULE (Rama, 12-Aug): the TOP KPI pair counts FILLED ORDERS ONLY.
+    #   Total Orders      = count of orders whose result is Filled.
+    #   Total Order Value = SUM(entry price x ordered qty) over FILLED orders.
+    # ⛔ Cancelled / Rejected / Expired / unfilled contribute NOTHING to either.
+    # ⛔ Still ENTRY ONLY — SL and TGT never enter order_value (see
+    #    order_screen_rows). ⭐ Total Orders equalling Filled Orders is INTENDED
+    #    and was explicitly accepted; neither card is renamed or removed.
+    filled_rows = [r for r in rows if r.get("order_result") == "Filled"]
+    values = [r["order_value"] for r in filled_rows if r.get("order_value") is not None]
+    charges = [r["charges"] for r in filled_rows if r.get("charges") is not None]
+
+    # Percentages keep ALL orders as their base — that is what makes
+    # "Filled 86.19%" meaningful. ⛔ Never the filled-only count, which would
+    # make every percentage read 100%.
     def _pct(n):
-        return round(n / total * 100.0, 2) if total else None
+        return round(n / all_orders * 100.0, 2) if all_orders else None
 
     return {
-        "total_orders": total,
+        "all_orders": all_orders,
+        "total_orders": filled,
         "filled": filled, "filled_pct": _pct(filled),
         "partial": partial, "partial_pct": _pct(partial),
         "rejected": rejected, "rejected_pct": _pct(rejected),

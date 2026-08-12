@@ -24,7 +24,7 @@
   <!-- ═══ KPI DECK (8) ═══ -->
   <div class="ok-deck">
     <div class="kc"><div class="kc-ic">▤</div><div class="kc-label">Total Orders</div>
-      <div class="kc-val" x-text="k('total_orders')"></div><div class="kc-foot">Today</div></div>
+      <div class="kc-val" x-text="k('total_orders')"></div><div class="kc-foot">Filled only</div></div>
     <div class="kc kc-green"><div class="kc-ic">✓</div><div class="kc-label">Filled Orders</div>
       <div class="kc-val" x-text="k('filled')"></div><div class="kc-foot" x-text="pc('filled_pct')"></div></div>
     <div class="kc kc-orange"><div class="kc-ic">◑</div><div class="kc-label">Partial Fills</div>
@@ -356,6 +356,8 @@ function ordersPage() {
         { key: "symbol",      label: "Symbol",          kind: "sym"  },
         { key: "trade_type",  label: "Trade Type",      kind: "type" },
         { key: "direction",   label: "Direction",       kind: "dir"  },
+        { key: "system_score", label: "System Score",   kind: "num", num: true },
+        { key: "signal_score", label: "Signal Score",   kind: "num", num: true },
         { key: "order_id",    label: "Broker Order ID", kind: "mono" },
         { key: "status_label",label: "Status",          kind: "status" },
         { key: "qty_requested", label: "System", group: "Qty", kind: "num", num: true },
