@@ -104,7 +104,8 @@ the wrong ref gets pushed; Screen-06 therefore gets its own correctly-named bran
 | Field | Value |
 |---|---|
 | **Date/time** | 2026-08-12 20:09 IST |
-| **Commit** | `c0c68e609b3875298e010aba3cb19efddfb8dd64` |
+| **Commit** | `05aa408bf081325616aed7d2c39b25dd84a71336` |
+| **Short** | `05aa408` |
 | **Branch** | `feat/screen06-positions` |
 | **Screen** | — (process artefact) |
 | **Pushed** | **NO** |
@@ -112,6 +113,30 @@ the wrong ref gets pushed; Screen-06 therefore gets its own correctly-named bran
 | **Reason** | Special no-deployment window |
 
 **Change summary** — creates this ledger and records Entry 1.
+
+---
+
+### Entry 3
+
+| Field | Value |
+|---|---|
+| **Date/time** | 2026-08-12 20:12 IST |
+| **Commit** | **the branch tip** — verify with `git rev-parse HEAD` on `feat/screen06-positions` |
+| **Branch** | `feat/screen06-positions` |
+| **Screen** | — (process artefact) |
+| **Pushed** | **NO** |
+| **Deployed** | **NO** |
+| **Reason** | Special no-deployment window |
+
+**Change summary** — corrects Entry 2's hash. It had recorded `c0c68e6`, which an
+`--amend` immediately replaced with `05aa408`; the recorded hash was therefore a
+**dead object** and would have sent tomorrow's reviewer to a commit that is not on
+the branch.
+
+📌 **A ledger entry cannot contain its own commit hash** — writing the hash changes
+it. This entry is the last one, so its SHA is defined as **the branch tip**, which is
+one `git rev-parse` away and cannot go stale the way a copied hash can. ⛔ Do not
+"fix" this by amending: that produces exactly the dead hash it is correcting.
 
 ---
 
