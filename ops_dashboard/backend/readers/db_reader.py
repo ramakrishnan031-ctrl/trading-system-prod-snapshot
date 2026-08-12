@@ -1994,15 +1994,11 @@ def position_screen_rows(cfg: dict, today: str, limit: int = _LIST_CAP) -> list:
         r["unrealised"] = position_unrealised(
             r.get("entry_actual_price"), r["ltp"], r.get("qty_filled"), direction)
 
-        # Capital used: the recorded position value, else FILLED qty x the price
-        # that actually applied (fill price when we have one, else the system
-        # limit). ⛔ Never planned qty — that would overstate a partial fill.
-        cap = r.get("actual_position_value_rs")
-        if cap is None:
-            px = r.get("entry_actual_price") or entry_sys
-            q = r.get("qty_filled") or 0
-            cap = round(float(px) * int(q), 2) if (px is not None and q) else None
-        r["capital_used"] = cap
+        # ⭐ THE SAME strict definition the KPI uses — filled qty x FILLED entry,
+        # None when either is missing. The row, the detail card and the KPI now
+        # answer capital with one function, so they cannot drift apart.
+        # ⛔ SL/TGT play no part; ⛔ no fallback to the system entry price.
+        r["capital_used"] = _position_value_of(r)
     return rows
 
 
@@ -2088,16 +2084,48 @@ def position_open_set(cfg: dict) -> list:
     return [dict(r) for r in rows]
 
 
-def _position_value_of(r: dict) -> float:
-    """Rupee value of one open position. Recorded value first; else FILLED qty
-    x the applicable price. ⛔ Missing price or zero fill contributes 0.0, never
-    a planned-qty estimate."""
-    v = r.get("actual_position_value_rs")
-    if v is not None:
-        return float(v)
-    px = r.get("entry_actual_price") or r.get("entry_target_price")
+def _position_value_of(r: dict) -> Optional[float]:
+    """Capital tied up in ONE open position.
+
+    📌 THE DEFINITION, and it is deliberately narrow (Rama, 12-Aug):
+            capital = BROKER-FILLED qty  x  FILLED entry price
+    ⛔ NOT the system/planned qty — a partial fill ties up only what filled.
+    ⛔ NOT the system entry price — capital is what was actually paid.
+    ⛔ SL AND TGT CONTRIBUTE NOTHING. They are exit levels, not money spent;
+       a notional built from them would be a different quantity entirely.
+    ⛔ NOT `actual_position_value_rs` either: the sizer writes that as
+       `final qty * entry_price` and which entry price it used is not
+       guaranteed to be the FILL. Computing it here keeps the operands visible.
+
+    Returns None — ⛔ never 0.0 — when the fill price or the filled quantity is
+    missing. A zero would silently shrink the KPI and read as "this position
+    ties up nothing"; the caller counts these separately and says so.
+    """
+    px = r.get("entry_actual_price")
     q = r.get("qty_filled") or 0
-    return float(px) * int(q) if (px is not None and q) else 0.0
+    if px is None or not q:
+        return None
+    try:
+        return round(float(px) * int(q), 2)
+    except (TypeError, ValueError):
+        return None
+
+
+def position_capital_used(open_rows: list) -> dict:
+    """{'total', 'valued', 'unpriced'} over the open set.
+
+    ⭐ `unpriced` is reported, not swallowed: it is the number of open positions
+    that have no filled entry price, and therefore the number the total does
+    NOT account for. ⛔ A KPI that quietly omits rows is worse than one that
+    admits it.
+    """
+    vals = [(_position_value_of(r)) for r in open_rows]
+    priced = [v for v in vals if v is not None]
+    return {
+        "total": round(sum(priced), 2),
+        "valued": len(priced),
+        "unpriced": len(vals) - len(priced),
+    }
 
 
 def position_kpis(cfg: dict, today: str) -> dict:
@@ -2116,7 +2144,7 @@ def position_kpis(cfg: dict, today: str) -> dict:
         return sum(1 for r in open_rows
                    if str(r.get("direction") or "").upper() == d)
 
-    used = sum(_position_value_of(r) for r in open_rows)
+    cap = position_capital_used(open_rows)
 
     with _ro(cfg) as conn:
         # Dated by exit_time ONLY. ⛔ Not COALESCE(exit_time, updated_at): a row
@@ -2133,7 +2161,10 @@ def position_kpis(cfg: dict, today: str) -> dict:
         "open_positions": len(open_rows),
         "long_positions": _dir("LONG"),
         "short_positions": _dir("SHORT"),
-        "total_capital_used": round(used, 2),
+        # filled qty x FILLED entry, over open positions only. ⛔ SL/TGT excluded.
+        "total_capital_used": cap["total"],
+        "capital_valued": cap["valued"],
+        "capital_unpriced": cap["unpriced"],
         # ⛔ unavailable BY ARCHITECTURE, not by omission — see the docstring.
         "current_mtm": None,
         "current_mtm_reason": "Pending Broker Source (G4) — the GUI has no live price",
@@ -2152,7 +2183,9 @@ def position_summary(cfg: dict, today: str) -> dict:
     its reason and the panel says so instead of drawing an invented line.
     """
     open_rows = position_open_set(cfg)
-    used = sum(_position_value_of(r) for r in open_rows)
+    # ⭐ THE SAME function the KPI uses — the donut and the card cannot disagree.
+    cap = position_capital_used(open_rows)
+    used = cap["total"]
     opening = opening_capital(cfg, today)
     available = (float(opening) - used) if opening is not None else None
 
@@ -2171,6 +2204,7 @@ def position_summary(cfg: dict, today: str) -> dict:
             "total": round(float(opening), 2) if opening is not None else None,
             "used_pct": round(used / float(opening) * 100.0, 2)
                         if (opening and float(opening)) else None,
+            "unpriced": cap["unpriced"],   # open positions the total cannot value
         },
         "distribution": {"long": longs, "short": shorts, "total": len(open_rows)},
         "mtm": {

@@ -1388,3 +1388,26 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 .pos-page .od-kv b.v-pos, .pos-page .v-pos { color: var(--pos); }
 .pos-page .od-kv b.v-neg, .pos-page .v-neg { color: var(--neg); }
 .pos-page .od-kv b.v-zero, .pos-page .v-zero { color: var(--muted); }
+
+/* ── Screen-06 revision 2: Action gating + View Full Details ───────────────── */
+
+/* A row that is not open gets a neutral mark, ⛔ not a button that implies an
+   action it cannot take. */
+.pos-page .pos-act-off { color: var(--dim); }
+
+.pos-page .pos-full-btn { display: block; width: calc(100% - 32px); margin: 0 16px 12px;
+  padding: 6px 10px; border-radius: 7px; cursor: pointer;
+  background: var(--panel); border: 1px solid var(--border);
+  color: var(--text); font-size: 12px; font-weight: 700; }
+.pos-page .pos-full-btn:hover { border-color: var(--blue); color: #7cb2ff; }
+
+/* The full-details popup is the SAME shell as the close dialog (one modal
+   treatment on this screen), just wider and laid out in columns. */
+.pos-page .pos-full-box { width: min(940px, 100%); }
+.pos-page .pos-full-id { display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+  padding: 12px 16px 4px; }
+.pos-page .pos-full-tid { margin-left: auto; font-size: 11px; color: var(--dim); }
+.pos-page .pos-full-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 12px; padding: 4px 0 8px; }
+@media (max-width: 780px) { .pos-page .pos-full-grid { grid-template-columns: minmax(0, 1fr); } }
+.pos-page .pos-full-na { margin: 0 16px 12px; }

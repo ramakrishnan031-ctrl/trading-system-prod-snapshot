@@ -73,10 +73,37 @@ APPROVED = [
     "sl_initial", "sl_broker",                          # SL group:    System / Broker
     "tgt_initial", "tgt_broker",                        # TGT group:   System / Broker
     "sl_points", "tgt_points",                          # per-share ₹ distances
-    "rr_configured",                                    # strategy.yaml, not derived
     "ltp", "unrealised",                                # unavailable in this build
-    "actions",
+    "actions",                                          # ⛔ ALWAYS LAST
 ]
+
+
+def test_action_is_the_final_column(tpl: str) -> None:
+    """⛔ Action must never sit between the grouped price/risk columns."""
+    assert _default_cols(tpl)[-1] == "actions"
+
+
+def test_ltp_and_unrealised_sit_between_points_and_action(tpl: str) -> None:
+    cols = _default_cols(tpl)
+    assert cols[cols.index("tgt_points") + 1] == "ltp"
+    assert cols[cols.index("ltp") + 1] == "unrealised"
+    assert cols[cols.index("unrealised") + 1] == "actions"
+
+
+def test_rr_left_the_table_but_not_the_product(tpl: str) -> None:
+    """R:R is out of the table (it is wide enough) but MUST remain in the detail
+    rail — ⛔ the information is moved, ⛔ not dropped."""
+    assert "rr_configured" not in _default_cols(tpl)
+    body = _body(tpl)
+    assert "rr_configured" in body, "R:R must still be shown in the detail card"
+    assert "R:R (strategy config)" in body
+
+
+def test_saved_column_order_key_was_versioned(tpl: str) -> None:
+    """⚠️ A saved v1 order would restore the OLD default — Action in its old slot
+    and the removed R:R column — and the operator would never see this change."""
+    assert "screen06.positions.colOrder.v2" in tpl
+    assert "colOrder.v1" not in tpl
 
 
 def test_column_order_is_the_approved_one(tpl: str) -> None:
@@ -447,3 +474,85 @@ def test_no_write_route_exists_in_the_whole_dashboard() -> None:
     assert all("auth.py" in p for p in posts), \
         f"a write route appeared outside auth — the dialog's claim must be revisited: {posts}"
     assert len(posts) == 2, f"expected exactly login+logout, got: {posts}"
+
+
+# ── 11 · Total Capital Used — the corrected formula ─────────────────────────
+def test_capital_used_is_filled_qty_times_filled_entry() -> None:
+    """📌 THE DEFINITION (Rama, 12-Aug): filled qty x FILLED entry.
+    ⛔ Not planned qty, ⛔ not the system entry price."""
+    r = {"qty_filled": 20, "qty_planned": 45,
+         "entry_actual_price": 100.0, "entry_target_price": 99.0}
+    assert db_reader._position_value_of(r) == pytest.approx(2000.0)   # 20 x 100
+    # ⛔ NOT 45 x 100 (planned) and ⛔ NOT 20 x 99 (system price)
+    assert db_reader._position_value_of(r) != pytest.approx(4500.0)
+    assert db_reader._position_value_of(r) != pytest.approx(1980.0)
+
+
+def test_capital_used_ignores_sl_and_tgt_entirely() -> None:
+    """⛔ SL AND TGT MUST CONTRIBUTE ZERO. Change them wildly; capital is unmoved."""
+    base = {"qty_filled": 10, "entry_actual_price": 50.0}
+    a = db_reader._position_value_of(dict(base, sl_initial=1.0, tgt_initial=2.0,
+                                          sl_broker=3.0, tgt_broker=4.0))
+    b = db_reader._position_value_of(dict(base, sl_initial=9999.0, tgt_initial=8888.0,
+                                          sl_broker=7777.0, tgt_broker=6666.0))
+    assert a == b == pytest.approx(500.0)
+
+
+def test_capital_used_is_none_not_zero_when_unpriced() -> None:
+    """⛔ A zero would read as 'this position ties up nothing' and would silently
+    shrink the KPI. Absent is absent."""
+    assert db_reader._position_value_of({"qty_filled": 10, "entry_actual_price": None}) is None
+    assert db_reader._position_value_of({"qty_filled": 0, "entry_actual_price": 50.0}) is None
+
+
+def test_capital_total_reports_what_it_could_not_value() -> None:
+    """⭐ The unpriced count is surfaced, not swallowed."""
+    rows = [
+        {"qty_filled": 10, "entry_actual_price": 100.0},   # 1000
+        {"qty_filled": 5, "entry_actual_price": 200.0},    # 1000
+        {"qty_filled": 7, "entry_actual_price": None},     # unpriced
+    ]
+    cap = db_reader.position_capital_used(rows)
+    assert cap["total"] == pytest.approx(2000.0)
+    assert cap["valued"] == 2 and cap["unpriced"] == 1
+
+
+def test_kpi_capital_matches_the_summary_panel(gui_config, today) -> None:
+    """⭐ The KPI card and the Capital Utilization donut must agree — they now
+    call the same function, and this is what pins that."""
+    k = db_reader.position_kpis(gui_config, today)
+    s = db_reader.position_summary(gui_config, today)
+    assert k["total_capital_used"] == pytest.approx(s["capital"]["used"])
+
+
+def test_long_plus_short_equals_open_positions(gui_config, today) -> None:
+    """Section 8: the KPI row must reconcile with itself."""
+    k = db_reader.position_kpis(gui_config, today)
+    assert k["long_positions"] + k["short_positions"] == k["open_positions"]
+
+
+def test_status_breakdown_reconciles_with_the_table(gui_config, today) -> None:
+    s = db_reader.position_summary(gui_config, today)
+    rows = db_reader.position_screen_rows(gui_config, today)
+    assert sum(s["status_breakdown"].values()) == len(rows) == s["status_total"]
+
+
+# ── 12 · Action gating + View Full Details ──────────────────────────────────
+def test_close_is_offered_only_on_open_positions(tpl: str) -> None:
+    """⛔ A closed row must not get a live-looking Close button."""
+    body = _body(tpl)
+    assert "isOpen(r)" in body, "the Action cell must gate on open-ness"
+    assert "pos-act-off" in body, "non-open rows need a neutral disabled state"
+    # and the dialog itself refuses to open on a non-open row
+    assert re.search(r"openAction\(r\)\s*\{\s*if \(!this\.isOpen\(r\)\) return", body)
+
+
+def test_view_full_details_exists_and_is_read_only(tpl: str) -> None:
+    """Section 11: the established popup treatment, and ⛔ opening it must never
+    trigger a close."""
+    body = _body(tpl)
+    assert "View Full Details" in body
+    assert 'x-show="full"' in body, "full-details popup missing"
+    # it is a read view — no action wiring inside it
+    full_block = body.split("VIEW FULL DETAILS", 1)[1].split("ACTION — CLOSE POSITION", 1)[0]
+    assert "openAction" not in full_block and "pos-act" not in full_block

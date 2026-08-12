@@ -316,6 +316,11 @@
             <button type="button" :class="tab==='risk'     ? 'is-on':''" @click="tab='risk'">Risk / RR</button>
           </div>
 
+          <!-- Opens every section at once, in the popup treatment Screens 04/05
+               use. ⛔ It is a READ view: opening it never triggers a close. -->
+          <button class="pos-full-btn" type="button" @click="full = sel">
+            ⤢ View Full Details</button>
+
           <!-- ── OVERVIEW ── -->
           <div x-show="tab==='overview'">
             <div class="od-sec">Position</div>
@@ -438,6 +443,105 @@
     </aside>
   </div>
 
+  <!-- ═══ VIEW FULL DETAILS — every section at once, read-only ═══ -->
+  <div class="pos-modal" x-show="full" x-cloak @click.self="full = null">
+    <div class="pos-modal-box pos-full-box" x-show="full">
+      <template x-if="full">
+        <div>
+          <div class="pos-modal-head">
+            <h2 class="mc-title">Position — Full Details</h2>
+            <button class="od-x" type="button" @click="full = null" aria-label="Close">✕</button>
+          </div>
+
+          <div class="od-id pos-full-id">
+            <span class="od-oid" x-text="full.symbol"></span>
+            <span class="pill" :class="dirPill(full.direction)" x-text="dirLabel(full.direction)"></span>
+            <span class="pill" :class="statusPill(full.position_status)" x-text="full.position_status"></span>
+            <span class="pos-full-tid mono" x-text="full.trade_id"></span>
+          </div>
+
+          <div class="pos-full-grid">
+            <section>
+              <div class="od-sec">Position</div>
+              <div class="od-kv od-kv2">
+                <div><span>Strategy</span><b x-text="dash(full.strategy)"></b></div>
+                <div><span>Trade Type</span><b x-text="dash(full.trade_type)"></b></div>
+                <div><span>Qty (System ordered)</span><b x-text="dash(full.qty_system)"></b></div>
+                <div><span>Qty (Broker position)</span><b x-text="dash(full.qty_position)"></b></div>
+                <div><span>Entry (System)</span><b x-text="rs(full.entry_target_price)"></b></div>
+                <div><span>Entry (Filled)</span><b x-text="rs(full.entry_actual_price)"></b></div>
+                <div><span>Capital Used</span><b x-text="rs(capUsedOf(full))"></b></div>
+                <div><span>Position Age</span><b x-text="age(full)"></b></div>
+              </div>
+            </section>
+
+            <section>
+              <div class="od-sec">SL / TGT</div>
+              <div class="od-kv od-kv2">
+                <div><span>SL (System)</span><b x-text="rs(full.sl_initial)"></b></div>
+                <div><span>SL (Broker standing)</span><b x-text="rs(full.sl_broker)"></b></div>
+                <div><span>SL points (₹/share)</span><b x-text="rs(full.sl_points)"></b></div>
+                <div><span>TGT (System)</span><b x-text="rs(full.tgt_initial)"></b></div>
+                <div><span>TGT (Broker standing)</span><b x-text="rs(full.tgt_broker)"></b></div>
+                <div><span>TGT points (₹/share)</span><b x-text="rs(full.tgt_points)"></b></div>
+              </div>
+            </section>
+
+            <section>
+              <div class="od-sec">Risk / Reward</div>
+              <div class="od-kv od-kv2">
+                <div><span>Risk Amount</span><b x-text="rs(full.risk_amount)"></b></div>
+                <div><span>R:R (strategy config)</span>
+                  <b x-text="full.rr_configured == null ? '—' : full.rr_configured + ' : 1'"></b></div>
+                <div><span>R:R (implied by levels)</span>
+                  <b x-text="full.expected_rr == null ? '—' : full.expected_rr + ' : 1'"></b></div>
+                <div><span>Highest Profit %</span><b class="v-pos" x-text="pct(full.mfe_pct)"></b></div>
+                <div><span>Highest Drawdown %</span><b class="v-neg" x-text="pct(full.mae_pct)"></b></div>
+              </div>
+            </section>
+
+            <section>
+              <div class="od-sec">Lifecycle</div>
+              <ul class="od-time">
+                <li :class="full.created_at ? '' : 'is-off'">
+                  <i :class="full.created_at ? 'd-on':'d-off'"></i>
+                  <span x-text="clock(full.created_at)"></span><em>Signal → capital reserved</em></li>
+                <li :class="full.order_placed_at ? '' : 'is-off'">
+                  <i :class="full.order_placed_at ? 'd-on':'d-off'"></i>
+                  <span x-text="clock(full.order_placed_at)"></span><em>Entry order placed</em></li>
+                <li :class="full.entry_time ? '' : 'is-off'">
+                  <i :class="full.entry_time ? 'd-on':'d-off'"></i>
+                  <span x-text="clock(full.entry_time)"></span><em>Position open (filled)</em></li>
+                <li class="is-off"><i class="d-off"></i><span>—</span>
+                  <em>SL / TGT updates — not captured</em></li>
+                <li :class="full.exit_time ? '' : 'is-off'">
+                  <i :class="full.exit_time ? 'd-on':'d-off'"></i>
+                  <span x-text="clock(full.exit_time)"></span><em>Exit</em></li>
+              </ul>
+              <div class="od-kv od-kv2">
+                <div><span>Exit Price (executed)</span><b x-text="rs(full.exit_price)"></b></div>
+                <div><span>Exit Reason</span><b x-text="dash(full.exit_reason)"></b></div>
+                <div><span>Net P&amp;L</span>
+                  <b :class="pnlCls(full.net_pnl)"
+                     x-text="full.net_pnl == null ? '—' : money(full.net_pnl)"></b></div>
+              </div>
+            </section>
+          </div>
+
+          <div class="od-line od-na-block pos-na pos-full-na">
+            <p><b>Live market values are not available to this screen.</b>
+              LTP, Current Value, Unrealised, MTM and Current RR need a live price;
+              the dashboard reads only the local database and makes no broker call.</p>
+          </div>
+
+          <div class="pos-modal-foot">
+            <button class="btn-ghost" type="button" @click="full = null">Close</button>
+          </div>
+        </div>
+      </template>
+    </div>
+  </div>
+
   <!-- ═══ ACTION — CLOSE POSITION (⛔ UI FLOW ONLY) ═══
        The dashboard has NO write path: its only POST route is /login and every
        DB connection is opened read-only (isolation rule I2). So this dialog
@@ -514,7 +618,7 @@ function positionsPage() {
     tableMixin({ defaultSize: 100, pageSizes: [50, 100, 200], sortKey: "", sortDir: -1 }),
     {
       sel: null, tab: "overview", kpi: {}, sm: {},
-      act: null, actMode: "manual", actPrice: "",
+      act: null, actMode: "manual", actPrice: "", full: null,
       STATUSES: ["Open", "Closed", "SL Hit", "TGT Hit", "Manual Exit", "Partial Exit", "Expired"],
       f:  { from_date: "", to_date: "", strategy: "", symbol: "",
             trade_type: "", direction: "", position_status: "" },
@@ -545,13 +649,20 @@ function positionsPage() {
         { key: "tgt_broker",   label: "Broker", group: "TGT ₹", kind: "rs", num: true },
         { key: "sl_points",    label: "SL Points ₹",  kind: "rs", num: true },
         { key: "tgt_points",   label: "TGT Points ₹", kind: "rs", num: true },
-        { key: "rr_configured", label: "R:R",         kind: "rr", num: true },
         { key: "ltp",          label: "LTP ₹",        kind: "ltp", num: true },
         { key: "unrealised",   label: "Unrealised ₹", kind: "unreal", num: true },
+        /* ⛔ ACTION IS ALWAYS LAST — ⛔ never between the grouped price/risk
+           columns. R:R is deliberately NOT a table column: it lives in the
+           detail rail's Risk / RR tab, where it is shown against the ratio
+           implied by the levels. ⛔ The information is moved, ⛔ not dropped. */
         { key: "actions",      label: "Action",       kind: "act" },
       ],
       cols: [], dragKey: "", overKey: "", _dragEndAt: 0,
-      COLS_KEY: "screen06.positions.colOrder.v1",
+      /* ⚠️ VERSION BUMPED with the column set. A saved v1 order would restore
+         the OLD default — including Action in its old position and the removed
+         R:R column — and the operator would never see this change. Bumping the
+         key retires the stale order instead of trying to migrate it. */
+      COLS_KEY: "screen06.positions.colOrder.v2",
 
       qs() { return this.f.from_date ? "?date=" + this.f.from_date : ""; },
 
@@ -583,9 +694,18 @@ function positionsPage() {
         if (n === null || n === undefined || !t) return "—";
         return (n / t * 100).toFixed(2) + "%";
       },
+      /* Capital for one row, straight from the server's strict computation
+         (filled qty x filled entry). ⛔ Never recomputed in the browser from
+         whatever fields happen to be present. */
+      capUsedOf(r) { return r ? r.capital_used : null; },
+      /* ⭐ If any open position has no filled entry price, the total cannot
+         account for it — and the card SAYS so rather than quietly under-reporting. */
       capUsedFoot() {
-        const p = this.sm && this.sm.capital ? this.sm.capital.used_pct : null;
-        return p == null ? "of opening capital" : p + "% of opening capital";
+        const cap = this.sm && this.sm.capital;
+        const p = cap ? cap.used_pct : null;
+        const missing = cap ? cap.unpriced : 0;
+        const base = p == null ? "of opening capital" : p + "% of opening capital";
+        return missing ? base + " · " + missing + " unpriced" : base;
       },
       capUsedPct() { return (this.sm.capital && this.sm.capital.used_pct) || 0; },
       longPct() {
@@ -630,6 +750,12 @@ function positionsPage() {
       /* The Action button lives inside x-html cell content, so the click is
          caught at the row and routed here. ⛔ Opening the dialog must NOT also
          select the row behind it. */
+      /* "Open" for the purposes of offering a Close control. Mirrors the
+         server's own open-set (OPEN / PARTIAL / PENDING_FILL / EXITING) via the
+         derived status, so the button and the KPI agree on what is open. */
+      isOpen(r) {
+        return r && (r.position_status === "Open" || r.position_status === "Partial Exit");
+      },
       rowClick(ev, r) {
         if (ev && ev.target && ev.target.closest && ev.target.closest(".pos-act")) {
           this.openAction(r);
@@ -638,6 +764,7 @@ function positionsPage() {
         this.sel = r; this.tab = "overview";
       },
       openAction(r) {
+        if (!this.isOpen(r)) return;   /* ⛔ never open the dialog on a closed row */
         this.act = r;
         this.actMode = "manual";   /* CMP is disabled — there is no live price */
         this.actPrice = "";
@@ -727,8 +854,14 @@ function positionsPage() {
 
       cell(r, c) {
         const v = r[c.key];
-        if (c.kind === "act")
+        /* Close is offered ONLY where it means something. A closed / expired /
+           rejected row gets a neutral disabled state — ⛔ never a live-looking
+           button that would imply an action the row cannot take. */
+        if (c.kind === "act") {
+          if (!this.isOpen(r))
+            return '<span class="pos-act-off" title="Position is not open">—</span>';
           return '<button class="pos-act" type="button" title="Close this position">Close</button>';
+        }
         if (c.kind === "age") return this.age(r);
         if (c.kind === "rs")  return this.rs(v);
         /* R:R is the STRATEGY-CONFIGURED ratio (strategy.yaml tgt_risk_reward),
