@@ -1801,3 +1801,336 @@ def order_exec_context(cfg: dict, order_ids) -> dict:
             for r in conn.execute(q, tuple(chunk)).fetchall():
                 out[str(r["order_id"])] = dict(r)
     return out
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Screen-06 Positions (12-Aug-2026)
+#
+# ROW GRAIN = the TRADE (a position), not the order. Screen-05's grain is the
+# ENTRY order; these are different questions and the two readers stay separate.
+#
+# ⛔ SCANNER IS ABSENT BY DECISION (Strategy carries the same relationship) —
+#    no column, no filter, no detail row, exactly as Screen-05.
+#
+# ⭐ SYSTEM vs BROKER, and the words are load-bearing (Rama, 12-Aug):
+#      Entry (System) = trades.entry_target_price   — the LIMIT we wanted
+#      Entry (Filled) = trades.entry_actual_price   — a REAL fill price
+#      SL  (System)   = trades.sl_initial
+#      SL  (Broker)   = orders.trigger_price WHERE leg='SL'   — the trigger
+#                       actually STANDING at the broker
+#      TGT (System)   = trades.tgt_initial
+#      TGT (Broker)   = orders.price        WHERE leg='TGT'
+# ⛔⛔ THERE IS NO FILLED SL/TGT EXECUTION PRICE AND NONE IS INVENTED.
+#    MEASURED 12-Aug: orders.avg_fill_price is NULL on ALL 927 orders ever
+#    placed (ENTRY 457, SL 241, TGT 229 — zero populated in every leg), and a
+#    leg that executes still records nothing there (today's trd_05c93... SL is
+#    status=COMPLETE, qty_filled=0, avg_fill_price=NULL). The executed price of
+#    an exit lands on trades.exit_price and is surfaced SEPARATELY as Exit
+#    Price — ⛔ it never overwrites the standing Broker SL/TGT columns.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# exit_reason values MEASURED in production (12-Aug): SL_HIT 111, TGT_HIT 74,
+# MANUAL 47, GTT_EXIT 8, 'pre-FIX-189 cleanup' 6, STALE_PENDING_CLEANUP 3,
+# MANUAL_CLOSE_EOD 1. ⛔ These are exit_reason strings, NOT the closure-source
+# vocabulary (core/closure_source.py) — that one is imported, never re-typed.
+_POS_SL = ("SL_HIT",)
+_POS_TGT = ("TGT_HIT",)
+_POS_MANUAL = ("MANUAL", "MANUAL_CLOSE_EOD")
+_POS_EXPIRED = ("EOD", "TIMEOUT", "CIRCUIT_BREAKER")
+
+POSITION_STATUSES = ("Open", "Closed", "SL Hit", "TGT Hit",
+                     "Manual Exit", "Partial Exit", "Expired")
+
+
+def _position_status_of(r: dict) -> str:
+    """Derived position status. ⛔ Nothing is guessed: an exit_reason we do not
+    recognise resolves to the neutral 'Closed', never to SL Hit / TGT Hit.
+
+    ⚠️ GTT_EXIT is a MECHANISM, not a reason (the broker's GTT fired) — it does
+    NOT say whether the SL or the TGT leg went, so it maps to 'Closed' and the
+    verbatim reason is shown in the detail card instead of being inferred.
+    """
+    st = (r.get("status") or "").upper()
+    if st in ("OPEN", "EXITING", "PENDING_FILL"):
+        return "Open"
+    if st == "PARTIAL":
+        return "Partial Exit"
+    reason = (r.get("exit_reason") or "").upper()
+    if st == "CLOSED_MANUAL" or reason in _POS_MANUAL:
+        return "Manual Exit"
+    if reason in _POS_SL:
+        return "SL Hit"
+    if reason in _POS_TGT:
+        return "TGT Hit"
+    if reason in _POS_EXPIRED:
+        return "Expired"
+    return "Closed"
+
+
+def _expected_rr(entry, sl, tgt, direction) -> Optional[float]:
+    """(reward / risk) from the SYSTEM prices. None when any leg is missing or
+    risk is non-positive — ⛔ never a fabricated 1:1 default."""
+    try:
+        e, s, t = float(entry), float(sl), float(tgt)
+    except (TypeError, ValueError):
+        return None
+    is_long = str(direction or "").upper() == "LONG"
+    risk = (e - s) if is_long else (s - e)
+    reward = (t - e) if is_long else (e - t)
+    if risk <= 0:
+        return None
+    return round(reward / risk, 2)
+
+
+def _pct_from_entry(entry, level) -> Optional[float]:
+    """Distance of a level from the SYSTEM ENTRY, as a percentage OF ENTRY.
+
+    📌 THE BASE IS ENTRY, AND THE COLUMN SAYS SO. The reference design measures
+    SL/TGT proximity from the LIVE PRICE — that quantity CANNOT be computed
+    here: ops_dashboard has ZERO live-price call sites (measured 12-Aug) and
+    /api/positions already declares ltp/mtm/unrealized/current_rr UNAVAILABLE
+    ('Pending Broker Source', G4). ⛔ Entry-distance is NOT proximity-to-LTP and
+    is never labelled as if it were.
+    """
+    try:
+        e, v = float(entry), float(level)
+    except (TypeError, ValueError):
+        return None
+    if e == 0:
+        return None
+    return round(abs(e - v) / e * 100.0, 2)
+
+
+def position_screen_rows(cfg: dict, today: str, limit: int = _LIST_CAP) -> list:
+    """Positions for a trading date, shaped for Screen-06. Read-only.
+
+    Dated by entry_time, falling back to created_at for a trade that reserved
+    capital but never filled — so a row never silently vanishes from its day.
+    """
+    sql = (
+        "SELECT t.trade_id, t.signal_id, t.symbol, t.strategy, t.direction, "
+        "t.status, t.sector, t.qty_planned, t.qty_filled, "
+        "t.entry_target_price, t.entry_actual_price, t.sl_initial, t.tgt_initial, "
+        "t.risk_amount, t.margin_reserved, t.actual_position_value_rs, "
+        "t.created_at, t.entry_time, t.exit_time, "
+        "t.exit_price, t.exit_reason, t.gross_pnl, t.charges, t.net_pnl, "
+        "t.closure_source, t.exit_mechanism, "
+        # ENTRY-leg order stamps feed the lifecycle rail (Signal -> Order ->
+        # Position Open -> Exit). ⛔ A trade whose ENTRY order row is missing
+        # keeps NULL here and the rail renders that step 'not captured'.
+        "o.product AS product, o.placed_at AS order_placed_at, "
+        "o.filled_at AS order_filled_at, o.order_id AS entry_order_id "
+        "FROM trades t "
+        "LEFT JOIN orders o ON o.trade_id = t.trade_id AND o.leg = 'ENTRY' "
+        "WHERE COALESCE(t.entry_time, t.created_at) LIKE ? "
+        "ORDER BY COALESCE(t.entry_time, t.created_at) DESC LIMIT ?"
+    )
+    with _ro(cfg) as conn:
+        rows = [dict(r) for r in conn.execute(
+            sql, (today + "%", max(1, min(int(limit), _LIST_CAP)))).fetchall()]
+
+    for r in rows:
+        stamp = r.get("entry_time") or r.get("created_at") or ""
+        r["date"] = stamp[:10]
+        r["time"] = stamp[11:19]
+        r["trade_type"] = _trade_type_of_product(r.get("product"))
+        r["position_status"] = _position_status_of(r)
+
+        # QUANTITY — the BROKER-FILLED quantity IS the position (section F).
+        # qty_planned is what the system asked for and is kept BESIDE it, never
+        # in place of it. ⛔ The two are never collapsed into one "Qty".
+        r["qty_system"] = r.get("qty_planned")
+        r["qty_position"] = r.get("qty_filled")
+
+        entry_sys = r.get("entry_target_price")
+        r["expected_rr"] = _expected_rr(
+            entry_sys, r.get("sl_initial"), r.get("tgt_initial"), r.get("direction"))
+        r["sl_dist_pct"] = _pct_from_entry(entry_sys, r.get("sl_initial"))
+        r["tgt_dist_pct"] = _pct_from_entry(entry_sys, r.get("tgt_initial"))
+
+        # Capital used: the recorded position value, else FILLED qty x the price
+        # that actually applied (fill price when we have one, else the system
+        # limit). ⛔ Never planned qty — that would overstate a partial fill.
+        cap = r.get("actual_position_value_rs")
+        if cap is None:
+            px = r.get("entry_actual_price") or entry_sys
+            q = r.get("qty_filled") or 0
+            cap = round(float(px) * int(q), 2) if (px is not None and q) else None
+        r["capital_used"] = cap
+    return rows
+
+
+def position_broker_exits(cfg: dict, trade_ids) -> dict:
+    """{trade_id: {sl_broker, sl_broker_status, tgt_broker, tgt_broker_status}}.
+
+    The SL/TGT values STANDING AT THE BROKER, from the real exit-leg orders:
+    SL uses trigger_price (the SL-M trigger), TGT uses price (the LIMIT).
+    ⚠️ Two-state by design — a trade whose exit legs were never placed returns
+    nothing and the UI renders an em-dash. ⛔ Nothing is inferred from the
+    system value, which is the whole reason the two columns exist side by side.
+    """
+    ids = [str(t) for t in (trade_ids or []) if t]
+    if not ids:
+        return {}
+    out: dict = {}
+    with _ro(cfg) as conn:
+        for chunk in (ids[i:i + 400] for i in range(0, len(ids), 400)):
+            # ⛔ SUPERSEDED LEGS ARE EXCLUDED, and this is not a detail: a trade
+            # can carry an OLD cancelled SL alongside the live one (the
+            # superseded chain). Taking the last row seen would let a dead leg
+            # overwrite the standing one and the screen would report a stale
+            # trigger — or a blank — as the broker's current position.
+            # ORDER BY placed_at makes the LATEST row win deterministically.
+            q = ("SELECT trade_id, leg, price, trigger_price, status "
+                 "FROM orders WHERE leg IN ('SL','TGT') "
+                 "AND superseded_by IS NULL AND trade_id IN (" +
+                 ",".join("?" * len(chunk)) + ") ORDER BY placed_at ASC")
+            for r in conn.execute(q, tuple(chunk)).fetchall():
+                tid = str(r["trade_id"])
+                slot = out.setdefault(tid, {})
+                if (r["leg"] or "").upper() == "SL":
+                    val, key, skey = r["trigger_price"], "sl_broker", "sl_broker_status"
+                else:
+                    val, key, skey = r["price"], "tgt_broker", "tgt_broker_status"
+                # ⛔ Never let a row WITHOUT a price blank out one that has it.
+                if val is None and slot.get(key) is not None:
+                    continue
+                slot[key] = val
+                slot[skey] = r["status"]
+    return out
+
+
+def position_excursions(cfg: dict, trade_ids) -> dict:
+    """{trade_id: {mfe_pct, mae_pct}} — Highest Profit % / Highest Drawdown %.
+
+    REAL, from trade_excursions (populated by the reconstruct_excursions cron).
+    ⚠️ MEASURED 12-Aug: 192 of 589 trades have a row. A trade without one
+    returns nothing and renders an em-dash. ⛔ Never zero, which would read as
+    "no drawdown" when the truth is "not reconstructed yet".
+    """
+    ids = [str(t) for t in (trade_ids or []) if t]
+    if not ids:
+        return {}
+    out: dict = {}
+    with _ro(cfg) as conn:
+        for chunk in (ids[i:i + 400] for i in range(0, len(ids), 400)):
+            q = ("SELECT trade_id, mfe_pct, mae_pct FROM trade_excursions "
+                 "WHERE trade_id IN (" + ",".join("?" * len(chunk)) + ")")
+            for r in conn.execute(q, tuple(chunk)).fetchall():
+                out[str(r["trade_id"])] = {"mfe_pct": r["mfe_pct"],
+                                           "mae_pct": r["mae_pct"]}
+    return out
+
+
+def position_open_set(cfg: dict) -> list:
+    """The CURRENT open positions, all dates — the base for the live KPIs.
+
+    📌 A DIFFERENT BASE from the dated table, deliberately: a delivery position
+    carried from an earlier day is still open exposure today and must not fall
+    out of "Open Positions" merely because its entry date is not the one being
+    viewed. Every KPI built on this carries its base in its own footer text.
+    """
+    states = _OPEN_STATES
+    with _ro(cfg) as conn:
+        rows = conn.execute(
+            "SELECT t.trade_id, t.symbol, t.direction, t.status, t.qty_filled, "
+            "t.entry_target_price, t.entry_actual_price, t.margin_reserved, "
+            "t.actual_position_value_rs, t.entry_time "
+            "FROM trades t WHERE t.status IN (" + _in_clause(states) + ")",
+            states,
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def _position_value_of(r: dict) -> float:
+    """Rupee value of one open position. Recorded value first; else FILLED qty
+    x the applicable price. ⛔ Missing price or zero fill contributes 0.0, never
+    a planned-qty estimate."""
+    v = r.get("actual_position_value_rs")
+    if v is not None:
+        return float(v)
+    px = r.get("entry_actual_price") or r.get("entry_target_price")
+    q = r.get("qty_filled") or 0
+    return float(px) * int(q) if (px is not None and q) else 0.0
+
+
+def position_kpis(cfg: dict, today: str) -> dict:
+    """The six Screen-06 KPI cards.
+
+    ⛔⛔ CURRENT MTM IS NOT COMPUTED AND NOT GUESSED. It needs a live price and
+    ops_dashboard has ZERO live-price call sites (measured 12-Aug, whole
+    backend) — /api/positions already declares ltp/mtm/unrealized/current_rr
+    UNAVAILABLE, 'Pending Broker Source' (G4). It is returned as None so the UI
+    can say so out loud. ⭐ Today's REALIZED P&L is real (trades.net_pnl) and is
+    a DIFFERENT quantity — the two are never substituted for each other.
+    """
+    open_rows = position_open_set(cfg)
+
+    def _dir(d):
+        return sum(1 for r in open_rows
+                   if str(r.get("direction") or "").upper() == d)
+
+    used = sum(_position_value_of(r) for r in open_rows)
+
+    with _ro(cfg) as conn:
+        # Dated by exit_time ONLY. ⛔ Not COALESCE(exit_time, updated_at): a row
+        # touched today for an unrelated reason would pull an older day's P&L
+        # into today's realized figure, and updated_at moves for any write.
+        realized = conn.execute(
+            "SELECT SUM(net_pnl) AS p FROM trades "
+            "WHERE net_pnl IS NOT NULL AND exit_time LIKE ?",
+            (today + "%",),
+        ).fetchone()
+    rp = realized["p"] if realized else None
+
+    return {
+        "open_positions": len(open_rows),
+        "long_positions": _dir("LONG"),
+        "short_positions": _dir("SHORT"),
+        "total_capital_used": round(used, 2),
+        # ⛔ unavailable BY ARCHITECTURE, not by omission — see the docstring.
+        "current_mtm": None,
+        "current_mtm_reason": "Pending Broker Source (G4) — the GUI has no live price",
+        "realized_pnl_today": round(float(rp), 2) if rp is not None else None,
+        "opening_capital": opening_capital(cfg, today),
+    }
+
+
+def position_summary(cfg: dict, today: str) -> dict:
+    """The bottom summary panels.
+
+    ⭐ THREE OF THE FOUR ARE REAL: capital utilization, long/short distribution
+    and the status breakdown all come from the DB.
+    ⛔ THE FOURTH — MTM PERFORMANCE — IS NOT. It is an intraday MTM curve and
+    needs a live price the GUI cannot reach, so it returns available=False with
+    its reason and the panel says so instead of drawing an invented line.
+    """
+    open_rows = position_open_set(cfg)
+    used = sum(_position_value_of(r) for r in open_rows)
+    opening = opening_capital(cfg, today)
+    available = (float(opening) - used) if opening is not None else None
+
+    rows = position_screen_rows(cfg, today)
+    breakdown = {s: 0 for s in POSITION_STATUSES}
+    for r in rows:
+        breakdown[r["position_status"]] = breakdown.get(r["position_status"], 0) + 1
+
+    longs = sum(1 for r in open_rows if str(r.get("direction") or "").upper() == "LONG")
+    shorts = sum(1 for r in open_rows if str(r.get("direction") or "").upper() == "SHORT")
+
+    return {
+        "capital": {
+            "used": round(used, 2),
+            "available": round(available, 2) if available is not None else None,
+            "total": round(float(opening), 2) if opening is not None else None,
+            "used_pct": round(used / float(opening) * 100.0, 2)
+                        if (opening and float(opening)) else None,
+        },
+        "distribution": {"long": longs, "short": shorts, "total": len(open_rows)},
+        "mtm": {
+            "available": False,
+            "reason": "Pending Broker Source (G4) — the GUI has no live price",
+        },
+        "status_breakdown": breakdown,
+        "status_total": len(rows),
+    }

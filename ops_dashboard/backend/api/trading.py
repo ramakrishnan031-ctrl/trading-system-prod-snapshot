@@ -172,3 +172,174 @@ def get_holdings():
         "count": len(rows),
         "rows": rows,
     })
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Screen-06 Positions (12-Aug-2026). ADDITIVE — /api/positions above is
+# UNTOUCHED, and its G4 "unavailable" contract is the same one this screen
+# honours rather than quietly working around.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _position_filters() -> dict:
+    """The filter set Screen-06 exposes. ⛔ NO SCANNER — Strategy carries that
+    relationship, so there is no scanner column, filter or detail row."""
+    g = lambda k: (request.args.get(k) or "").strip()  # noqa: E731
+    return {
+        "strategy": g("strategy"),
+        "symbol": g("symbol"),
+        "trade_type": g("trade_type"),
+        "direction": g("direction").upper(),
+        "position_status": g("position_status"),
+    }
+
+
+def _apply_position_filters(rows: list, f: dict) -> list:
+    """Server-side twin of the client's view(). ⭐ EXPORT AND TABLE MUST AGREE:
+    the export route runs THIS function over the same rows, so 'Export
+    represents the filtered result set' is true by construction rather than by
+    two implementations that drift."""
+    out = rows
+    if f.get("strategy"):
+        out = [r for r in out if r.get("strategy") == f["strategy"]]
+    if f.get("symbol"):
+        out = [r for r in out if r.get("symbol") == f["symbol"]]
+    if f.get("trade_type"):
+        out = [r for r in out if r.get("trade_type") == f["trade_type"]]
+    if f.get("direction"):
+        out = [r for r in out
+               if str(r.get("direction") or "").upper() == f["direction"]]
+    if f.get("position_status"):
+        out = [r for r in out if r.get("position_status") == f["position_status"]]
+    return out
+
+
+def _position_rows_enriched(cfg, today: str) -> list:
+    """Rows + broker-standing exits + excursions + the two score quantities.
+
+    ⛔ Every enrichment is a LEFT-join in spirit: a row with no exit legs, no
+    excursion row or no score keeps None and the UI renders an em-dash. Nothing
+    is defaulted to zero, which would read as a measured value.
+    """
+    rows = db_reader.position_screen_rows(cfg, today)
+    tids = [r.get("trade_id") for r in rows]
+    exits = db_reader.position_broker_exits(cfg, tids)
+    exc = db_reader.position_excursions(cfg, tids)
+
+    # Same two score quantities Screens 04/05 show, from the same reader —
+    # ⛔ no scoring logic is invented here.
+    scores = db_reader.signal_scores(cfg, [r.get("signal_id") for r in rows])
+    min_pass = config_reader.get_min_pass_score(cfg)
+
+    for r in rows:
+        tid = str(r.get("trade_id"))
+        bx = exits.get(tid) or {}
+        r["sl_broker"] = bx.get("sl_broker")
+        r["sl_broker_status"] = bx.get("sl_broker_status")
+        r["tgt_broker"] = bx.get("tgt_broker")
+        r["tgt_broker_status"] = bx.get("tgt_broker_status")
+
+        ex = exc.get(tid) or {}
+        r["mfe_pct"] = ex.get("mfe_pct")
+        r["mae_pct"] = ex.get("mae_pct")
+
+        sc = scores.get(r.get("signal_id")) or {}
+        r["signal_score"] = sc.get("signal_score")
+        sys_score = sc.get("system_score")
+        r["system_score"] = min_pass if sys_score is None else sys_score
+    return rows
+
+
+@trading_api.route("/api/positions/screen", methods=["GET"])
+@login_required
+def get_positions_screen():
+    """Screen-06 Positions. ADDITIVE — /api/positions is untouched.
+
+    Row grain is the TRADE (a position). Prices are split SYSTEM vs BROKER:
+    Entry (System/Filled) and SL/TGT (System/Broker). ⛔ There is no filled
+    SL/TGT execution price anywhere in the schema and none is synthesised —
+    see db_reader.position_broker_exits for the measurement.
+    """
+    cfg = current_app.config["GUI_CONFIG"]
+    today = _date_param()
+    rows = _position_rows_enriched(cfg, today)
+    return jsonify({
+        "date": today,
+        "count": len(rows),
+        "rows": rows,
+        "kpis": db_reader.position_kpis(cfg, today),
+        "summary": db_reader.position_summary(cfg, today),
+        "statuses": list(db_reader.POSITION_STATUSES),
+        "row_cap": db_reader.list_signals_cap(),
+        # The SAME honest contract /api/positions publishes. Repeated here so a
+        # consumer of THIS endpoint cannot miss it.
+        "unavailable": {
+            "fields": ["ltp", "last_updated", "current_value", "unrealized_pnl",
+                       "unrealized_pct", "mtm", "current_rr"],
+            "reason": "Pending Broker Source (G4) — the GUI has no live price",
+        },
+    })
+
+
+# Column order mirrors the approved table. (label, row-key) — ⛔ no Scanner.
+_POS_EXPORT_COLS = [
+    ("Trading Date", "date"), ("Time", "time"),
+    ("Strategy", "strategy"), ("Symbol", "symbol"),
+    ("Trade Type", "trade_type"), ("Direction", "direction"),
+    ("System Score", "system_score"), ("Signal Score", "signal_score"),
+    ("Position Status", "position_status"),
+    ("Qty (System)", "qty_system"), ("Qty (Position)", "qty_position"),
+    ("Entry Price (System)", "entry_target_price"),
+    ("Entry Price (Filled)", "entry_actual_price"),
+    ("SL (System)", "sl_initial"), ("SL (Broker)", "sl_broker"),
+    ("TGT (System)", "tgt_initial"), ("TGT (Broker)", "tgt_broker"),
+    ("SL Dist % (from entry)", "sl_dist_pct"),
+    ("TGT Dist % (from entry)", "tgt_dist_pct"),
+    ("Expected RR", "expected_rr"),
+    ("Capital Used", "capital_used"), ("Risk Amount", "risk_amount"),
+    ("Highest Profit %", "mfe_pct"), ("Highest Drawdown %", "mae_pct"),
+    ("Exit Price", "exit_price"), ("Exit Reason", "exit_reason"),
+    ("Net P&L", "net_pnl"),
+    ("Entry Time", "entry_time"), ("Exit Time", "exit_time"),
+    ("Trade ID", "trade_id"),
+]
+
+
+@trading_api.route("/api/export/positions", methods=["GET"])
+@login_required
+def export_positions():
+    """XLSX of the FILTERED Positions result set (section L).
+
+    ⭐ The filters are applied by _apply_position_filters — the same function
+    the screen's own contract test pins — so the sheet and the table cannot
+    disagree.
+    ⛔ Columns that are unavailable by architecture (LTP / Current Value /
+    Unrealized / MTM / Current RR) are NOT columns here. An empty column would
+    imply the value exists and merely happened to be blank.
+    """
+    import io
+
+    from openpyxl import Workbook
+    from flask import send_file
+
+    cfg = current_app.config["GUI_CONFIG"]
+    today = _date_param()
+    rows = _apply_position_filters(_position_rows_enriched(cfg, today),
+                                   _position_filters())
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Positions"
+    ws.append([label for label, _ in _POS_EXPORT_COLS])
+    for r in rows:
+        ws.append([r.get(key) for _, key in _POS_EXPORT_COLS])
+    ws.freeze_panes = "A2"
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return send_file(
+        buf, as_attachment=True,
+        download_name="positions_%s.xlsx" % today,
+        mimetype=("application/vnd.openxmlformats-officedocument"
+                  ".spreadsheetml.sheet"),
+    )

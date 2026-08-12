@@ -1235,3 +1235,83 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 .ord-page .od-time .d-off { background: var(--gray); }
 .ord-page .od-time span { color: var(--muted); font-variant-numeric: tabular-nums; min-width: 58px; }
 .ord-page .od-time em { font-style: normal; color: var(--text); }
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SCREEN-06 POSITIONS (12-Aug-2026)
+
+   ⭐ REUSE FIRST: the page element carries `ord-page` AS WELL AS `pos-page`, so
+   every Screen-05 rule above already applies — .pg-title (incl. its accepted
+   12px top gap), .kc cards, .flt-* filters, .st-tbl density, .ord-scroll,
+   .ord-cards and the whole .od-* detail card. ⛔ Nothing below re-states a
+   spacing, font or colour that Screen-05 already defines; this block adds only
+   what Positions genuinely introduces.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Six KPIs, not eight — the ONLY deck change. Gap/margin inherit from .ord-page. */
+.pos-page .ok-deck { grid-template-columns: repeat(6, 1fr); }
+@media (max-width: 1500px) { .pos-page .ok-deck { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 1000px) { .pos-page .ok-deck { grid-template-columns: repeat(2, 1fr); } }
+
+/* Signed values, shared by the table and the detail card. */
+.pos-page .v-pos { color: var(--pos); font-variant-numeric: tabular-nums; }
+.pos-page .v-neg { color: var(--neg); font-variant-numeric: tabular-nums; }
+
+/* ── Position-status strip ─────────────────────────────────────────────────
+   A filter, not decoration: each chip toggles f.position_status. */
+.pos-page .pos-strip-panel { padding-top: 10px; padding-bottom: 10px; }
+.pos-page .pos-strip { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.pos-page .pos-strip-k { font-size: 12px; font-weight: 700; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--muted); margin-right: 4px; }
+.pos-page .pos-chip { display: inline-flex; align-items: center; gap: 7px;
+  padding: 5px 11px; border-radius: 7px; cursor: pointer;
+  background: var(--panel); border: 1px solid var(--border);
+  font-size: 13px; font-weight: 600; color: var(--text); line-height: 1.2; }
+.pos-page .pos-chip:hover { border-color: var(--blue); }
+.pos-page .pos-chip.is-on { border-color: var(--blue); box-shadow: inset 0 0 0 1px var(--blue); }
+.pos-page .pos-chip b { font-variant-numeric: tabular-nums; color: var(--muted); }
+.pos-page .pos-chip.is-on b { color: var(--text); }
+
+/* ── Donut summary cards (Capital Utilization / Position Distribution) ─────
+   Pure inline SVG — the chart treatment the reference shows, ⛔ not plain text. */
+.pos-page .pos-donut-wrap { display: flex; align-items: center; gap: 14px; }
+.pos-page .pos-donut { width: 96px; height: 96px; flex: 0 0 auto; transform: rotate(-90deg); }
+.pos-page .pos-donut circle { fill: none; stroke-width: 5; }
+.pos-page .pd-track { stroke: rgba(var(--t-gray), .35); }
+.pos-page .pd-arc { stroke-linecap: butt; transition: stroke-dasharray .3s ease; }
+.pos-page .pd-used { stroke: var(--neg); }
+.pos-page .pd-long { stroke: var(--pos); }
+.pos-page .pos-legend { min-width: 0; }
+.pos-page .pos-legend div { justify-content: flex-start; gap: 7px; }
+.pos-page .pos-legend b { margin-left: auto; }
+
+/* ── Status breakdown bars ─────────────────────────────────────────────────── */
+.pos-page .pos-bars { display: flex; flex-direction: column; gap: 7px; }
+.pos-page .pos-bar { display: grid; grid-template-columns: 92px minmax(0, 1fr) auto;
+  align-items: center; gap: 9px; font-size: 13px; }
+.pos-page .pb-k { color: var(--muted); }
+.pos-page .pb-track { height: 7px; border-radius: 4px; overflow: hidden;
+  background: rgba(var(--t-gray), .3); }
+.pos-page .pb-track i { display: block; height: 100%; border-radius: 4px;
+  transition: width .3s ease; }
+.pos-page .pb-track i.dot-green  { background: var(--pos); }
+.pos-page .pb-track i.dot-red    { background: var(--neg); }
+.pos-page .pb-track i.dot-orange { background: var(--orange); }
+.pos-page .pb-track i.dot-purple { background: var(--purple); }
+.pos-page .pb-track i.dot-gray   { background: var(--gray); }
+.pos-page .pb-v { font-variant-numeric: tabular-nums; font-weight: 700; white-space: nowrap; }
+.pos-page .pb-v em { font-style: normal; font-weight: 500; color: var(--dim); margin-left: 4px; }
+
+/* ── Honest-unavailable blocks ─────────────────────────────────────────────
+   These carry real information (WHY a value is absent), so they are readable
+   body text — ⛔ never thin or low-contrast, per the readability rule. */
+.pos-page .pos-na { font-size: 13px; line-height: 1.5; color: var(--muted); }
+.pos-page .pos-na b { color: var(--text); }
+.pos-page .pos-na em { font-style: normal; color: var(--dim); }
+.pos-page .pos-note { margin-top: 9px; font-size: 12.5px; line-height: 1.5; color: var(--muted); }
+.pos-page .pos-note b { color: var(--text); }
+.pos-page .pos-note em { font-style: normal; color: var(--dim); }
+
+/* The table is wider than Orders (four System/Broker pairs), so the columns
+   stay compact and the existing .ord-scroll keeps it scrolled, ⛔ never clipped. */
+.pos-page .pos-tbl th, .pos-page .pos-tbl td { white-space: nowrap; }

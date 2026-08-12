@@ -1,78 +1,711 @@
 {% extends "base.html" %}
-{% from "components.html" import kpi_row, kpi_card, two_state_panel, export_button %}
-{% block title %}AlgoCore Systems — Positions{% endblock %}
+{% block title %}Positions{% endblock %}
 {% block nav_positions %}active{% endblock %}
 {% block content %}
-{# G5d two-state: the SYSTEM side (DB-backed) renders fully; the BROKER-derived
-   fields (live LTP / MTM / unrealized / current RR) are honestly UNAVAILABLE
-   (two_state_panel, G-1) — never simulated or inferred. mode is a data attribute. #}
-<div x-data="positionsPage()" x-init="load()" @ops-refresh.window="load()">
-  {% call kpi_row() %}
-    {{ kpi_card("Open Positions", "data.count || 0", tone="info") }}
-    {{ kpi_card("Long", "side('LONG')", tone="pos") }}
-    {{ kpi_card("Short", "side('SHORT')", tone="neg") }}
-    {{ kpi_card("Capital Used", "money(capUsed())", tone="warn") }}
-    {{ kpi_card("Mode", "data.mode || '—'", tone="info") }}
-  {% endcall %}
+{#
+  SCREEN-06 POSITIONS — 12-Aug-2026.
 
-  <section class="panel">
-    <h2 class="panel-title">Open Positions — System View
-      <span class="panel-sub"><span x-text="(data.count!=null?data.count:0) + (data.max_open_positions ? ' / '+data.max_open_positions+' max' : '')"></span> · <a class="panel-link" href="/capacity">capacity →</a></span>
-    </h2>
-    <div class="filters">{{ export_button("Export Positions") }}</div>
+  ⭐ REUSE, NOT RE-DESIGN: the root carries `ord-page` AS WELL AS `pos-page`, so
+     every one of Screen-05's 117 approved rules applies verbatim — the same
+     .pg-title top spacing (12px 2px 14px), the same .kc KPI cards, .flt-*
+     filters, .st-tbl density, .ord-scroll, the .od-* detail card and Screen-04's
+     drag-to-reorder. `pos-page` adds ONLY what is genuinely new (a 6-up KPI
+     grid and the status strip). ⛔ No new spacing value was invented and no CSS
+     hack is used for the top gap — it is inherited from the accepted screens.
 
-    <!-- Broker-derived block: honest UNAVAILABLE (never fabricated) -->
-    {% call two_state_panel("false", reason="Live LTP / MTM / Unrealized / Current RR — Pending Broker Source (G4)") %}<span></span>{% endcall %}
+  ⛔ SCANNER IS ABSENT BY DECISION (Strategy carries the same relationship). Not
+     hidden, not a placeholder: no column, no filter, no detail row, no export
+     column.
 
-    <div class="tbl-scroll" style="margin-top:10px">
-    <table class="cap-table">
-      <thead><tr>
-        <th>Trade Date</th><th>Time</th><th>Strategy</th><th>Scanner</th><th>Symbol</th><th>Dir</th>
-        <th>Status</th><th>Qty</th><th>Entry (system)</th><th>SL (system)</th><th>TGT (system)</th>
-        <th>Risk ₹</th><th>Margin ₹</th><th>MTM</th><th>Age</th><th>Inning#</th>
-      </tr></thead>
-      <tbody>
-        <template x-for="p in data.rows || []" :key="p.trade_id">
-          <tr>
-            <td class="ev-ts" x-text="dstr(p.created_at)"></td>
-            <td class="ev-ts" x-text="tstr(p.entry_time || p.created_at)"></td>
-            <td x-text="p.strategy"></td>
-            <td x-text="p.scanner || '—'"></td>
-            <td x-text="p.symbol"></td>
-            <td x-text="p.direction"></td>
-            <td><span class="fam-pill famp-expired" x-text="p.status"></span></td>
-            <td class="cap-num" x-text="p.qty_filled + '/' + p.qty_planned"></td>
-            <td class="cap-num" x-text="dash(p.entry_actual_price != null ? p.entry_actual_price : p.entry_target_price)"></td>
-            <td class="cap-num" x-text="dash(p.sl_initial)"></td>
-            <td class="cap-num" x-text="dash(p.tgt_initial)"></td>
-            <td class="cap-num" x-text="dash(p.risk_amount)"></td>
-            <td class="cap-num" x-text="dash(p.margin_reserved)"></td>
-            <td class="cap-num ts-reason" title="Pending Broker Source (G4)">—</td>
-            <td x-text="age(p.entry_time || p.created_at)"></td>
-            <td class="cap-num" x-text="dash(p.inning_no)"></td>
-          </tr>
-        </template>
-        <tr x-show="!data.rows || data.rows.length === 0" x-cloak><td colspan="16" class="ev-empty">No open positions.</td></tr>
-      </tbody>
-    </table>
+  ⭐ SYSTEM vs BROKER — the words are load-bearing (Rama, 12-Aug):
+       Entry (System) / Entry (Filled)   — Filled is a REAL fill price
+       SL (System)    / SL (Broker)      — Broker = the trigger STANDING at the broker
+       TGT (System)   / TGT (Broker)
+  ⛔⛔ THERE IS NO FILLED SL/TGT EXECUTION PRICE. Measured 12-Aug:
+     orders.avg_fill_price is NULL on all 927 orders ever placed. The executed
+     price of an exit is trades.exit_price and appears SEPARATELY as Exit Price
+     in the detail card — ⛔ it never overwrites the standing Broker columns.
+
+  ⛔ LTP / Current Value / Unrealized / MTM / Current RR ARE NOT SHOWN AS VALUES.
+     ops_dashboard has ZERO live-price call sites; /api/positions already
+     declares them 'Pending Broker Source (G4)'. They render as an explicit
+     unavailable state — ⛔ never a zero, never a blank that reads as measured.
+#}
+<div x-data="positionsPage()" x-init="boot()" @ops-refresh.window="boot()"
+     class="dash-page ord-page pos-page">
+
+  <div class="pg-title">
+    <h1>Positions</h1>
+    <span class="pg-sub">Live exposure, capital utilisation, open risk and position lifecycle</span>
+  </div>
+
+  <!-- ═══ KPI DECK (6) ═══ -->
+  <div class="ok-deck">
+    <div class="kc"><div class="kc-ic">◧</div><div class="kc-label">Open Positions</div>
+      <div class="kc-val" x-text="k('open_positions')"></div>
+      <div class="kc-foot">Live · all dates</div></div>
+    <div class="kc kc-green"><div class="kc-ic">▲</div><div class="kc-label">Long Positions</div>
+      <div class="kc-val" x-text="k('long_positions')"></div>
+      <div class="kc-foot" x-text="sharePct('long_positions')"></div></div>
+    <div class="kc kc-red"><div class="kc-ic">▼</div><div class="kc-label">Short Positions</div>
+      <div class="kc-val" x-text="k('short_positions')"></div>
+      <div class="kc-foot" x-text="sharePct('short_positions')"></div></div>
+    <div class="kc kc-yellow"><div class="kc-ic">₹</div><div class="kc-label">Total Capital Used</div>
+      <div class="kc-val" x-text="kpi.total_capital_used == null ? '—' : money(kpi.total_capital_used)"></div>
+      <div class="kc-foot" x-text="capUsedFoot()"></div></div>
+    <div class="kc kc-muted"><div class="kc-ic">≈</div><div class="kc-label">Current MTM</div>
+      <div class="kc-val od-na">n/a</div>
+      <div class="kc-foot" :title="kpi.current_mtm_reason || ''">Pending Broker Source</div></div>
+    <div class="kc" :class="pnlTone(kpi.realized_pnl_today)"><div class="kc-ic">◈</div>
+      <div class="kc-label">Today's Realized P&amp;L</div>
+      <div class="kc-val" x-text="kpi.realized_pnl_today == null ? '—' : money(kpi.realized_pnl_today)"></div>
+      <div class="kc-foot">Realized · today</div></div>
+  </div>
+
+  <div class="ord-work">
+    <div class="ord-left">
+
+      <!-- ═══ FILTERS ═══ (the absent attribution filter is recorded at the top) -->
+      <section class="panel mc-panel">
+        <div class="mc-head"><h2 class="mc-title">Filters</h2></div>
+        <div class="flt-row ord-flt">
+          <label class="flt-field flt-daterange">
+            <span class="flt-k">Date Range</span>
+            <span class="flt-dr">
+              <input class="flt-c" type="date" x-model="f.from_date">
+              <span class="flt-to">to</span>
+              <input class="flt-c" type="date" x-model="f.to_date">
+              <button class="flt-reload" type="button" title="Reload for this date"
+                      @click="reloadDate()" aria-label="Reload">⟳</button>
+            </span>
+          </label>
+          <label class="flt-field">
+            <span class="flt-k">Strategy</span>
+            <select class="flt-c" x-model="f.strategy">
+              <option value="">All Strategies</option>
+              <template x-for="s in strategyOptions()" :key="s"><option :value="s" x-text="s"></option></template>
+            </select>
+          </label>
+          <label class="flt-field">
+            <span class="flt-k">Symbol</span>
+            <select class="flt-c" x-model="f.symbol">
+              <option value="">All Symbols</option>
+              <template x-for="s in symbolOptions()" :key="s"><option :value="s" x-text="s"></option></template>
+            </select>
+          </label>
+          <label class="flt-field">
+            <span class="flt-k">Trade Type</span>
+            <select class="flt-c" x-model="f.trade_type">
+              <option value="">All Types</option>
+              <option value="Intraday">Intraday</option>
+              <option value="Delivery">Delivery</option>
+            </select>
+          </label>
+          <label class="flt-field">
+            <span class="flt-k">Direction</span>
+            <select class="flt-c" x-model="f.direction">
+              <option value="">All Directions</option>
+              <option value="LONG">Long</option>
+              <option value="SHORT">Short</option>
+            </select>
+          </label>
+          <label class="flt-field">
+            <span class="flt-k">Position Status</span>
+            <select class="flt-c" x-model="f.position_status">
+              <option value="">All Statuses</option>
+              <template x-for="s in STATUSES" :key="s"><option :value="s" x-text="s"></option></template>
+            </select>
+          </label>
+          <div class="flt-actions">
+            <button class="btn-ghost" type="button" @click="resetFilters()">Reset Filters</button>
+            <button class="btn-primary" type="button" @click="applyFilters()">Apply Filters</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══ POSITION STATUS STRIP ═══ -->
+      <section class="panel mc-panel pos-strip-panel">
+        <div class="pos-strip">
+          <span class="pos-strip-k">Position Status</span>
+          <template x-for="s in STATUSES" :key="s">
+            <button class="pos-chip" type="button"
+                    :class="[f.position_status === s ? 'is-on' : '', chipTone(s)]"
+                    @click="toggleStatus(s)">
+              <span x-text="s"></span><b x-text="statusCount(s)"></b>
+            </button>
+          </template>
+        </div>
+      </section>
+
+      <!-- ═══ TABLE ═══ -->
+      <section class="panel mc-panel">
+        <div class="ord-toolbar">
+          <span class="ord-rpp">
+            <span class="ord-rpp-k">Rows per page:</span>
+            <template x-for="n in tPageSizes" :key="n">
+              <button class="ord-rpp-b" type="button" :class="tPageSize === n ? 'is-on' : ''"
+                      @click="tPageSize = n; tPage = 1" x-text="n"></button>
+            </template>
+            <button class="ord-colreset" type="button" x-show="!isDefaultOrder()" x-cloak
+                    @click="resetCols()" title="Restore the approved column order">↺ Reset column order</button>
+          </span>
+          <button class="btn-export" type="button" @click="exportXlsx()">⭳ Export XLSX</button>
+        </div>
+
+        <div class="ord-scroll">
+          <table class="st-tbl ord-tbl pos-tbl">
+            <thead>
+              <!-- group row: consecutive columns sharing `group` merge (Excel-style).
+                   This is what carries Qty / Entry / SL / TGT as System|Broker pairs. -->
+              <tr class="ord-grp">
+                <template x-for="g in groups()" :key="g.id">
+                  <th :colspan="g.span" :class="g.label ? 'is-grp' : ''"><span x-text="g.label"></span></th>
+                </template>
+              </tr>
+              <tr>
+                <template x-for="c in cols" :key="c.key">
+                  <th :class="[c.num ? 'rt' : '', dragKey === c.key ? 'is-drag' : '',
+                               overKey === c.key ? 'is-over' : '']"
+                      draggable="true" role="button" tabindex="0"
+                      :title="c.label + ' — click to sort, drag to reorder'"
+                      @dragstart="onDragStart(c.key, $event)"
+                      @dragover.prevent="overKey = c.key"
+                      @dragleave="overKey === c.key && (overKey = '')"
+                      @drop.prevent="onDrop(c.key)"
+                      @dragend="onDragEnd()"
+                      @click="headClick(c.key)" @keyup.enter="tSort(c.key)">
+                    <span class="st-grip" aria-hidden="true">⠿</span><span x-text="c.label"></span><span
+                          class="st-arw" x-text="tArrow(c.key)"></span>
+                  </th>
+                </template>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="r in tPaged(view())" :key="r.trade_id">
+                <tr class="ord-row" :class="sel && sel.trade_id === r.trade_id ? 'is-sel' : ''"
+                    @click="sel = r; tab = 'overview'">
+                  <template x-for="c in cols" :key="c.key">
+                    <td :class="c.num ? 'rt' : ''" x-html="cell(r, c)"></td>
+                  </template>
+                </tr>
+              </template>
+              <tr x-show="!view().length" x-cloak>
+                <td :colspan="cols.length" class="ord-empty">No positions match the current filters.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="ord-pager">
+          <span class="ord-count" x-text="rangeLabel()"></span>
+          <span class="ord-pages">
+            <button class="ord-pg" type="button" @click="tPage = Math.max(1, tPage - 1)">‹</button>
+            <button class="ord-pg is-on" type="button" x-text="tPage"></button>
+            <button class="ord-pg" type="button"
+                    @click="tPage = Math.min(tPageCount(view()), tPage + 1)">›</button>
+          </span>
+        </div>
+      </section>
+
+      <!-- ═══ BOTTOM SUMMARY (4) ═══ -->
+      <div class="ord-cards">
+        <section class="panel mc-panel">
+          <div class="mc-head"><h2 class="mc-title">Capital Utilization <span class="mc-today">(Today)</span></h2></div>
+          <div class="pos-donut-wrap">
+            <svg class="pos-donut" viewBox="0 0 42 42" aria-hidden="true">
+              <circle class="pd-track" cx="21" cy="21" r="15.9155"></circle>
+              <circle class="pd-arc pd-used" cx="21" cy="21" r="15.9155"
+                      :stroke-dasharray="donut(capUsedPct())"></circle>
+            </svg>
+            <div class="ord-legend pos-legend">
+              <div><span class="dot dot-red"></span>Used Capital
+                <b x-text="sm.capital && sm.capital.used != null ? money(sm.capital.used) : '—'"></b></div>
+              <div><span class="dot dot-green"></span>Available Capital
+                <b x-text="sm.capital && sm.capital.available != null ? money(sm.capital.available) : '—'"></b></div>
+              <div><span class="dot dot-gray"></span>Total Capital
+                <b x-text="sm.capital && sm.capital.total != null ? money(sm.capital.total) : '—'"></b></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel mc-panel">
+          <div class="mc-head"><h2 class="mc-title">Position Distribution</h2></div>
+          <div class="pos-donut-wrap">
+            <svg class="pos-donut" viewBox="0 0 42 42" aria-hidden="true">
+              <circle class="pd-track" cx="21" cy="21" r="15.9155"></circle>
+              <circle class="pd-arc pd-long" cx="21" cy="21" r="15.9155"
+                      :stroke-dasharray="donut(longPct())"></circle>
+            </svg>
+            <div class="ord-legend pos-legend">
+              <div><span class="dot dot-green"></span>Long
+                <b x-text="dist('long')"></b></div>
+              <div><span class="dot dot-red"></span>Short
+                <b x-text="dist('short')"></b></div>
+              <div><span class="dot dot-gray"></span>Total
+                <b x-text="sm.distribution ? sm.distribution.total : '—'"></b></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel mc-panel">
+          <div class="mc-head"><h2 class="mc-title">MTM Performance <span class="mc-today">(Today)</span></h2></div>
+          <!-- ⛔ NOT a chart of invented data. An intraday MTM curve needs a live
+               price the GUI cannot reach; the panel says so rather than drawing
+               a line that would look measured. -->
+          <div class="od-line od-na-block pos-na">
+            <b>MTM is not available to this screen.</b>
+            An intraday MTM curve needs a live price, and the dashboard reads only the
+            local database — it makes no broker call. <em x-text="sm.mtm ? sm.mtm.reason : ''"></em>
+            Today's <b>realized</b> P&amp;L is shown in the KPI deck and is a different quantity.
+          </div>
+        </section>
+
+        <section class="panel mc-panel">
+          <div class="mc-head"><h2 class="mc-title">Position Status Breakdown</h2></div>
+          <div class="pos-bars">
+            <template x-for="s in STATUSES" :key="s">
+              <div class="pos-bar">
+                <span class="pb-k" x-text="s"></span>
+                <span class="pb-track"><i :class="chipTone(s)" :style="'width:' + barPct(s) + '%'"></i></span>
+                <b class="pb-v"><span x-text="statusCount(s)"></span>
+                  <em x-text="'(' + barPct(s) + '%)'"></em></b>
+              </div>
+            </template>
+          </div>
+        </section>
+      </div>
     </div>
-    <p class="panel-sub" style="margin-top:8px">The MTM column is broker-authoritative and not reachable read-only (G4) — shown as “—”, never inferred. Open-set: <span class="mono" x-text="(data.open_states||[]).join(', ')"></span></p>
-  </section>
+
+    <!-- ═══ POSITION DETAILS (right rail — the approved Orders/Signals card) ═══ -->
+    <aside class="panel mc-panel ord-detail">
+      <div class="od-head">
+        <h2 class="mc-title">Position Details</h2>
+        <button class="od-x" type="button" @click="sel = null" x-show="sel" x-cloak
+                aria-label="Close">✕</button>
+      </div>
+
+      <div class="od-empty" x-show="!sel" x-cloak>
+        <span class="od-empty-ic">◎</span>
+        <span>Select any position row to see its full lifecycle.</span>
+      </div>
+
+      <template x-if="sel">
+        <div>
+          <div class="od-id">
+            <span class="od-oid" x-text="sel.symbol"></span>
+            <span class="pill" :class="dirPill(sel.direction)" x-text="dirLabel(sel.direction)"></span>
+            <span class="pill" :class="statusPill(sel.position_status)" x-text="sel.position_status"></span>
+          </div>
+
+          <div class="od-kv">
+            <div><span>Strategy</span><b x-text="dash(sel.strategy)"></b></div>
+            <div><span>Trade Type</span><b x-text="dash(sel.trade_type)"></b></div>
+            <div><span>Qty (Position)</span><b x-text="dash(sel.qty_position)"></b></div>
+            <div><span>Position Age</span><b x-text="age(sel)"></b></div>
+          </div>
+
+          <div class="od-tabs">
+            <button type="button" :class="tab==='overview' ? 'is-on':''" @click="tab='overview'">Overview</button>
+            <button type="button" :class="tab==='lifecycle'? 'is-on':''" @click="tab='lifecycle'">Lifecycle</button>
+            <button type="button" :class="tab==='sltgt'    ? 'is-on':''" @click="tab='sltgt'">SL / TGT</button>
+            <button type="button" :class="tab==='risk'     ? 'is-on':''" @click="tab='risk'">Risk &amp; Reward</button>
+          </div>
+
+          <!-- ── OVERVIEW ── -->
+          <div x-show="tab==='overview'">
+            <div class="od-sec">Position</div>
+            <div class="od-kv od-kv2">
+              <div><span>Qty (System ordered)</span><b x-text="dash(sel.qty_system)"></b></div>
+              <div><span>Qty (Broker position)</span><b x-text="dash(sel.qty_position)"></b></div>
+              <div><span>Entry Price (System)</span><b x-text="rs(sel.entry_target_price)"></b></div>
+              <div><span>Entry Price (Filled)</span><b x-text="rs(sel.entry_actual_price)"></b></div>
+              <div><span>Capital Used</span><b x-text="rs(sel.capital_used)"></b></div>
+              <div><span>Capital %</span><b x-text="capPct(sel)"></b></div>
+              <div><span>Position Weight %</span><b x-text="weightPct(sel)"></b></div>
+            </div>
+
+            <div class="od-sec">Live Market Values</div>
+            <div class="od-line od-na-block pos-na">
+              <b>Current LTP, Current Value, Unrealized P&amp;L, Unrealized %, MTM and Current RR
+              are not available to this screen.</b>
+              The dashboard reads only the local database and makes no broker call, so there is no
+              live price to compute them from. Shown honestly as unavailable rather than invented.
+            </div>
+          </div>
+
+          <!-- ── LIFECYCLE ── -->
+          <div x-show="tab==='lifecycle'" x-cloak>
+            <div class="od-sec">Position Lifecycle</div>
+            <ul class="od-time">
+              <li :class="sel.created_at ? '' : 'is-off'">
+                <i :class="sel.created_at ? 'd-on':'d-off'"></i>
+                <span x-text="clock(sel.created_at)"></span><em>Signal → capital reserved</em></li>
+              <li :class="sel.order_placed_at ? '' : 'is-off'">
+                <i :class="sel.order_placed_at ? 'd-on':'d-off'"></i>
+                <span x-text="clock(sel.order_placed_at)"></span><em>Entry order placed</em></li>
+              <li :class="sel.entry_time ? '' : 'is-off'">
+                <i :class="sel.entry_time ? 'd-on':'d-off'"></i>
+                <span x-text="clock(sel.entry_time)"></span><em>Position open (filled)</em></li>
+              <li class="is-off">
+                <i class="d-off"></i><span>—</span><em>SL / TGT updates — not captured</em></li>
+              <li :class="sel.exit_time ? '' : 'is-off'">
+                <i :class="sel.exit_time ? 'd-on':'d-off'"></i>
+                <span x-text="clock(sel.exit_time)"></span><em>Exit</em></li>
+            </ul>
+            <div class="od-line pos-note">
+              Per-update SL/TGT revision timestamps are not persisted, so that step is shown as
+              not captured rather than back-filled from the trade's own times.
+            </div>
+
+            <div class="od-sec">Exit</div>
+            <div class="od-kv od-kv2">
+              <!-- ⭐ The ACTUAL executed exit price. It lives HERE, separately —
+                   ⛔ it never overwrites the standing Broker SL/TGT columns. -->
+              <div><span>Exit Price (executed)</span><b x-text="rs(sel.exit_price)"></b></div>
+              <div><span>Exit Reason</span><b x-text="dash(sel.exit_reason)"></b></div>
+              <div><span>Closure Source</span><b x-text="dash(sel.closure_source)"></b></div>
+              <div><span>Exit Mechanism</span><b x-text="dash(sel.exit_mechanism)"></b></div>
+              <div><span>Net P&amp;L</span>
+                <b :class="pnlCls(sel.net_pnl)" x-text="sel.net_pnl == null ? '—' : money(sel.net_pnl)"></b></div>
+              <div><span>Charges</span><b x-text="rs(sel.charges)"></b></div>
+            </div>
+          </div>
+
+          <!-- ── SL / TGT ── -->
+          <div x-show="tab==='sltgt'" x-cloak>
+            <div class="od-sec">Stop Loss</div>
+            <div class="od-kv od-kv2">
+              <div><span>SL (System)</span><b x-text="rs(sel.sl_initial)"></b></div>
+              <div><span>SL (Broker standing)</span><b x-text="rs(sel.sl_broker)"></b></div>
+              <div><span>SL leg status</span><b x-text="dash(sel.sl_broker_status)"></b></div>
+              <div><span>SL distance (from entry)</span><b x-text="pct(sel.sl_dist_pct)"></b></div>
+            </div>
+            <div class="od-sec">Target</div>
+            <div class="od-kv od-kv2">
+              <div><span>TGT (System)</span><b x-text="rs(sel.tgt_initial)"></b></div>
+              <div><span>TGT (Broker standing)</span><b x-text="rs(sel.tgt_broker)"></b></div>
+              <div><span>TGT leg status</span><b x-text="dash(sel.tgt_broker_status)"></b></div>
+              <div><span>TGT distance (from entry)</span><b x-text="pct(sel.tgt_dist_pct)"></b></div>
+            </div>
+            <div class="od-line pos-note" x-show="mismatch(sel)" x-cloak>
+              <b>System and broker values differ on this position.</b>
+              That is what these paired columns exist to surface; it is reported, not resolved here.
+            </div>
+            <div class="od-line pos-note">
+              <b>Broker</b> is the trigger/limit actually resting at the broker, from the SL and TGT
+              leg orders. There is no filled SL/TGT execution price anywhere in the schema
+              (<em>avg_fill_price</em> is null on every order ever placed), so none is shown. When a
+              position exits, the real executed price appears as <b>Exit Price</b> under Lifecycle.
+            </div>
+          </div>
+
+          <!-- ── RISK & REWARD ── -->
+          <div x-show="tab==='risk'" x-cloak>
+            <div class="od-sec">Risk / Reward</div>
+            <div class="od-kv od-kv2">
+              <div><span>Risk Amount</span><b x-text="rs(sel.risk_amount)"></b></div>
+              <div><span>Reward Amount</span><b x-text="rs(rewardAmt(sel))"></b></div>
+              <div><span>Expected RR</span>
+                <b x-text="sel.expected_rr == null ? '—' : sel.expected_rr + ' : 1'"></b></div>
+              <div><span>Current RR</span><b class="od-na">n/a — needs live price</b></div>
+            </div>
+            <div class="od-sec">Trade Story</div>
+            <div class="od-kv od-kv2">
+              <div><span>Highest Profit %</span>
+                <b class="v-pos" x-text="pct(sel.mfe_pct)"></b></div>
+              <div><span>Highest Drawdown %</span>
+                <b class="v-neg" x-text="pct(sel.mae_pct)"></b></div>
+            </div>
+            <div class="od-line pos-note" x-show="sel.mfe_pct == null && sel.mae_pct == null" x-cloak>
+              Excursions are reconstructed by a scheduled job; this trade has no row yet, so both
+              read as unavailable rather than zero.
+            </div>
+          </div>
+        </div>
+      </template>
+    </aside>
+  </div>
 </div>
+
 <script>
 function positionsPage() {
-  return Object.assign(pageBase("/api/positions"), {
-    side(d) { return (this.data.rows || []).filter(p => p.direction === d).length; },
-    capUsed() { return (this.data.rows || []).reduce((a, p) => a + (Number(p.margin_reserved) || 0), 0); },
-    dstr(ts) { return ts ? String(ts).slice(0, 10) : "—"; },
-    tstr(ts) { return ts ? String(ts).replace("T", " ").slice(11, 19) : "—"; },
-    age(ts) {
-      if (!ts) return "—";
-      const t = Date.parse(String(ts)); if (isNaN(t)) return "—";
-      const s = Math.max(0, (Date.now() - t) / 1000);
-      return s < 3600 ? Math.round(s / 60) + "m" : (s / 3600).toFixed(1) + "h";
-    },
-  });
+  return Object.assign(
+    pageBase("/api/positions/screen"),
+    tableMixin({ defaultSize: 100, pageSizes: [50, 100, 200], sortKey: "", sortDir: -1 }),
+    {
+      sel: null, tab: "overview", kpi: {}, sm: {},
+      STATUSES: ["Open", "Closed", "SL Hit", "TGT Hit", "Manual Exit", "Partial Exit", "Expired"],
+      f:  { from_date: "", to_date: "", strategy: "", symbol: "",
+            trade_type: "", direction: "", position_status: "" },
+      af: { strategy: "", symbol: "", trade_type: "", direction: "", position_status: "" },
+
+      /* APPROVED ORDER (section D): the common head is Trading Date, Time,
+         Strategy, Symbol, Trade Type, Direction, System Score, Signal Score —
+         with no attribution column (see the top-of-file note). Qty / Entry /
+         SL / TGT are GROUPED PAIRS, so System and Broker sit under one merged
+         heading and can still be dragged apart. */
+      DEFAULT_COLS: [
+        { key: "date",         label: "Trading Date", kind: "text" },
+        { key: "time",         label: "Time",         kind: "text" },
+        { key: "strategy",     label: "Strategy",     kind: "text" },
+        { key: "symbol",       label: "Symbol",       kind: "sym"  },
+        { key: "trade_type",   label: "Trade Type",   kind: "type" },
+        { key: "direction",    label: "Direction",    kind: "dir"  },
+        { key: "system_score", label: "System Score", kind: "num", num: true },
+        { key: "signal_score", label: "Signal Score", kind: "num", num: true },
+        { key: "position_status", label: "Status",    kind: "status" },
+        { key: "qty_system",   label: "System",   group: "Qty", kind: "num", num: true },
+        { key: "qty_position", label: "Position", group: "Qty", kind: "num", num: true },
+        { key: "entry_target_price", label: "System", group: "Entry ₹", kind: "rs", num: true },
+        { key: "entry_actual_price", label: "Filled", group: "Entry ₹", kind: "rs", num: true },
+        { key: "sl_initial",   label: "System", group: "SL ₹",  kind: "rs", num: true },
+        { key: "sl_broker",    label: "Broker", group: "SL ₹",  kind: "rs", num: true },
+        { key: "tgt_initial",  label: "System", group: "TGT ₹", kind: "rs", num: true },
+        { key: "tgt_broker",   label: "Broker", group: "TGT ₹", kind: "rs", num: true },
+        { key: "sl_dist_pct",  label: "SL Dist %",  kind: "pct", num: true },
+        { key: "tgt_dist_pct", label: "TGT Dist %", kind: "pct", num: true },
+        { key: "expected_rr",  label: "Exp RR",     kind: "rr",  num: true },
+        { key: "capital_used", label: "Capital Used", kind: "rs", num: true },
+        { key: "risk_amount",  label: "Risk ₹",     kind: "rs",  num: true },
+        { key: "mfe_pct",      label: "High Profit %",  kind: "pctpos", num: true },
+        { key: "mae_pct",      label: "High Drawdown %", kind: "pctneg", num: true },
+        { key: "pos_age",      label: "Pos Age",    kind: "age" },
+        { key: "actions",      label: "Actions",    kind: "act" },
+      ],
+      cols: [], dragKey: "", overKey: "", _dragEndAt: 0,
+      COLS_KEY: "screen06.positions.colOrder.v1",
+
+      qs() { return this.f.from_date ? "?date=" + this.f.from_date : ""; },
+
+      async boot() {
+        this.initCols();
+        await this.load();
+        this.kpi = (this.data && this.data.kpis) || {};
+        this.sm  = (this.data && this.data.summary) || {};
+        if ((this.data && this.data.statuses || []).length) this.STATUSES = this.data.statuses;
+        if (!this.f.from_date && this.data && this.data.date) {
+          this.f.from_date = this.data.date; this.f.to_date = this.data.date;
+        }
+        this.applyFilters();
+      },
+      async reloadDate() { await this.boot(); },
+
+      rows() { return (this.data && this.data.rows) || []; },
+      k(key) { const v = this.kpi[key]; return (v === null || v === undefined) ? "—" : v; },
+      rs(v) { return (v === null || v === undefined || v === "") ? "—" : this.money(v); },
+      pct(v) { return (v === null || v === undefined) ? "—" : Number(v).toFixed(2) + "%"; },
+      dirLabel(d) { const s = String(d || "").toUpperCase();
+        return s === "LONG" ? "Long" : s === "SHORT" ? "Short" : "—"; },
+      clock(ts) { return ts ? String(ts).slice(11, 19) : "—"; },
+      pnlCls(v) { return v == null ? "" : (Number(v) >= 0 ? "v-pos" : "v-neg"); },
+      pnlTone(v) { return v == null ? "kc-muted" : (Number(v) >= 0 ? "kc-green" : "kc-red"); },
+
+      sharePct(key) {
+        const n = this.kpi[key], t = this.kpi.open_positions;
+        if (n === null || n === undefined || !t) return "—";
+        return (n / t * 100).toFixed(2) + "%";
+      },
+      capUsedFoot() {
+        const p = this.sm && this.sm.capital ? this.sm.capital.used_pct : null;
+        return p == null ? "of opening capital" : p + "% of opening capital";
+      },
+      capUsedPct() { return (this.sm.capital && this.sm.capital.used_pct) || 0; },
+      longPct() {
+        const d = this.sm.distribution;
+        return (d && d.total) ? (d.long / d.total * 100) : 0;
+      },
+      dist(side) {
+        const d = this.sm.distribution;
+        if (!d) return "—";
+        const n = d[side], t = d.total;
+        return t ? n + " (" + (n / t * 100).toFixed(2) + "%)" : String(n);
+      },
+      donut(pct) { const p = Math.max(0, Math.min(100, Number(pct) || 0));
+        return p.toFixed(2) + " " + (100 - p).toFixed(2); },
+
+      /* Capital % = this position against OPENING capital; Position Weight % =
+         against the CURRENTLY DEPLOYED capital. ⛔ Two different bases, and each
+         label says which — they are never the same number by accident. */
+      capPct(r) {
+        const tot = this.sm.capital && this.sm.capital.total;
+        if (!tot || r.capital_used == null) return "—";
+        return (r.capital_used / tot * 100).toFixed(2) + "%";
+      },
+      weightPct(r) {
+        const used = this.sm.capital && this.sm.capital.used;
+        if (!used || r.capital_used == null) return "—";
+        return (r.capital_used / used * 100).toFixed(2) + "%";
+      },
+      /* Reward = (TGT - entry) x filled qty, from SYSTEM prices. ⛔ null unless
+         every operand exists — never a zero standing in for "unknown". */
+      rewardAmt(r) {
+        const e = r.entry_target_price, t = r.tgt_initial, q = r.qty_position;
+        if (e == null || t == null || !q) return null;
+        const per = String(r.direction || "").toUpperCase() === "LONG" ? (t - e) : (e - t);
+        return per * q;
+      },
+      mismatch(r) {
+        const a = (x, y) => x != null && y != null && Math.abs(Number(x) - Number(y)) > 0.005;
+        return a(r.sl_initial, r.sl_broker) || a(r.tgt_initial, r.tgt_broker);
+      },
+
+      age(r) {
+        const t0 = Date.parse(r.entry_time || r.created_at || "");
+        if (Number.isNaN(t0)) return "—";
+        const end = r.exit_time ? Date.parse(r.exit_time) : Date.now();
+        let s = Math.max(0, (end - t0) / 1000);
+        if (s < 60) return Math.round(s) + " sec";
+        if (s < 3600) return Math.round(s / 60) + " min";
+        if (s < 86400) { const h = Math.floor(s / 3600); return h + "h " + Math.round((s - h * 3600) / 60) + "m"; }
+        const d = Math.floor(s / 86400);
+        return d + (d === 1 ? " day" : " days");
+      },
+
+      strategyOptions() { return [...new Set(this.rows().map(r => r.strategy).filter(Boolean))].sort(); },
+      symbolOptions()   { return [...new Set(this.rows().map(r => r.symbol).filter(Boolean))].sort(); },
+
+      applyFilters() { Object.keys(this.af).forEach(k => this.af[k] = this.f[k]); this.tPage = 1; },
+      resetFilters() {
+        const d = (this.data && this.data.date) || "";
+        this.f = { from_date: d, to_date: d, strategy: "", symbol: "",
+                   trade_type: "", direction: "", position_status: "" };
+        this.applyFilters();
+      },
+      toggleStatus(s) {
+        this.f.position_status = (this.f.position_status === s) ? "" : s;
+        this.applyFilters();
+      },
+
+      view() {
+        const a = this.af;
+        return this.rows().filter(r =>
+          (!a.strategy   || r.strategy === a.strategy) &&
+          (!a.symbol     || r.symbol === a.symbol) &&
+          (!a.trade_type || r.trade_type === a.trade_type) &&
+          (!a.direction  || String(r.direction || "").toUpperCase() === a.direction) &&
+          (!a.position_status || r.position_status === a.position_status));
+      },
+      statusCount(s) { return this.rows().filter(r => r.position_status === s).length; },
+      barPct(s) {
+        const t = this.rows().length;
+        return t ? (this.statusCount(s) / t * 100).toFixed(2) : "0.00";
+      },
+      rangeLabel() {
+        const n = this.view().length;
+        if (!n) return "No entries";
+        const s = (this.tPage - 1) * this.tPageSize + 1;
+        return "Showing " + s + " to " + Math.min(s + this.tPageSize - 1, n) + " of " + n + " entries";
+      },
+
+      /* group header row: merge CONSECUTIVE columns sharing `group`. A drag that
+         separates a pair simply un-merges it — the group never traps a column. */
+      groups() {
+        const out = []; let i = 0, id = 0;
+        while (i < this.cols.length) {
+          const g = this.cols[i].group || "";
+          let n = 1;
+          while (g && i + n < this.cols.length && this.cols[i + n].group === g) n++;
+          out.push({ id: id++, label: g && n > 1 ? g : "", span: g && n > 1 ? n : 1 });
+          i += (g && n > 1) ? n : 1;
+        }
+        return out;
+      },
+
+      cell(r, c) {
+        const v = r[c.key];
+        if (c.kind === "act") return '<span class="ord-eye" title="Open details">◉</span>';
+        if (c.kind === "age") return this.age(r);
+        if (c.kind === "rs")  return this.rs(v);
+        if (c.kind === "rr")  return (v === null || v === undefined) ? "—" : v + " : 1";
+        if (c.kind === "pct") return (v === null || v === undefined) ? "—" : Number(v).toFixed(2) + "%";
+        if (c.kind === "pctpos")
+          return (v === null || v === undefined) ? "—"
+               : '<span class="v-pos">' + Number(v).toFixed(2) + "%</span>";
+        if (c.kind === "pctneg")
+          return (v === null || v === undefined) ? "—"
+               : '<span class="v-neg">' + Number(v).toFixed(2) + "%</span>";
+        if (c.kind === "dir") {
+          const s = String(v || "").toUpperCase();
+          if (s !== "LONG" && s !== "SHORT") return "—";
+          return '<span class="' + (s === "LONG" ? "d-long" : "d-short") + '">' +
+                 (s === "LONG" ? "Long" : "Short") + "</span>";
+        }
+        if (c.kind === "type") return v ? '<span class="t-' + String(v).toLowerCase() + '">' + v + "</span>" : "—";
+        if (c.kind === "status")
+          return '<span class="pill ' + this.statusPill(v) + '">' + (v || "—") + "</span>";
+        return (v === null || v === undefined || v === "") ? "—" : v;
+      },
+      statusPill(s) {
+        return s === "Open" ? "p-green" : s === "TGT Hit" ? "p-green"
+             : s === "SL Hit" ? "p-red" : s === "Manual Exit" ? "p-orange"
+             : s === "Partial Exit" ? "p-purple" : "p-gray";
+      },
+      chipTone(s) {
+        return s === "Open" ? "dot-green" : s === "TGT Hit" ? "dot-green"
+             : s === "SL Hit" ? "dot-red" : s === "Manual Exit" ? "dot-orange"
+             : s === "Partial Exit" ? "dot-purple" : "dot-gray";
+      },
+      dirPill(d) { return String(d || "").toUpperCase() === "LONG" ? "p-green" : "p-red"; },
+
+      /* Export carries the APPLIED filters, so the sheet is the filtered set —
+         the server re-applies the same predicates (see _apply_position_filters). */
+      exportXlsx() {
+        const a = this.af;
+        const p = new URLSearchParams();
+        p.set("date", this.f.from_date || (this.data && this.data.date) || "");
+        ["strategy", "symbol", "trade_type", "direction", "position_status"]
+          .forEach(k => { if (a[k]) p.set(k, a[k]); });
+        window.location = "/api/export/positions?" + p.toString();
+      },
+
+      /* ── column order: Screen-04/05's mechanism, verbatim ─────────────────── */
+      initCols() {
+        this.cols = this.DEFAULT_COLS.slice();
+        let saved = null;
+        try { saved = JSON.parse(window.localStorage.getItem(this.COLS_KEY) || "null"); }
+        catch (e) { saved = null; }
+        if (!Array.isArray(saved) || !saved.length) return;
+        const byKey = {};
+        this.DEFAULT_COLS.forEach(c => { byKey[c.key] = c; });
+        const next = [];
+        saved.forEach(k => { if (byKey[k] && next.indexOf(byKey[k]) === -1) next.push(byKey[k]); });
+        this.DEFAULT_COLS.forEach(c => { if (next.indexOf(c) === -1) next.push(c); });
+        if (next.length === this.DEFAULT_COLS.length) this.cols = next;
+      },
+      saveCols() {
+        try { window.localStorage.setItem(this.COLS_KEY, JSON.stringify(this.cols.map(c => c.key))); }
+        catch (e) {}
+      },
+      isDefaultOrder() { return this.cols.every((c, i) => c.key === this.DEFAULT_COLS[i].key); },
+      resetCols() {
+        this.cols = this.DEFAULT_COLS.slice();
+        try { window.localStorage.removeItem(this.COLS_KEY); } catch (e) {}
+      },
+      onDragStart(key, ev) {
+        this.dragKey = key;
+        if (ev && ev.dataTransfer) {
+          ev.dataTransfer.effectAllowed = "move";
+          try { ev.dataTransfer.setData("text/plain", key); } catch (e) {}
+        }
+      },
+      onDrop(targetKey) {
+        const from = this.cols.findIndex(c => c.key === this.dragKey);
+        const to = this.cols.findIndex(c => c.key === targetKey);
+        this.overKey = "";
+        if (from < 0 || to < 0 || from === to) return;
+        const next = this.cols.slice();
+        next.splice(to, 0, next.splice(from, 1)[0]);
+        this.cols = next;
+        this.saveCols();
+        this._dragEndAt = Date.now();
+      },
+      onDragEnd() { this.dragKey = ""; this.overKey = ""; this._dragEndAt = Date.now(); },
+      headClick(key) {
+        if (Date.now() - this._dragEndAt < 250) return;   /* drag, not a sort click */
+        this.tSort(key);
+      },
+    }
+  );
 }
 </script>
 {% endblock %}

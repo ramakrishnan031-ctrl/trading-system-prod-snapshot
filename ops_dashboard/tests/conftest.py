@@ -54,8 +54,13 @@ DDL = [
         triggered_at TEXT, received_at TEXT, expires_at TEXT, status TEXT NOT NULL,
         rejection_reason TEXT, trade_id TEXT, trigger_price REAL, fingerprint TEXT,
         webhook_payload TEXT)""",
+    # Screen-06: `price` and `trigger_price` are what the SL/TGT legs carry at the
+    # BROKER (SL uses trigger_price, TGT uses price). They exist in
+    # core/schema.sql and were simply absent here — the fixture's own contract is
+    # to match schema.sql for every column a reader touches.
     """CREATE TABLE orders (order_id TEXT PRIMARY KEY, trade_id TEXT, leg TEXT, transaction_type TEXT,
-        order_type TEXT, product TEXT, variety TEXT, qty_requested INTEGER, status TEXT,
+        order_type TEXT, product TEXT, variety TEXT, qty_requested INTEGER, price REAL,
+        trigger_price REAL, status TEXT,
         qty_filled INTEGER DEFAULT 0, avg_fill_price REAL, placed_at TEXT, filled_at TEXT,
         updated_at TEXT, rejection_reason TEXT, superseded_by TEXT)""",
     """CREATE TABLE trades (trade_id TEXT PRIMARY KEY, signal_id TEXT, symbol TEXT, direction TEXT,
@@ -64,7 +69,10 @@ DDL = [
         margin_reserved REAL, risk_amount REAL, created_at TEXT, entry_time TEXT, exit_time TEXT,
         exit_reason TEXT, exit_price REAL, charges REAL, gross_pnl REAL, net_pnl REAL, status TEXT,
         actual_position_value_rs REAL, signal_to_order_ms INTEGER, order_to_fill_ms INTEGER,
-        total_latency_ms INTEGER)""",
+        total_latency_ms INTEGER,
+        -- W8 closure axes (v45). Screen-06 surfaces them verbatim in the detail
+        -- card and NEVER infers one from the other.
+        closure_source TEXT, exit_mechanism TEXT)""",
     """CREATE TABLE fm_ledger (ledger_id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL,
         entry_type TEXT NOT NULL, amount REAL, bucket TEXT, balance_before REAL, balance_after REAL,
         signal_id TEXT, reservation_id TEXT, reason TEXT, session_id TEXT, direction TEXT,
@@ -247,21 +255,28 @@ def _seed(conn: sqlite3.Connection, schema_version: int) -> None:
         )
     # Exit fills: 8 SL + 12 TGT COMPLETE. ord_sl_0 → trd_c1 (gap SL_HIT close);
     # ord_tgt_0 → trd_c4 (gap TGT_HIT close). Others on synthetic trades.
+    # Screen-06 broker-standing values. ⭐ DELIBERATELY NON-VACUOUS IN BOTH
+    # DIRECTIONS: ord_sl_0's trigger (989.5) DIFFERS from trd_c1's sl_initial
+    # (990.0) so a system-vs-broker mismatch is detectable, while ord_tgt_0's
+    # limit (1015.0) MATCHES trd_c4's tgt_initial so the equal case is covered
+    # too. A fixture where they always agree could not fail.
     for i in range(8):
         tid = "trd_c1" if i == 0 else f"trd_e_{i+10}"
         c.execute(
             "INSERT INTO orders(order_id,trade_id,leg,transaction_type,order_type,product,variety,"
-            "qty_requested,status,placed_at,filled_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-            (f"ord_sl_{i}", tid, "SL", "SELL", "SL", "MIS", "regular", 10, "COMPLETE",
-             _ts("11:00:00"), _ts("13:00:00"), _ts("13:00:00")),
+            "qty_requested,price,trigger_price,status,placed_at,filled_at,updated_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (f"ord_sl_{i}", tid, "SL", "SELL", "SL", "MIS", "regular", 10, 989.0, 989.5,
+             "COMPLETE", _ts("11:00:00"), _ts("13:00:00"), _ts("13:00:00")),
         )
     for i in range(12):
         tid = "trd_c4" if i == 0 else f"trd_e_{i+30}"
         c.execute(
             "INSERT INTO orders(order_id,trade_id,leg,transaction_type,order_type,product,variety,"
-            "qty_requested,status,placed_at,filled_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-            (f"ord_tgt_{i}", tid, "TGT", "SELL", "LIMIT", "MIS", "regular", 10, "COMPLETE",
-             _ts("11:00:00"), _ts("13:30:00"), _ts("13:30:00")),
+            "qty_requested,price,trigger_price,status,placed_at,filled_at,updated_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (f"ord_tgt_{i}", tid, "TGT", "SELL", "LIMIT", "MIS", "regular", 10, 1015.0, None,
+             "COMPLETE", _ts("11:00:00"), _ts("13:30:00"), _ts("13:30:00")),
         )
     # Superseded chain: an old CANCELLED SL on trd_c1, replaced by ord_sl_0.
     c.execute(
@@ -651,7 +666,14 @@ def client(app):
 # reusing Screen-04's reader and terminology. The guard is NARROWED, ⛔ not
 # deleted — it still fails on every other screen, so the drop cannot be
 # undone by accident where it was deliberate.
-SIGNAL_SCORE_ALLOWED_FILES = {"signals.html", "orders.html"}
+# WIDENED A SECOND TIME, 12-Aug-2026, by explicit instruction: Screen-06
+# Positions carries the SAME common column head as Screens 04/05 — System Score
+# and Signal Score sit between Direction and the position data, read from the
+# SAME db_reader.signal_scores reader, and both must participate in the movable
+# heading mechanism. ⛔ The guard is NARROWED again, ⛔ never deleted: it still
+# fails on every OTHER screen, so L8's drop cannot be undone by accident where
+# it was deliberate. A third widening needs the same kind of explicit decision.
+SIGNAL_SCORE_ALLOWED_FILES = {"signals.html", "orders.html", "positions.html"}
 
 
 def assert_signal_score_confined_to_screen04(frontend_root):

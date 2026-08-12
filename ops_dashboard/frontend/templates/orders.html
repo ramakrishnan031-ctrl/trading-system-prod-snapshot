@@ -280,7 +280,11 @@
             </template>
 
             <div class="od-kv od-kv2">
-              <div><span>Quantity (Req / Filled)</span>
+              <!-- System = the quantity the SYSTEM ordered; Filled = what the
+                   BROKER actually filled. ⛔ The second is never presented as
+                   another system quantity. Table headings already read
+                   System / Filled; this aligns the detail card's wording. -->
+              <div><span>Quantity (System / Filled)</span>
                 <b><span x-text="dash(sel.qty_requested)"></span> / <span x-text="dash(sel.qty_filled)"></span></b></div>
               <div><span>Fill %</span><b x-text="sel.fill_pct === null ? '—' : sel.fill_pct + '%'"></b></div>
               <div><span>Order Type</span><b x-text="dash(sel.order_type)"></b></div>
