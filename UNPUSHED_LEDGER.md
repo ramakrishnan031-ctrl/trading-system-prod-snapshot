@@ -247,6 +247,69 @@ collapsed.
 
 ---
 
+### Entry 6
+
+| Field | Value |
+|---|---|
+| **Date/time** | 2026-08-12 22:41 IST |
+| **Commit** | `923a43a0876a066348ffe251abd6b8d5ceecc936` |
+| **Short** | `923a43a` |
+| **Branch** | `feat/screen06-positions` |
+| **Screen** | Screen-06 Positions — revision 2 (user corrections) |
+| **Pushed** | **NO** |
+| **Deployed** | **NO** |
+| **Reason** | Special no-deployment window |
+
+**Change summary**
+
+- 🔑 **TOTAL CAPITAL USED corrected.** Now strictly
+  **`broker-filled qty × FILLED entry price`** over open positions. It previously
+  preferred the sizer's `actual_position_value_rs` and fell back to the **system**
+  entry price; both are gone. **SL and TGT contribute nothing** — pinned by a test
+  that moves them wildly and asserts the total is unchanged.
+- **Column order** to the requested one: `… SL POINTS · TGT POINTS · LTP ·
+  UNREALISED · ACTION`, with **Action unconditionally last**.
+- **R:R left the table** (it is wide enough) but **stays in the detail rail**
+  beside the ratio implied by the levels — moved, ⛔ not dropped; a test asserts it.
+- **`colOrder` key bumped v1 → v2.** ⚠️ Without this an operator with a saved v1
+  order would keep the OLD default — Action in its old slot and the removed R:R
+  column — and would **never see this change**.
+- **Action gated**: Open / Partial Exit get `Close`; every other row gets a neutral
+  dash, and `openAction()` refuses to open on a non-open row.
+- **Added View Full Details** — the established popup showing Position, SL/TGT,
+  Risk/Reward and Lifecycle at once. Strictly a **read** view (a test asserts no
+  action wiring inside it), and it keeps the **executed Exit Price separate** from
+  the broker-standing SL/TGT.
+
+**⭐ The correction is not cosmetic — it moved the number**
+
+Preview total went **₹514,409.50 → ₹514,449.50**, because four rows carried a
+recorded value based on the **system** entry (₹1,000.00) while the actual **fill**
+was ₹1,001.00. ⭐ A formula change that leaves every number identical has not been
+exercised; this one was.
+
+**⛔ Honest-absence handling, deliberately chosen**
+
+A row whose fill price is missing now yields **None, ⛔ not 0.0** — a zero reads as
+*"this position ties up nothing"* and would silently shrink the KPI. The count of
+such rows is **surfaced in the card footer** (`· N unpriced`) instead of swallowed.
+⭐ The KPI, the row and the Capital Utilization donut now call **one** function, so
+they cannot drift; a test pins that they agree.
+
+**Verification** — suite **474 passed / 1 failed** (known environmental
+`kiteconnect` check). Rendered and read from the DOM: **22 columns in exactly the
+requested order**, Action last, all four groups merged. Capital on the two
+partial-fill rows uses the **POSITION** quantity — INFY `20 × 1490.50 = 29,810`,
+SBIN `55 × 812 = 44,660`. Closed rows show the neutral state. The full-details
+popup shows AXISBANK capital `25 × 1020 = 25,500`, SL broker `969.40` against
+system `970.00`, and exit price `1008.90` kept apart.
+
+📌 **Not done, and why:** a production-data preview was started and **stopped at
+Rama's instruction** — no copy of the live database was made to the PC. The
+preview therefore runs on fixture data.
+
+---
+
 ## ⚠️ Carried forward for tomorrow's deployment review
 
 1. **`/api/export/orders` does not exist.** Screen-05's *Export XLSX* button navigates
