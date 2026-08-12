@@ -1657,3 +1657,134 @@ def recon_actions_for_trades(cfg: dict, trade_ids) -> dict:
             {"ts": r["ts"], "check": r["check_name"], "action": r["action_taken"],
              "success": bool(r["success"])})
     return out
+
+
+# ── Screen-05 Orders (12-Aug-2026) ──────────────────────────────────────────
+# ADDITIVE and READ-ONLY. Nothing above is modified; `list_orders` keeps its
+# existing shape for its existing callers.
+#
+# ROW GRAIN = the ENTRY order. The approved mockup has no Leg column, shows one
+# broker order id per row, and puts Entry/SL/TGT system prices side by side —
+# that is only coherent at entry grain, and it is also the only grain at which
+# "Order Value = entry only" sums without double-counting a trade's SL and TGT
+# legs into the same total.
+#
+# PRICES ARE SYSTEM PRICES ONLY (approved revision, 12-Aug): entry_target_price,
+# sl_initial, tgt_initial. Broker fill prices belong to the Positions screen.
+# ⛔ orders.price is NULL on every ENTRY row in production (456/456 measured
+# 12-Aug), so it is deliberately NOT the entry-price source.
+
+_ORD_INTRADAY = ("MIS", "CO", "BO")
+
+
+def _trade_type_of_product(product) -> str:
+    p = (product or "").upper()
+    if not p:
+        return ""
+    return "Intraday" if p in _ORD_INTRADAY else "Delivery"
+
+
+def order_screen_rows(cfg: dict, today: str, limit: int = _LIST_CAP) -> list:
+    """ENTRY orders for a date, shaped for Screen-05. Read-only."""
+    sql = (
+        "SELECT o.order_id, o.trade_id, o.status, o.order_type, o.product, "
+        "o.qty_requested, o.qty_filled, o.placed_at, o.filled_at, "
+        "o.rejection_reason, "
+        "t.symbol AS symbol, t.strategy AS strategy, t.direction AS direction, "
+        "t.entry_target_price, t.sl_initial, t.tgt_initial, t.charges, "
+        "t.signal_id AS signal_id "
+        "FROM orders o LEFT JOIN trades t ON t.trade_id = o.trade_id "
+        "WHERE o.placed_at LIKE ? AND o.leg = 'ENTRY' "
+        "ORDER BY o.placed_at DESC LIMIT ?"
+    )
+    with _ro(cfg) as conn:
+        rows = [dict(r) for r in conn.execute(
+            sql, (today + "%", max(1, min(int(limit), _LIST_CAP)))).fetchall()]
+
+    for r in rows:
+        placed = r.get("placed_at") or ""
+        r["date"] = placed[:10]
+        r["time"] = placed[11:19]
+        r["trade_type"] = _trade_type_of_product(r.get("product"))
+        req = r.get("qty_requested") or 0
+        fld = r.get("qty_filled") or 0
+        r["fill_pct"] = round(fld / req * 100.0, 2) if req else None
+        # Order Value = ENTRY ORDER VALUE ONLY: system entry price x ordered qty.
+        # ⛔ never entry+SL+TGT, never position value, never a fill-based notional.
+        px = r.get("entry_target_price")
+        r["order_value"] = round(float(px) * int(req), 2) if (px is not None and req) else None
+        r["order_result"] = _order_result_of(r)
+    return rows
+
+
+_ORD_RESULT_FILLED = ("COMPLETE", "FILLED")
+_ORD_RESULT_REJECT = ("REJECTED", "FAILED")
+_ORD_RESULT_CANCEL = ("CANCELLED", "CANCELED")
+
+
+def _order_result_of(r: dict) -> str:
+    """Filled / Partial Fill / Rejected / Cancelled / Expired — from status+qty."""
+    st = (r.get("status") or "").upper()
+    req = r.get("qty_requested") or 0
+    fld = r.get("qty_filled") or 0
+    if st in _ORD_RESULT_REJECT:
+        return "Rejected"
+    if st in _ORD_RESULT_CANCEL:
+        return "Cancelled"
+    if st == "EXPIRED":
+        return "Expired"
+    if req and 0 < fld < req:
+        return "Partial Fill"
+    if st in _ORD_RESULT_FILLED or (req and fld >= req):
+        return "Filled"
+    return st.title() if st else "—"
+
+
+def order_kpis(cfg: dict, today: str) -> dict:
+    """The eight KPI cards. Order-value totals are ENTRY ONLY, by construction."""
+    rows = order_screen_rows(cfg, today)
+    total = len(rows)
+
+    def _n(res):
+        return sum(1 for r in rows if r.get("order_result") == res)
+
+    filled, partial = _n("Filled"), _n("Partial Fill")
+    rejected, cancelled = _n("Rejected"), _n("Cancelled")
+    values = [r["order_value"] for r in rows if r.get("order_value") is not None]
+    charges = [r["charges"] for r in rows if r.get("charges") is not None]
+
+    def _pct(n):
+        return round(n / total * 100.0, 2) if total else None
+
+    return {
+        "total_orders": total,
+        "filled": filled, "filled_pct": _pct(filled),
+        "partial": partial, "partial_pct": _pct(partial),
+        "rejected": rejected, "rejected_pct": _pct(rejected),
+        "cancelled": cancelled, "cancelled_pct": _pct(cancelled),
+        "total_order_value": round(sum(values), 2) if values else None,
+        "avg_order_value": round(sum(values) / len(values), 2) if values else None,
+        "total_charges": round(sum(charges), 2) if charges else None,
+    }
+
+
+def order_exec_context(cfg: dict, order_ids) -> dict:
+    """Lifecycle timestamps + slippage per order, from order_execution_log.
+
+    ⚠️ Two-state by design: an order with no execution-log row returns nothing
+    and the UI renders 'not captured'. ⛔ Nothing is inferred or back-filled.
+    """
+    ids = [str(o) for o in (order_ids or []) if o]
+    if not ids:
+        return {}
+    out = {}
+    with _ro(cfg) as conn:
+        for chunk in (ids[i:i + 400] for i in range(0, len(ids), 400)):
+            q = ("SELECT order_id, intended_price, actual_price, slippage_rs, "
+                 "slippage_pct, tolerance_fraction_used, order_timestamp, "
+                 "fill_timestamp, exchange_timestamp, retry_count, status "
+                 "FROM order_execution_log WHERE order_id IN (" +
+                 ",".join("?" * len(chunk)) + ")")
+            for r in conn.execute(q, tuple(chunk)).fetchall():
+                out[str(r["order_id"])] = dict(r)
+    return out

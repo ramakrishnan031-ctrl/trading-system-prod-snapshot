@@ -2,81 +2,580 @@
 {% block title %}Orders{% endblock %}
 {% block nav_orders %}active{% endblock %}
 {% block content %}
-<div x-data="ordersPage()" x-init="load()" @ops-refresh.window="load()">
-  <section class="panel">
-    <h2 class="panel-title">Orders <span class="panel-sub" x-text="data.date || ''"></span></h2>
+{#
+  SCREEN-05 ORDERS — approved revision, 12-Aug-2026.
+  ⛔ SCANNER IS ABSENT BY DECISION (Strategy carries the same data). It is not
+     hidden, not a placeholder: no column, no filter, no detail row.
+  ⛔ PRICES ARE SYSTEM PRICES ONLY. There are no broker-price subcolumns for
+     Entry/SL/TGT — broker actuals belong to Screen-06 Positions.
+  ⛔ ORDER VALUE = ENTRY ORDER VALUE ONLY (system entry price x ordered qty).
+  ⭐ Reuses Screen-03/04: pageBase, tableMixin, .dash-page tokens, .flt-* filters,
+     and Screen-04's drag-to-reorder verbatim (incl. its stale-key drop, which is
+     what stops a saved order ever resurrecting a removed column).
+#}
+<div x-data="ordersPage()" x-init="boot()" @ops-refresh.window="boot()"
+     class="dash-page ord-page">
 
-    <div class="filters">
-      <input class="flt" type="date" x-model="fDate" @change="load()">
-      <select class="flt" x-model="fLeg" @change="load()">
-        <option value="">all legs</option>
-        <option>ENTRY</option><option>SL</option><option>TGT</option>
-        <option>EOD</option><option>CO</option><option>CANCEL</option>
-      </select>
-      <input class="flt" placeholder="status (e.g. COMPLETE)" x-model.debounce.400ms="fStatus" @change="load()">
-      <input class="flt" placeholder="strategy" x-model.debounce.400ms="fStrategy" @change="load()">
-      <input class="flt" placeholder="symbol" x-model.debounce.400ms="fSymbol" @change="load()">
-      <span class="panel-sub" x-text="(data.count != null ? data.count : 0) + ' rows'"></span>
+  <div class="pg-title">
+    <h1>Orders</h1>
+    <span class="pg-sub">Complete visibility into order lifecycle, execution and slippage</span>
+  </div>
+
+  <!-- ═══ KPI DECK (8) ═══ -->
+  <div class="ok-deck">
+    <div class="kc"><div class="kc-ic">▤</div><div class="kc-label">Total Orders</div>
+      <div class="kc-val" x-text="k('total_orders')"></div><div class="kc-foot">Today</div></div>
+    <div class="kc kc-green"><div class="kc-ic">✓</div><div class="kc-label">Filled Orders</div>
+      <div class="kc-val" x-text="k('filled')"></div><div class="kc-foot" x-text="pc('filled_pct')"></div></div>
+    <div class="kc kc-orange"><div class="kc-ic">◑</div><div class="kc-label">Partial Fills</div>
+      <div class="kc-val" x-text="k('partial')"></div><div class="kc-foot" x-text="pc('partial_pct')"></div></div>
+    <div class="kc kc-red"><div class="kc-ic">✕</div><div class="kc-label">Rejected Orders</div>
+      <div class="kc-val" x-text="k('rejected')"></div><div class="kc-foot" x-text="pc('rejected_pct')"></div></div>
+    <div class="kc kc-purple"><div class="kc-ic">⊘</div><div class="kc-label">Cancelled Orders</div>
+      <div class="kc-val" x-text="k('cancelled')"></div><div class="kc-foot" x-text="pc('cancelled_pct')"></div></div>
+    <div class="kc kc-muted"><div class="kc-ic">≈</div><div class="kc-label">Avg Slippage</div>
+      <div class="kc-val" x-text="avgSlipRs()"></div><div class="kc-foot" x-text="avgSlipPct()"></div></div>
+    <div class="kc kc-yellow"><div class="kc-ic">₹</div><div class="kc-label">Total Order Value</div>
+      <div class="kc-val" x-text="crore(kpi.total_order_value)"></div><div class="kc-foot">Entry only</div></div>
+    <div class="kc"><div class="kc-ic">◆</div><div class="kc-label">Total Charges</div>
+      <div class="kc-val" x-text="kpi.total_charges === null ? '—' : money(kpi.total_charges)"></div>
+      <div class="kc-foot">Today</div></div>
+  </div>
+
+  <div class="ord-work">
+    <div class="ord-left">
+
+      <!-- ═══ FILTERS ═══ -->
+      <section class="panel mc-panel">
+        <div class="mc-head"><h2 class="mc-title">Filters</h2></div>
+        <div class="flt-row ord-flt">
+          <label class="flt-field flt-daterange">
+            <span class="flt-k">Date Range</span>
+            <span class="flt-dr">
+              <input class="flt-c" type="date" x-model="f.from_date">
+              <span class="flt-to">to</span>
+              <input class="flt-c" type="date" x-model="f.to_date">
+              <button class="flt-reload" type="button" title="Reload for this date"
+                      @click="applyFilters()" aria-label="Reload">⟳</button>
+            </span>
+          </label>
+          <label class="flt-field">
+            <span class="flt-k">Order ID</span>
+            <input class="flt-c" type="text" placeholder="Enter Order ID" x-model="f.order_id">
+          </label>
+          <label class="flt-field">
+            <span class="flt-k">Strategy</span>
+            <select class="flt-c" x-model="f.strategy">
+              <option value="">All Strategies</option>
+              <template x-for="s in strategyOptions()" :key="s"><option :value="s" x-text="s"></option></template>
+            </select>
+          </label>
+          <label class="flt-field">
+            <span class="flt-k">Symbol</span>
+            <select class="flt-c" x-model="f.symbol">
+              <option value="">All Symbols</option>
+              <template x-for="s in symbolOptions()" :key="s"><option :value="s" x-text="s"></option></template>
+            </select>
+          </label>
+          <label class="flt-field">
+            <span class="flt-k">Trade Type</span>
+            <select class="flt-c" x-model="f.trade_type">
+              <option value="">All Types</option>
+              <option value="Intraday">Intraday</option>
+              <option value="Delivery">Delivery</option>
+            </select>
+          </label>
+          <label class="flt-field">
+            <span class="flt-k">Direction</span>
+            <select class="flt-c" x-model="f.direction">
+              <option value="">All Directions</option>
+              <option value="LONG">Long</option>
+              <option value="SHORT">Short</option>
+            </select>
+          </label>
+          <label class="flt-field">
+            <span class="flt-k">Order Status</span>
+            <select class="flt-c" x-model="f.status">
+              <option value="">All Statuses</option>
+              <template x-for="s in statusOptions()" :key="s"><option :value="s" x-text="s"></option></template>
+            </select>
+          </label>
+          <label class="flt-field">
+            <span class="flt-k">Order Result</span>
+            <select class="flt-c" x-model="f.result">
+              <option value="">All Results</option>
+              <template x-for="r in RESULTS" :key="r"><option :value="r" x-text="r"></option></template>
+            </select>
+          </label>
+          <div class="flt-actions">
+            <button class="btn-ghost" type="button" @click="resetFilters()">Reset Filters</button>
+            <button class="btn-primary" type="button" @click="applyFilters()">Apply Filters</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══ TABLE ═══ -->
+      <section class="panel mc-panel">
+        <div class="ord-toolbar">
+          <span class="ord-rpp">
+            <span class="ord-rpp-k">Rows per page:</span>
+            <template x-for="n in tPageSizes" :key="n">
+              <button class="ord-rpp-b" type="button" :class="tPageSize === n ? 'is-on' : ''"
+                      @click="tPageSize = n; tPage = 1" x-text="n"></button>
+            </template>
+            <button class="ord-colreset" type="button" x-show="!isDefaultOrder()" x-cloak
+                    @click="resetCols()" title="Restore the approved column order">↺ Reset column order</button>
+          </span>
+          <button class="btn-export" type="button" @click="exportXlsx()">⭳ Export XLSX</button>
+        </div>
+
+        <div class="ord-scroll">
+          <table class="st-tbl ord-tbl">
+            <thead>
+              <!-- group row: consecutive columns sharing `group` merge (Excel-style) -->
+              <tr class="ord-grp">
+                <template x-for="g in groups()" :key="g.id">
+                  <th :colspan="g.span" :class="g.label ? 'is-grp' : ''"><span x-text="g.label"></span></th>
+                </template>
+              </tr>
+              <tr>
+                <template x-for="c in cols" :key="c.key">
+                  <th :class="[c.num ? 'rt' : '', dragKey === c.key ? 'is-drag' : '',
+                               overKey === c.key ? 'is-over' : '']"
+                      draggable="true" role="button" tabindex="0"
+                      :title="c.label + ' — click to sort, drag to reorder'"
+                      @dragstart="onDragStart(c.key, $event)"
+                      @dragover.prevent="overKey = c.key"
+                      @dragleave="overKey === c.key && (overKey = '')"
+                      @drop.prevent="onDrop(c.key)"
+                      @dragend="onDragEnd()"
+                      @click="headClick(c.key)" @keyup.enter="tSort(c.key)">
+                    <span class="st-grip" aria-hidden="true">⠿</span><span x-text="c.label"></span><span
+                          class="st-arw" x-text="tArrow(c.key)"></span>
+                  </th>
+                </template>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="r in tPaged(view())" :key="r.order_id">
+                <tr class="ord-row" :class="sel && sel.order_id === r.order_id ? 'is-sel' : ''"
+                    @click="sel = r">
+                  <template x-for="c in cols" :key="c.key">
+                    <td :class="c.num ? 'rt' : ''" x-html="cell(r, c)"></td>
+                  </template>
+                </tr>
+              </template>
+              <tr x-show="!view().length" x-cloak>
+                <td :colspan="cols.length" class="ord-empty">No orders match the current filters.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="ord-pager">
+          <span class="ord-count" x-text="rangeLabel()"></span>
+          <span class="ord-pages">
+            <button class="ord-pg" type="button" @click="tPage = Math.max(1, tPage - 1)">‹</button>
+            <button class="ord-pg is-on" type="button" x-text="tPage"></button>
+            <button class="ord-pg" type="button"
+                    @click="tPage = Math.min(tPageCount(view()), tPage + 1)">›</button>
+          </span>
+        </div>
+      </section>
+
+      <!-- ═══ BOTTOM ANALYTICS (4) ═══ -->
+      <div class="ord-cards">
+        <section class="panel mc-panel">
+          <div class="mc-head"><h2 class="mc-title">Slippage Summary</h2></div>
+          <div class="ord-legend">
+            <div><span class="dot dot-green"></span>Within Limit (≤ Allowed)<b x-text="slip('within')"></b></div>
+            <div><span class="dot dot-yellow"></span>Near Limit (80–100%)<b x-text="slip('near')"></b></div>
+            <div><span class="dot dot-red"></span>Exceeded (&gt; Allowed)<b x-text="slip('over')"></b></div>
+            <div class="ord-legend-note" x-show="slipUnknown()" x-cloak>
+              <span x-text="slip('unknown')"></span> not captured — no execution-log row.
+            </div>
+          </div>
+        </section>
+        <section class="panel mc-panel">
+          <div class="mc-head"><h2 class="mc-title">Order Result Distribution</h2></div>
+          <div class="ord-legend">
+            <template x-for="r in RESULTS" :key="r">
+              <div><span class="dot" :class="resultDot(r)"></span><span x-text="r"></span>
+                <b x-text="resultCount(r)"></b></div>
+            </template>
+          </div>
+        </section>
+        <section class="panel mc-panel">
+          <div class="mc-head"><h2 class="mc-title">Execution Delay <span class="mc-today">(Average)</span></h2></div>
+          <div class="ord-kv">
+            <div><span>Creation Delay</span><b x-text="delay('create')"></b></div>
+            <div><span>Submission Delay</span><b x-text="delay('submit')"></b></div>
+            <div><span>Exchange Accept Delay</span><b x-text="delay('accept')"></b></div>
+            <div><span>Total Delay</span><b x-text="delay('total')"></b></div>
+          </div>
+        </section>
+        <section class="panel mc-panel">
+          <div class="mc-head"><h2 class="mc-title">Order Value Summary</h2></div>
+          <div class="ord-kv">
+            <div><span>Total Order Value (Entry Only)</span>
+              <b x-text="kpi.total_order_value === null ? '—' : money(kpi.total_order_value)"></b></div>
+            <div><span>Total Charges</span>
+              <b x-text="kpi.total_charges === null ? '—' : money(kpi.total_charges)"></b></div>
+            <div><span>Average Order Value (Entry Only)</span>
+              <b x-text="kpi.avg_order_value === null ? '—' : money(kpi.avg_order_value)"></b></div>
+          </div>
+        </section>
+      </div>
     </div>
 
-    <div class="tbl-scroll">
-    <table class="cap-table">
-      <thead><tr>
-        <th>Order</th><th>Trade</th><th>Leg</th><th>Symbol</th><th>Strategy</th><th>Status</th>
-        <th>Qty</th><th>Avg fill</th><th>Placed</th><th>Filled</th>
-        <th>Fill ms</th><th>Reject reason</th><th>Superseded</th>
-      </tr></thead>
-      <tbody>
-        <template x-for="o in data.rows || []" :key="o.order_id">
-          <tr :class="'ost-' + o.status">
-            <td class="mono" x-text="short(o.order_id)"></td>
-            <td class="mono" x-text="short(o.trade_id)"></td>
-            <td x-text="o.leg"></td>
-            <td x-text="dash(o.symbol)"></td>
-            <td x-text="dash(o.strategy)"></td>
-            <td><span class="fam-pill" :class="stClass(o.status)" x-text="o.status"></span></td>
-            <td class="cap-num" x-text="o.qty_filled + '/' + o.qty_requested"></td>
-            <td class="cap-num" x-text="dash(o.avg_fill_price)"></td>
-            <td class="ev-ts" x-text="tstr(o.placed_at)"></td>
-            <td class="ev-ts" x-text="tstr(o.filled_at)"></td>
-            <td class="cap-num" x-text="dash(o.place_to_fill_ms)"></td>
-            <td class="wrapcell" x-text="dash(o.rejection_reason)"></td>
-            <td><span x-show="o.superseded_by" x-cloak class="cap-inert"
-                      :title="o.superseded_by" x-text="'→ ' + short(o.superseded_by)"></span></td>
-          </tr>
-        </template>
-        <tr x-show="!data.rows || data.rows.length === 0" x-cloak>
-          <td colspan="13" class="ev-empty">No orders for the selected filters.</td>
-        </tr>
-      </tbody>
-    </table>
-    </div>
-  </section>
+    <!-- ═══ ORDER DETAILS (right rail) ═══ -->
+    <aside class="panel mc-panel ord-detail">
+      <div class="od-head">
+        <h2 class="mc-title">Order Details</h2>
+        <button class="od-x" type="button" @click="sel = null" x-show="sel" x-cloak
+                aria-label="Close">✕</button>
+      </div>
+
+      <div class="od-empty" x-show="!sel" x-cloak>
+        <span class="od-empty-ic">◎</span>
+        <span>Select any order row to see its full lifecycle.</span>
+      </div>
+
+      <template x-if="sel">
+        <div>
+          <div class="od-id">
+            <span class="od-oid" x-text="sel.order_id"></span>
+            <span class="pill" :class="resultPill(sel.order_result)" x-text="sel.order_result"></span>
+          </div>
+
+          <div class="od-kv">
+            <div><span>Strategy</span><b x-text="dash(sel.strategy)"></b></div>
+            <div><span>Symbol</span><b x-text="dash(sel.symbol)"></b></div>
+            <div><span>Trade Type</span><b x-text="dash(sel.trade_type)"></b></div>
+            <div><span>Direction</span><b x-text="dirLabel(sel.direction)"></b></div>
+          </div>
+
+          <div class="od-tabs">
+            <button type="button" :class="tab==='overview' ? 'is-on':''" @click="tab='overview'">Overview</button>
+            <button type="button" :class="tab==='lifecycle'? 'is-on':''" @click="tab='lifecycle'">Lifecycle</button>
+            <button type="button" :class="tab==='broker'   ? 'is-on':''" @click="tab='broker'">Broker &amp; Exchange</button>
+          </div>
+
+          <div x-show="tab==='overview'">
+            <div class="od-sec">Order Lifecycle</div>
+            <div class="od-line" x-show="!sel.exec" x-cloak>
+              Execution timing not captured for this order.
+            </div>
+            <template x-if="sel.exec">
+              <ul class="od-time">
+                <li><i class="d-on"></i><span x-text="clock(sel.exec.order_timestamp)"></span><em>Order Created</em></li>
+                <li><i class="d-on"></i><span x-text="clock(sel.exec.order_timestamp)"></span><em>Order Submitted</em></li>
+                <li :class="sel.exec.exchange_timestamp ? '' : 'is-off'">
+                  <i :class="sel.exec.exchange_timestamp ? 'd-on':'d-off'"></i>
+                  <span x-text="clock(sel.exec.exchange_timestamp)"></span><em>Exchange Accepted</em></li>
+                <li :class="sel.exec.fill_timestamp ? '' : 'is-off'">
+                  <i :class="sel.exec.fill_timestamp ? 'd-on':'d-off'"></i>
+                  <span x-text="clock(sel.exec.fill_timestamp)"></span><em>Order Filled</em></li>
+              </ul>
+            </template>
+
+            <div class="od-kv od-kv2">
+              <div><span>Quantity (Req / Filled)</span>
+                <b><span x-text="dash(sel.qty_requested)"></span> / <span x-text="dash(sel.qty_filled)"></span></b></div>
+              <div><span>Fill %</span><b x-text="sel.fill_pct === null ? '—' : sel.fill_pct + '%'"></b></div>
+              <div><span>Order Type</span><b x-text="dash(sel.order_type)"></b></div>
+              <div><span>Product</span><b x-text="dash(sel.product)"></b></div>
+              <div><span>Order Value (Entry Only)</span>
+                <b x-text="sel.order_value === null ? '—' : money(sel.order_value)"></b></div>
+              <div><span>Charges</span><b x-text="sel.charges === null ? '—' : money(sel.charges)"></b></div>
+            </div>
+          </div>
+
+          <div x-show="tab==='lifecycle'" x-cloak>
+            <div class="od-sec">System Prices</div>
+            <div class="od-kv od-kv2">
+              <div><span>Entry (System)</span><b x-text="rs(sel.entry_target_price)"></b></div>
+              <div><span>SL (System)</span><b x-text="rs(sel.sl_initial)"></b></div>
+              <div><span>TGT (System)</span><b x-text="rs(sel.tgt_initial)"></b></div>
+            </div>
+            <div class="od-sec">Slippage</div>
+            <div class="od-line" x-show="!sel.exec" x-cloak>Slippage not captured for this order.</div>
+            <template x-if="sel.exec">
+              <div class="od-kv od-kv2">
+                <div><span>Intended Price</span><b x-text="rs(sel.exec.intended_price)"></b></div>
+                <div><span>Actual Price</span><b x-text="rs(sel.exec.actual_price)"></b></div>
+                <div><span>Slippage</span><b x-text="rs(sel.exec.slippage_rs)"></b></div>
+                <div><span>Slippage %</span>
+                  <b x-text="sel.exec.slippage_pct === null ? '—' : Number(sel.exec.slippage_pct).toFixed(2)+'%'"></b></div>
+                <div><span>Allowed (tolerance)</span>
+                  <b x-text="sel.exec.tolerance_fraction_used === null ? '— not captured'
+                             : (Number(sel.exec.tolerance_fraction_used)*100).toFixed(2)+'%'"></b></div>
+              </div>
+            </template>
+            <div class="od-sec">Rejection</div>
+            <div class="od-kv od-kv2">
+              <div><span>Reject Reason</span><b x-text="dash(sel.rejection_reason)"></b></div>
+              <div><span>Reject Category</span><b class="od-na">not captured</b></div>
+            </div>
+          </div>
+
+          <div x-show="tab==='broker'" x-cloak>
+            <div class="od-line od-na-block">
+              <b>Broker &amp; exchange payloads are not captured.</b>
+              The system does not persist broker response, exchange response, error message or raw
+              payload for an order. Shown honestly as <em>not captured</em> rather than invented.
+              Order Type, Product and the broker order id above are the broker-side facts that
+              <em>are</em> stored.
+            </div>
+          </div>
+        </div>
+      </template>
+    </aside>
+  </div>
 </div>
 
 <script>
 function ordersPage() {
-  return Object.assign(pageBase("/api/orders"), {
-    fDate: "", fLeg: "", fStatus: "", fStrategy: "", fSymbol: "",
-    qs() {
-      const p = new URLSearchParams();
-      if (this.fDate) p.set("date", this.fDate);
-      if (this.fLeg) p.set("leg", this.fLeg);
-      if (this.fStatus) p.set("status", this.fStatus);
-      if (this.fStrategy) p.set("strategy", this.fStrategy);
-      if (this.fSymbol) p.set("symbol", this.fSymbol);
-      const s = p.toString();
-      return s ? "?" + s : "";
-    },
-    short(id) { return id ? String(id).slice(0, 12) : "—"; },
-    tstr(ts) { return ts ? String(ts).replace("T", " ").slice(11, 19) : "—"; },
-    stClass(st) {
-      if (st === "COMPLETE") return "famp-accepted";
-      if (st === "FAILED") return "famp-rejected";
-      if (st === "CANCELLED") return "famp-duplicated";
-      return "famp-expired";
-    },
-  });
+  return Object.assign(
+    pageBase("/api/orders/screen"),
+    tableMixin({ defaultSize: 100, pageSizes: [50, 100, 200], sortKey: "", sortDir: -1 }),
+    {
+      sel: null, tab: "overview", kpi: {},
+      RESULTS: ["Filled", "Partial Fill", "Rejected", "Cancelled", "Expired"],
+      f:  { from_date: "", to_date: "", order_id: "", strategy: "", symbol: "",
+            trade_type: "", direction: "", status: "", result: "" },
+      af: { order_id: "", strategy: "", symbol: "", trade_type: "", direction: "",
+            status: "", result: "" },
+
+      /* APPROVED ORDER — 12-Aug revision. Qty is a group of two;
+         Entry/SL/TGT are SYSTEM prices, single columns. */
+      DEFAULT_COLS: [
+        { key: "date",        label: "Trading Date",    kind: "text" },
+        { key: "time",        label: "Time",            kind: "text" },
+        { key: "strategy",    label: "Strategy",        kind: "text" },
+        { key: "symbol",      label: "Symbol",          kind: "sym"  },
+        { key: "trade_type",  label: "Trade Type",      kind: "type" },
+        { key: "direction",   label: "Direction",       kind: "dir"  },
+        { key: "order_id",    label: "Broker Order ID", kind: "mono" },
+        { key: "status_label",label: "Status",          kind: "status" },
+        { key: "qty_requested", label: "System", group: "Qty", kind: "num", num: true },
+        { key: "qty_filled",    label: "Filled", group: "Qty", kind: "num", num: true },
+        { key: "entry_target_price", label: "Entry ₹", kind: "rs", num: true },
+        { key: "sl_initial",         label: "SL ₹",    kind: "rs", num: true },
+        { key: "tgt_initial",        label: "TGT ₹",   kind: "rs", num: true },
+        { key: "fill_pct",    label: "Fill %",      kind: "pct", num: true },
+        { key: "order_value", label: "Order Value", kind: "rs",  num: true },
+        { key: "actions",     label: "Actions",     kind: "act" },
+      ],
+      cols: [], dragKey: "", overKey: "", _dragEndAt: 0,
+      COLS_KEY: "screen05.orders.colOrder.v1",
+
+      qs() { return this.f.from_date ? "?date=" + this.f.from_date : ""; },
+
+      async boot() {
+        this.initCols();
+        await this.load();
+        this.kpi = (this.data && this.data.kpis) || {};
+        if (!this.f.from_date && this.data && this.data.date) {
+          this.f.from_date = this.data.date; this.f.to_date = this.data.date;
+        }
+        this.applyFilters();
+      },
+
+      rows() { return (this.data && this.data.rows) || []; },
+      k(key) { const v = this.kpi[key]; return (v === null || v === undefined) ? "—" : v; },
+      pc(key) { const v = this.kpi[key]; return (v === null || v === undefined) ? "—" : v + "%"; },
+      crore(v) {
+        if (v === null || v === undefined) return "—";
+        const n = Number(v);
+        return n >= 1e7 ? "₹" + (n / 1e7).toFixed(2) + " Cr" : this.money(n);
+      },
+      rs(v) { return (v === null || v === undefined || v === "") ? "₹—" : this.money(v); },
+      dirLabel(d) { const s = String(d || "").toUpperCase();
+        return s === "LONG" ? "Long" : s === "SHORT" ? "Short" : "—"; },
+      clock(ts) { return ts ? String(ts).slice(11, 19) : "—"; },
+
+      strategyOptions() { return [...new Set(this.rows().map(r => r.strategy).filter(Boolean))].sort(); },
+      symbolOptions()   { return [...new Set(this.rows().map(r => r.symbol).filter(Boolean))].sort(); },
+      statusOptions()   { return [...new Set(this.rows().map(r => r.status).filter(Boolean))].sort(); },
+
+      applyFilters() { Object.keys(this.af).forEach(k => this.af[k] = this.f[k]); this.tPage = 1; },
+      resetFilters() {
+        const d = (this.data && this.data.date) || "";
+        this.f = { from_date: d, to_date: d, order_id: "", strategy: "", symbol: "",
+                   trade_type: "", direction: "", status: "", result: "" };
+        this.applyFilters();
+      },
+
+      view() {
+        const a = this.af;
+        return this.rows().filter(r =>
+          (!a.order_id  || String(r.order_id || "").indexOf(a.order_id.trim()) !== -1) &&
+          (!a.strategy  || r.strategy === a.strategy) &&
+          (!a.symbol    || r.symbol === a.symbol) &&
+          (!a.trade_type|| r.trade_type === a.trade_type) &&
+          (!a.direction || String(r.direction || "").toUpperCase() === a.direction) &&
+          (!a.status    || r.status === a.status) &&
+          (!a.result    || r.order_result === a.result));
+      },
+      rangeLabel() {
+        const n = this.view().length;
+        if (!n) return "No entries";
+        const s = (this.tPage - 1) * this.tPageSize + 1;
+        return "Showing " + s + " to " + Math.min(s + this.tPageSize - 1, n) + " of " + n + " entries";
+      },
+
+      /* group header row: merge CONSECUTIVE columns that share `group`. A drag
+         that separates them simply un-merges — the group never traps a column. */
+      groups() {
+        const out = []; let i = 0, id = 0;
+        while (i < this.cols.length) {
+          const g = this.cols[i].group || "";
+          let n = 1;
+          while (g && i + n < this.cols.length && this.cols[i + n].group === g) n++;
+          out.push({ id: id++, label: g && n > 1 ? g : "", span: g && n > 1 ? n : 1 });
+          i += (g && n > 1) ? n : 1;
+        }
+        return out;
+      },
+
+      cell(r, c) {
+        const v = r[c.key];
+        if (c.kind === "act") return '<span class="ord-eye" title="Open details">◉</span>';
+        if (c.kind === "rs")  return this.rs(v);
+        if (c.kind === "pct") return (v === null || v === undefined) ? "—" : v + "%";
+        if (c.kind === "dir") {
+          const s = String(v || "").toUpperCase();
+          if (s !== "LONG" && s !== "SHORT") return "—";
+          return '<span class="' + (s === "LONG" ? "d-long" : "d-short") + '">' +
+                 (s === "LONG" ? "Long" : "Short") + "</span>";
+        }
+        if (c.kind === "type") return v ? '<span class="t-' + String(v).toLowerCase() + '">' + v + "</span>" : "—";
+        if (c.kind === "status") {
+          const res = r.order_result || "—";
+          return '<span class="pill ' + this.resultPill(res) + '">' + res + "</span>";
+        }
+        if (c.kind === "mono") return v ? '<span class="mono">' + v + "</span>" : "—";
+        return (v === null || v === undefined || v === "") ? "—" : v;
+      },
+      resultPill(res) {
+        return res === "Filled" ? "p-green" : res === "Partial Fill" ? "p-orange"
+             : res === "Rejected" ? "p-red" : res === "Cancelled" ? "p-purple" : "p-gray";
+      },
+      resultDot(res) {
+        return res === "Filled" ? "dot-green" : res === "Partial Fill" ? "dot-orange"
+             : res === "Rejected" ? "dot-red" : res === "Cancelled" ? "dot-purple" : "dot-gray";
+      },
+      resultCount(res) { return this.rows().filter(r => r.order_result === res).length; },
+
+      /* Slippage buckets need BOTH an actual and an allowed value. Anything
+         without an execution-log row is counted as `unknown`, never as within. */
+      slipBuckets() {
+        let within = 0, near = 0, over = 0, unknown = 0;
+        this.rows().forEach(r => {
+          const e = r.exec;
+          if (!e || e.slippage_pct === null || e.slippage_pct === undefined
+              || e.tolerance_fraction_used === null || e.tolerance_fraction_used === undefined) {
+            unknown++; return;
+          }
+          const act = Math.abs(Number(e.slippage_pct));
+          const allow = Math.abs(Number(e.tolerance_fraction_used)) * 100;
+          if (!allow) { unknown++; return; }
+          if (act > allow) over++;
+          else if (act >= allow * 0.8) near++;
+          else within++;
+        });
+        return { within, near, over, unknown };
+      },
+      /* Avg Slippage KPI — averaged over orders that HAVE an execution-log row.
+         ⛔ Orders without one are excluded, never counted as zero slippage. */
+      _slipVals(field) {
+        return this.rows().map(r => r.exec && r.exec[field])
+                 .filter(v => v !== null && v !== undefined && !Number.isNaN(Number(v)))
+                 .map(Number);
+      },
+      avgSlipRs() {
+        const v = this._slipVals("slippage_rs");
+        return v.length ? this.money(v.reduce((a, b) => a + b, 0) / v.length) : "—";
+      },
+      avgSlipPct() {
+        const v = this._slipVals("slippage_pct");
+        return v.length ? (v.reduce((a, b) => a + b, 0) / v.length).toFixed(2) + "%" : "not captured";
+      },
+      slip(k) { return this.slipBuckets()[k]; },
+      slipUnknown() { return this.slipBuckets().unknown > 0; },
+
+      delay(kind) {
+        const vals = [];
+        this.rows().forEach(r => {
+          const e = r.exec; if (!e) return;
+          const t0 = Date.parse(e.order_timestamp || ""), tx = Date.parse(e.exchange_timestamp || ""),
+                tf = Date.parse(e.fill_timestamp || "");
+          let d = NaN;
+          if (kind === "create") d = 0;
+          else if (kind === "submit") d = 0;
+          else if (kind === "accept") d = (tx - t0) / 1000;
+          else if (kind === "total")  d = (tf - t0) / 1000;
+          if (!Number.isNaN(d) && Number.isFinite(d) && d >= 0) vals.push(d);
+        });
+        if (kind === "create" || kind === "submit") return "not captured";
+        if (!vals.length) return "—";
+        return (vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(2) + " sec";
+      },
+
+      exportXlsx() {
+        const d = this.f.from_date || (this.data && this.data.date) || "";
+        window.location = "/api/export/orders?date=" + encodeURIComponent(d);
+      },
+
+      /* ── column order: Screen-04's mechanism, verbatim ───────────────────── */
+      initCols() {
+        this.cols = this.DEFAULT_COLS.slice();
+        let saved = null;
+        try { saved = JSON.parse(window.localStorage.getItem(this.COLS_KEY) || "null"); }
+        catch (e) { saved = null; }
+        if (!Array.isArray(saved) || !saved.length) return;
+        const byKey = {};
+        this.DEFAULT_COLS.forEach(c => { byKey[c.key] = c; });
+        const next = [];
+        saved.forEach(k => { if (byKey[k] && next.indexOf(byKey[k]) === -1) next.push(byKey[k]); });
+        this.DEFAULT_COLS.forEach(c => { if (next.indexOf(c) === -1) next.push(c); });
+        if (next.length === this.DEFAULT_COLS.length) this.cols = next;
+      },
+      saveCols() {
+        try { window.localStorage.setItem(this.COLS_KEY, JSON.stringify(this.cols.map(c => c.key))); }
+        catch (e) {}
+      },
+      isDefaultOrder() { return this.cols.every((c, i) => c.key === this.DEFAULT_COLS[i].key); },
+      resetCols() {
+        this.cols = this.DEFAULT_COLS.slice();
+        try { window.localStorage.removeItem(this.COLS_KEY); } catch (e) {}
+      },
+      onDragStart(key, ev) {
+        this.dragKey = key;
+        if (ev && ev.dataTransfer) {
+          ev.dataTransfer.effectAllowed = "move";
+          try { ev.dataTransfer.setData("text/plain", key); } catch (e) {}
+        }
+      },
+      onDrop(targetKey) {
+        const from = this.cols.findIndex(c => c.key === this.dragKey);
+        const to = this.cols.findIndex(c => c.key === targetKey);
+        this.overKey = "";
+        if (from < 0 || to < 0 || from === to) return;
+        const next = this.cols.slice();
+        next.splice(to, 0, next.splice(from, 1)[0]);
+        this.cols = next;
+        this.saveCols();
+        this._dragEndAt = Date.now();
+      },
+      onDragEnd() { this.dragKey = ""; this.overKey = ""; this._dragEndAt = Date.now(); },
+      headClick(key) {
+        if (Date.now() - this._dragEndAt < 250) return;   /* drag, not a sort click */
+        this.tSort(key);
+      },
+    }
+  );
 }
 </script>
 {% endblock %}

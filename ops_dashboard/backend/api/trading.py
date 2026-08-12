@@ -95,6 +95,29 @@ def get_orders():
     return jsonify({"date": today, "count": len(rows), "rows": rows})
 
 
+@trading_api.route("/api/orders/screen", methods=["GET"])
+@login_required
+def get_orders_screen():
+    """Screen-05 Orders. ADDITIVE — /api/orders above is untouched.
+
+    Row grain is the ENTRY order (see db_reader.order_screen_rows). Prices are
+    SYSTEM prices only; Order Value is the ENTRY order value only.
+    """
+    cfg = current_app.config["GUI_CONFIG"]
+    today = _date_param()
+    rows = db_reader.order_screen_rows(cfg, today)
+    ctx = db_reader.order_exec_context(cfg, [r.get("order_id") for r in rows])
+    for r in rows:
+        r["exec"] = ctx.get(str(r.get("order_id"))) or None
+    return jsonify({
+        "date": today,
+        "count": len(rows),
+        "rows": rows,
+        "kpis": db_reader.order_kpis(cfg, today),
+        "row_cap": db_reader.list_signals_cap(),
+    })
+
+
 @trading_api.route("/api/positions", methods=["GET"])
 @login_required
 def get_positions():

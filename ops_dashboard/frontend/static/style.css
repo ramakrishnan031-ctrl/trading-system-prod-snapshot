@@ -732,21 +732,22 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
    markup already uses the identical classes (.flt-row/.flt-field/.flt-k/.flt-c/
    .flt-actions); only the scope was missing, which is why its controls fell back
    to browser defaults. ⛔ No value changed — Screen-03 renders byte-identically. */
-.strat-page .flt-row, .sig-page .flt-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 14px; }
-.strat-page .flt-field, .sig-page .flt-field { display: flex; flex-direction: column; gap: 5px; min-width: 150px; flex: 1 1 150px; }
-.strat-page .flt-k, .sig-page .flt-k { font-size: 12px; font-weight: 600; color: var(--muted); }
-.strat-page .flt-c, .sig-page .flt-c { height: 36px; padding: 0 10px; font-size: 13px; color: var(--text);
+.strat-page .flt-row, .sig-page .flt-row, .ord-page .flt-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 14px; }
+.strat-page .flt-field, .sig-page .flt-field, .ord-page .flt-field { display: flex; flex-direction: column; gap: 5px; min-width: 150px; flex: 1 1 150px; }
+.strat-page .flt-k, .sig-page .flt-k, .ord-page .flt-k { font-size: 12px; font-weight: 600; color: var(--muted); }
+.strat-page .flt-c, .sig-page .flt-c, .ord-page .flt-c { height: 36px; padding: 0 10px; font-size: 13px; color: var(--text);
   background: var(--card); border: 1px solid var(--card-bd); border-radius: 8px; font-family: inherit; }
-.strat-page .flt-c:focus, .sig-page .flt-c:focus { outline: none; border-color: var(--blue); }
+.strat-page .flt-c:focus, .sig-page .flt-c:focus, .ord-page .flt-c:focus { outline: none; border-color: var(--blue); }
 .strat-page .flt-sm, .sig-page .flt-sm { height: 30px; padding: 0 8px; width: auto; min-width: 58px; }
-.strat-page .flt-actions, .sig-page .flt-actions { display: flex; gap: 10px; align-items: flex-end; margin-left: auto; }
+.strat-page .flt-actions, .sig-page .flt-actions, .ord-page .flt-actions { display: flex; gap: 10px; align-items: flex-end; margin-left: auto; }
 .strat-page .btn-ghost, .strat-page .btn-primary,
-.sig-page .btn-ghost, .sig-page .btn-primary { height: 36px; padding: 0 16px; font-size: 13px; font-weight: 600;
+.sig-page .btn-ghost, .sig-page .btn-primary,
+.ord-page .btn-ghost, .ord-page .btn-primary { height: 36px; padding: 0 16px; font-size: 13px; font-weight: 600;
   border-radius: 8px; cursor: pointer; font-family: inherit; }
-.strat-page .btn-ghost, .sig-page .btn-ghost { background: transparent; color: var(--muted); border: 1px solid var(--card-bd); }
-.strat-page .btn-ghost:hover, .sig-page .btn-ghost:hover { color: var(--text); border-color: var(--blue); }
-.strat-page .btn-primary, .sig-page .btn-primary { background: var(--blue); color: #fff; border: 1px solid var(--blue); }
-.strat-page .btn-primary:hover, .sig-page .btn-primary:hover { filter: brightness(1.08); }
+.strat-page .btn-ghost, .sig-page .btn-ghost, .ord-page .btn-ghost { background: transparent; color: var(--muted); border: 1px solid var(--card-bd); }
+.strat-page .btn-ghost:hover, .sig-page .btn-ghost:hover, .ord-page .btn-ghost:hover { color: var(--text); border-color: var(--blue); }
+.strat-page .btn-primary, .sig-page .btn-primary, .ord-page .btn-primary { background: var(--blue); color: #fff; border: 1px solid var(--blue); }
+.strat-page .btn-primary:hover, .sig-page .btn-primary:hover, .ord-page .btn-primary:hover { filter: brightness(1.08); }
 
 /* Strategy hierarchy */
 .strat-page .hier-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
@@ -1078,3 +1079,159 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 .sig-page .sts-ACTIVE { color: var(--pos);    background: rgba(var(--t-green), .15); }
 .sig-page .sts-QUIET  { color: var(--orange); background: rgba(var(--t-orange), .15); }
 .sig-page .sts-SILENT { color: var(--neg);    background: rgba(var(--t-red), .15); }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SCREEN-05 ORDERS (approved revision, 12-Aug-2026)
+   Filters/buttons ride the SHARED .flt-*/.btn-* rules above (Screen-03 owns the
+   values). ⛔ Scanner has no rule here because it has no column. The .st-* table
+   base is scoped to .strat-page, so — exactly as Screen-04 had to — Screen-05
+   restates it at the SAME values and then sets its own density.
+   ═════════════════════════════════════════════════════════════════════════ */
+.ord-page .pg-title { display: flex; align-items: baseline; gap: 12px; margin: 12px 2px 14px; }
+.ord-page .pg-title h1 { font-size: 23px; font-weight: 800; letter-spacing: .02em; margin: 0; }
+.ord-page .pg-sub { font-size: 13px; color: var(--muted); }
+
+/* 8 KPI cards */
+.ord-page .ok-deck { display: grid; grid-template-columns: repeat(8, 1fr); gap: 10px; margin-bottom: 14px; }
+@media (max-width: 1500px) { .ord-page .ok-deck { grid-template-columns: repeat(4, 1fr); } }
+@media (max-width: 1000px) { .ord-page .ok-deck { grid-template-columns: repeat(2, 1fr); } }
+.ord-page .kc { min-height: 92px; gap: 7px; }
+.ord-page .kc-val { font-size: 24px; }
+.ord-page .kc-label { font-size: 11.5px; letter-spacing: .04em; text-transform: uppercase; }
+.ord-page .kc-foot { font-size: 11.5px; color: var(--dim); }
+.ord-page .kc-muted { border-top-color: var(--gray); }
+.ord-page .kc-muted .kc-ic { background: rgba(var(--t-gray), .3); color: var(--muted); }
+.ord-page .kc-purple { border-top-color: var(--purple); }
+.ord-page .kc-purple .kc-ic { background: rgba(var(--t-purple), .18); color: var(--purple); }
+.ord-page .kc-purple .kc-val { color: var(--purple); }
+
+/* workspace: table column + detail rail (same 302px rail as Screen-04) */
+.ord-page .ord-work { display: grid; grid-template-columns: minmax(0, 1fr) 302px;
+  gap: 12px; align-items: start; margin-bottom: 14px; }
+@media (max-width: 1400px) { .ord-page .ord-work { grid-template-columns: minmax(0, 1fr); } }
+.ord-page .ord-left { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+/* The mockup lays the eight filters out 4-per-row. The shared .flt-field basis
+   is 150px, which wraps 7+1 at 1920 and strands Order Result across a full row,
+   so Screen-05 pins the BASIS only — every other filter property stays shared. */
+.ord-page .ord-flt .flt-field { flex: 1 1 calc(25% - 11px); min-width: 190px; }
+.ord-page .ord-flt .flt-daterange { flex: 1 1 calc(25% - 11px); min-width: 260px; }
+.ord-page .ord-flt .flt-actions { flex: 0 0 auto; }
+
+/* toolbar */
+.ord-page .ord-toolbar { display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 2px 0 10px; }
+.ord-page .ord-rpp { display: inline-flex; align-items: center; gap: 7px; }
+.ord-page .ord-rpp-k { font-size: 12.5px; color: var(--muted); }
+.ord-page .ord-rpp-b { min-width: 38px; padding: 4px 9px; font-size: 12.5px; font-weight: 600;
+  border: 1px solid var(--border); background: var(--panel2); color: var(--muted);
+  border-radius: 6px; cursor: pointer; font-variant-numeric: tabular-nums; }
+.ord-page .ord-rpp-b:hover { color: var(--text); }
+.ord-page .ord-rpp-b.is-on { background: rgba(var(--t-blue), .18); border-color: var(--blue); color: #7cb2ff; }
+.ord-page .ord-colreset { margin-left: 10px; padding: 4px 10px; font-size: 12px; font-weight: 600;
+  border: 1px solid var(--card-bd); background: transparent; color: var(--muted);
+  border-radius: 6px; cursor: pointer; }
+.ord-page .ord-colreset:hover { color: var(--text); border-color: var(--blue); }
+.ord-page .btn-export { height: 32px; padding: 0 14px; font-size: 12.5px; font-weight: 600;
+  border-radius: 8px; cursor: pointer; font-family: inherit;
+  background: rgba(var(--t-green), .14); color: var(--pos); border: 1px solid rgba(var(--t-green), .5); }
+.ord-page .btn-export:hover { filter: brightness(1.12); }
+
+/* table — 16 columns must fit without a horizontal scrollbar at >=1600 */
+.ord-page .ord-scroll { overflow-x: auto; }
+.ord-page .st-tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
+.ord-page .st-tbl th { text-align: left; padding: 7px 5px; font-size: 11px; font-weight: 600;
+  color: var(--muted); text-transform: uppercase; letter-spacing: .03em;
+  border-bottom: 1px solid var(--border); white-space: normal; cursor: pointer;
+  user-select: none; position: relative; }
+.ord-page .st-tbl th.rt, .ord-page .st-tbl td.rt { text-align: right; }
+.ord-page .st-tbl td { padding: 0 5px; height: 28px; border-bottom: 1px solid var(--card-bd);
+  color: var(--text); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ord-page .ord-row { cursor: pointer; }
+.ord-page .ord-row:hover { background: rgba(var(--t-blue), .07); }
+.ord-page .ord-row.is-sel { background: rgba(var(--t-blue), .14); }
+.ord-page .ord-empty { text-align: center; color: var(--muted); padding: 18px 0; }
+/* grouped header row (Qty) — Excel merge-and-center language */
+.ord-page .ord-grp th { border-bottom: none; padding-bottom: 2px; text-align: center;
+  color: var(--dim); cursor: default; }
+.ord-page .ord-grp th.is-grp { border-bottom: 1px solid var(--card-bd); color: var(--ink);
+  font-weight: 700; letter-spacing: .06em; }
+.ord-page .st-grip { opacity: .35; margin-right: 4px; cursor: grab; font-size: 10px; }
+.ord-page .st-arw { margin-left: 4px; opacity: .55; font-size: 9px; }
+.ord-page th.is-drag { opacity: .5; }
+.ord-page th.is-over { box-shadow: inset 2px 0 0 var(--blue); }
+.ord-page .mono { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+.ord-page .d-long { color: var(--pos); }
+.ord-page .d-short { color: var(--neg); }
+.ord-page .t-intraday { color: #7cb2ff; }
+.ord-page .t-delivery { color: var(--purple); }
+.ord-page .ord-eye { opacity: .6; }
+.ord-page .pill { display: inline-block; padding: 1px 7px; border-radius: 5px; font-size: 10.5px;
+  font-weight: 700; letter-spacing: .03em; text-transform: uppercase; }
+.ord-page .p-green { background: rgba(var(--t-green), .16); color: var(--pos); }
+.ord-page .p-orange { background: rgba(var(--t-orange), .16); color: var(--orange); }
+.ord-page .p-red { background: rgba(var(--t-red), .16); color: var(--neg); }
+.ord-page .p-purple { background: rgba(var(--t-purple), .16); color: var(--purple); }
+.ord-page .p-gray { background: rgba(var(--t-gray), .2); color: var(--muted); }
+
+/* pager */
+.ord-page .ord-pager { display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 10px 0 0; font-size: 12.5px; color: var(--muted); }
+.ord-page .ord-pg { min-width: 28px; padding: 3px 8px; border: 1px solid var(--border);
+  background: var(--panel2); color: var(--muted); border-radius: 6px; cursor: pointer; }
+.ord-page .ord-pg.is-on { background: rgba(var(--t-blue), .18); border-color: var(--blue); color: #7cb2ff; }
+
+/* bottom analytics */
+.ord-page .ord-cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 1200px) { .ord-page .ord-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.ord-page .ord-legend { display: flex; flex-direction: column; gap: 7px; font-size: 12.5px; color: var(--muted); }
+.ord-page .ord-legend > div { display: flex; align-items: center; gap: 8px; }
+.ord-page .ord-legend b { margin-left: auto; color: var(--text); font-variant-numeric: tabular-nums; }
+.ord-page .ord-legend-note { color: var(--dim); font-size: 11.5px; }
+.ord-page .dot { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto; display: inline-block; }
+.ord-page .dot-green { background: var(--pos); }
+.ord-page .dot-yellow { background: #d29922; }
+.ord-page .dot-red { background: var(--neg); }
+.ord-page .dot-orange { background: var(--orange); }
+.ord-page .dot-purple { background: var(--purple); }
+.ord-page .dot-gray { background: var(--gray); }
+.ord-page .ord-kv { display: flex; flex-direction: column; gap: 8px; font-size: 12.5px; }
+.ord-page .ord-kv > div { display: flex; align-items: baseline; gap: 10px; }
+.ord-page .ord-kv span { color: var(--muted); }
+.ord-page .ord-kv b { margin-left: auto; color: var(--text); font-variant-numeric: tabular-nums; }
+
+/* right rail — Order Details */
+.ord-page .ord-detail { position: sticky; top: 8px; padding: 0; }
+.ord-page .od-head { display: flex; align-items: center; gap: 10px; padding: 13px 16px 10px;
+  border-bottom: 1px solid var(--card-bd); }
+.ord-page .od-x { margin-left: auto; background: none; border: none; color: var(--muted);
+  cursor: pointer; font-size: 14px; }
+.ord-page .od-empty { display: flex; flex-direction: column; align-items: center; gap: 10px;
+  padding: 44px 22px; color: var(--muted); font-size: 12.5px; text-align: center; }
+.ord-page .od-empty-ic { font-size: 20px; opacity: .5; }
+.ord-page .od-id { display: flex; align-items: center; gap: 10px; padding: 12px 16px 6px; }
+.ord-page .od-oid { font-family: ui-monospace, Consolas, monospace; font-size: 13px; font-weight: 700; }
+.ord-page .od-kv { display: flex; flex-direction: column; gap: 7px; padding: 8px 16px 12px; font-size: 12.5px; }
+.ord-page .od-kv > div { display: flex; align-items: baseline; gap: 10px; }
+.ord-page .od-kv span { color: var(--muted); }
+.ord-page .od-kv b { margin-left: auto; color: var(--text); font-variant-numeric: tabular-nums; }
+.ord-page .od-kv2 { border-top: 1px solid var(--card-bd); padding-top: 10px; }
+.ord-page .od-tabs { display: flex; gap: 4px; padding: 4px 12px 10px; border-bottom: 1px solid var(--card-bd); }
+.ord-page .od-tabs button { flex: 1 1 0; padding: 5px 6px; font-size: 10.5px; font-weight: 700;
+  letter-spacing: .04em; text-transform: uppercase; border-radius: 6px; cursor: pointer;
+  border: 1px solid transparent; background: transparent; color: var(--muted); font-family: inherit; }
+.ord-page .od-tabs button.is-on { background: rgba(var(--t-blue), .16); border-color: var(--blue); color: #7cb2ff; }
+.ord-page .od-sec { padding: 12px 16px 6px; font-size: 11px; font-weight: 700; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--ink); }
+.ord-page .od-line { padding: 0 16px 12px; font-size: 12px; color: var(--muted); line-height: 1.5; }
+.ord-page .od-na { color: var(--dim) !important; font-weight: 500; font-style: italic; }
+.ord-page .od-na-block { padding: 14px 16px 16px; }
+.ord-page .od-na-block b { display: block; color: var(--text); margin-bottom: 6px; }
+.ord-page .od-time { list-style: none; margin: 0; padding: 0 16px 12px; display: flex;
+  flex-direction: column; gap: 9px; font-size: 12.5px; }
+.ord-page .od-time li { display: flex; align-items: center; gap: 9px; }
+.ord-page .od-time li.is-off { opacity: .5; }
+.ord-page .od-time i { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
+.ord-page .od-time .d-on { background: var(--pos); }
+.ord-page .od-time .d-off { background: var(--gray); }
+.ord-page .od-time span { color: var(--muted); font-variant-numeric: tabular-nums; min-width: 58px; }
+.ord-page .od-time em { font-style: normal; color: var(--text); }
