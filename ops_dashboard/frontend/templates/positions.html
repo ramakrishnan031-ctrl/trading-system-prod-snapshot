@@ -164,7 +164,7 @@
               </tr>
               <tr>
                 <template x-for="c in cols" :key="c.key">
-                  <th :class="[c.num ? 'rt' : '', dragKey === c.key ? 'is-drag' : '',
+                  <th :class="[c.num ? 'rt' : '', c.ctr ? 'ctr' : '', dragKey === c.key ? 'is-drag' : '',
                                overKey === c.key ? 'is-over' : '']"
                       draggable="true" role="button" tabindex="0"
                       :title="c.label + ' — click to sort, drag to reorder'"
@@ -185,7 +185,7 @@
                 <tr class="ord-row" :class="sel && sel.trade_id === r.trade_id ? 'is-sel' : ''"
                     @click="rowClick($event, r)">
                   <template x-for="c in cols" :key="c.key">
-                    <td :class="c.num ? 'rt' : ''" x-html="cell(r, c)"></td>
+                    <td :class="[c.num ? 'rt' : '', c.ctr ? 'ctr' : '']" x-html="cell(r, c)"></td>
                   </template>
                 </tr>
               </template>
@@ -422,9 +422,9 @@
                    ⛔ The table shows the configured one; neither substitutes
                    for the other, and a gap between them is worth seeing. -->
               <div><span>R:R (strategy config)</span>
-                <b x-text="sel.rr_configured == null ? '—' : sel.rr_configured + ' : 1'"></b></div>
+                <b x-text="rr(sel.rr_configured)"></b></div>
               <div><span>R:R (implied by levels)</span>
-                <b x-text="sel.expected_rr == null ? '—' : sel.expected_rr + ' : 1'"></b></div>
+                <b x-text="rr(sel.expected_rr)"></b></div>
               <div><span>Current RR</span><b class="od-na">n/a — needs live price</b></div>
             </div>
             <div class="od-sec">Trade Story</div>
@@ -493,9 +493,9 @@
               <div class="od-kv od-kv2">
                 <div><span>Risk Amount</span><b x-text="rs(full.risk_amount)"></b></div>
                 <div><span>R:R (strategy config)</span>
-                  <b x-text="full.rr_configured == null ? '—' : full.rr_configured + ' : 1'"></b></div>
+                  <b x-text="rr(full.rr_configured)"></b></div>
                 <div><span>R:R (implied by levels)</span>
-                  <b x-text="full.expected_rr == null ? '—' : full.expected_rr + ' : 1'"></b></div>
+                  <b x-text="rr(full.expected_rr)"></b></div>
                 <div><span>Highest Profit %</span><b class="v-pos" x-text="pct(full.mfe_pct)"></b></div>
                 <div><span>Highest Drawdown %</span><b class="v-neg" x-text="pct(full.mae_pct)"></b></div>
               </div>
@@ -648,6 +648,12 @@ function positionsPage() {
         { key: "sl_broker",    label: "Broker", group: "SL ₹",  kind: "rs", num: true },
         { key: "tgt_initial",  label: "System", group: "TGT ₹", kind: "rs", num: true },
         { key: "tgt_broker",   label: "Broker", group: "TGT ₹", kind: "rs", num: true },
+        /* STRATEGY-CONFIGURED R:R, from each strategy's own
+           config/strategies/<name>.yaml `tgt_risk_reward`. ⛔ NOT derived from
+           SL/TGT prices, ⛔ not a global, ⛔ no default — a strategy without the
+           field renders '—'. The ratio implied by this trade's actual levels is
+           a DIFFERENT number and stays in the detail rail beside this one. */
+        { key: "rr_configured", label: "R:R",         kind: "rr", ctr: true },
         { key: "sl_points",    label: "SL Points ₹",  kind: "rs", num: true },
         { key: "tgt_points",   label: "TGT Points ₹", kind: "rs", num: true },
         { key: "ltp",          label: "LTP ₹",        kind: "ltp", num: true },
@@ -663,7 +669,11 @@ function positionsPage() {
          the OLD default — including Action in its old position and the removed
          R:R column — and the operator would never see this change. Bumping the
          key retires the stale order instead of trying to migrate it. */
-      COLS_KEY: "screen06.positions.colOrder.v2",
+      /* ⚠️ v3: R:R was removed in the previous revision and is now back, before
+         SL Points. A saved v2 order would drop the reinstated column to the end
+         (initCols appends unknown keys) and the operator would never see it in
+         its intended place. Bumping retires the stale order. */
+      COLS_KEY: "screen06.positions.colOrder.v3",
 
       qs() { return this.f.from_date ? "?date=" + this.f.from_date : ""; },
 
@@ -695,6 +705,15 @@ function positionsPage() {
         const n = Number(v);
         if (!isFinite(n)) return "—";
         return (n < 0 ? "-" : "") + Math.abs(n).toFixed(2);
+      },
+      /* R:R as "1.5:1" / "2:1" — a whole number drops its ".0". ⛔ Absent stays
+         an em-dash; ⛔ nothing is defaulted. One helper so the table and the
+         detail rail can never render the same ratio two different ways. */
+      rr(v) {
+        if (v === null || v === undefined || v === "") return "—";
+        const n = Number(v);
+        if (!isFinite(n)) return "—";
+        return (n % 1 === 0 ? String(n) : String(v)) + ":1";
       },
       pct(v) { return (v === null || v === undefined) ? "—" : Number(v).toFixed(2) + "%"; },
       dirLabel(d) { const s = String(d || "").toUpperCase();
@@ -878,9 +897,7 @@ function positionsPage() {
         }
         if (c.kind === "age") return this.age(r);
         if (c.kind === "rs")  return this.num(v);          /* ⛔ no ₹ in cells */
-        /* R:R is the STRATEGY-CONFIGURED ratio (strategy.yaml tgt_risk_reward),
-           ⛔ not derived from prices and ⛔ not reversed for shorts. */
-        if (c.kind === "rr")  return (v === null || v === undefined) ? "—" : v + " : 1";
+        if (c.kind === "rr")  return this.rr(v);
         /* ⛔ LTP and Unrealised have NO source in this build. They render as an
            explicit unavailable marker — ⛔ never 0, never blank, and ⛔ never a
            system/stale price wearing the LTP label. */

@@ -72,6 +72,7 @@ APPROVED = [
     "entry_target_price", "entry_actual_price",         # Entry group: System / Filled
     "sl_initial", "sl_broker",                          # SL group:    System / Broker
     "tgt_initial", "tgt_broker",                        # TGT group:   System / Broker
+    "rr_configured",                                    # strategy.yaml, before SL Points
     "sl_points", "tgt_points",                          # per-share ₹ distances
     "ltp", "unrealised",                                # unavailable in this build
     "actions",                                          # ⛔ ALWAYS LAST
@@ -90,20 +91,29 @@ def test_ltp_and_unrealised_sit_between_points_and_action(tpl: str) -> None:
     assert cols[cols.index("unrealised") + 1] == "actions"
 
 
-def test_rr_left_the_table_but_not_the_product(tpl: str) -> None:
-    """R:R is out of the table (it is wide enough) but MUST remain in the detail
-    rail — ⛔ the information is moved, ⛔ not dropped."""
-    assert "rr_configured" not in _default_cols(tpl)
+def test_rr_sits_immediately_before_sl_points(tpl: str) -> None:
+    """Rama, 12-Aug: R:R goes between the TGT group and SL Points."""
+    cols = _default_cols(tpl)
+    assert cols[cols.index("rr_configured") - 1] == "tgt_broker"
+    assert cols[cols.index("rr_configured") + 1] == "sl_points"
+
+
+def test_rr_is_in_the_table_and_still_in_the_detail_rail(tpl: str) -> None:
+    """The table column is the STRATEGY-CONFIGURED ratio. The rail keeps BOTH it
+    and the ratio implied by the actual levels — ⛔ the distinction survives."""
+    assert "rr_configured" in _default_cols(tpl)
     body = _body(tpl)
-    assert "rr_configured" in body, "R:R must still be shown in the detail card"
     assert "R:R (strategy config)" in body
+    assert "R:R (implied by levels)" in body
 
 
 def test_saved_column_order_key_was_versioned(tpl: str) -> None:
-    """⚠️ A saved v1 order would restore the OLD default — Action in its old slot
-    and the removed R:R column — and the operator would never see this change."""
-    assert "screen06.positions.colOrder.v2" in tpl
-    assert "colOrder.v1" not in tpl
+    """⚠️ A saved v2 order would push the reinstated R:R column to the END (
+    initCols appends unknown keys) and the operator would never see it in its
+    intended place. Each column-set change bumps the key."""
+    assert "screen06.positions.colOrder.v3" in tpl
+    for stale in ("colOrder.v1", "colOrder.v2"):
+        assert stale not in tpl
 
 
 def test_column_order_is_the_approved_one(tpl: str) -> None:
@@ -609,3 +619,93 @@ def test_detail_is_a_drawer_so_the_table_gets_full_width(tpl: str) -> None:
     assert re.search(r'class="panel mc-panel ord-detail pos-drawer"[^>]*x-show="sel"', body)
     # ⛔ the ability to inspect a selection must survive
     assert "Position Details" in body and "View Full Details" in body
+
+
+# ── 14 · R:R column — strategy-specific sourcing ────────────────────────────
+def test_rr_column_uses_each_strategys_own_yaml(gui_config, today) -> None:
+    """⭐ THE TEST THAT MATTERS. Two strategies get DIFFERENT ratios and a third
+    gets none. If R:R were a global, a hard-coded default, or read from the
+    wrong strategy, this fails.
+
+    ⚠️ It has to be written this way: every one of the 16 PRODUCTION strategies
+    currently configures 1.5, so a real-data screen shows 1.5:1 on every row and
+    could not distinguish per-strategy sourcing from a constant.
+    """
+    import os
+    import yaml
+    from backend.api import trading
+
+    sdir = os.path.join(gui_config["paths"]["config_dir"], "strategies")
+    wanted = {"gap_fade_long": 1.5, "vwap_bounce_long": 3.0}   # range_breakout_long: none
+    for name, ratio in wanted.items():
+        p = os.path.join(sdir, f"{name}.yaml")
+        d = yaml.safe_load(open(p, encoding="utf-8"))
+        d["tgt_risk_reward"] = ratio
+        yaml.safe_dump(d, open(p, "w", encoding="utf-8"), sort_keys=False)
+
+    rows = trading._position_rows_enriched(gui_config, today)
+    got = {}
+    for r in rows:
+        got.setdefault(r["strategy"], []).append(r["rr_configured"])
+
+    assert got["gap_fade_long"] and all(v == pytest.approx(1.5)
+                                        for v in got["gap_fade_long"])
+    assert got["vwap_bounce_long"] and all(v == pytest.approx(3.0)
+                                            for v in got["vwap_bounce_long"])
+    # ⛔ the unconfigured strategy must NOT inherit either of them
+    assert got["range_breakout_long"] and all(v is None
+                                              for v in got["range_breakout_long"])
+
+
+def test_rr_renders_as_ratio_without_trailing_zero(tpl: str) -> None:
+    """Spec: 1.5 → "1.5:1", 2 → "2:1", absent → "—"."""
+    body = _body(tpl)
+    fn = body.split("rr(v) {", 1)[1].split("},", 1)[0]
+    assert '":1"' in fn, "must render as a ratio against 1"
+    assert "% 1 === 0" in fn, "a whole number must drop its .0"
+    assert '"—"' in fn, "absent must be an em-dash"
+    # ⛔ and the table must go through it, not re-implement the format
+    assert 'c.kind === "rr")  return this.rr(v)' in body
+
+
+def test_rr_column_is_centred_and_not_currency(tpl: str) -> None:
+    block = tpl.split("DEFAULT_COLS: [", 1)[1].split("],", 1)[0]
+    line = next(l for l in block.splitlines() if 'key: "rr_configured"' in l)
+    assert "ctr: true" in line, "R:R is a ratio — centred"
+    assert "num: true" not in line, "R:R is not a currency amount"
+    assert "₹" not in line, "R:R carries no currency symbol"
+
+
+def test_rr_backend_path_is_not_duplicated() -> None:
+    """⛔ ONE data path (section 5: do not create a second competing R:R reader).
+
+    ⚠️ The invariant is about PARSING, not mentioning: exactly one module may
+    open the strategy YAML, and everyone else must go through
+    config_reader.get_strategies. trading.py reading the projected key off that
+    dict is the single path working correctly, ⛔ not a second one.
+    """
+    import os
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    mentions, globbers = set(), set()
+    for dirpath, _d, files in os.walk(os.path.join(root, "backend")):
+        for name in files:
+            if not name.endswith(".py"):
+                continue
+            p = os.path.join(dirpath, name)
+            code = "\n".join(l for l in open(p, encoding="utf-8", errors="ignore")
+                             if not l.lstrip().startswith("#"))
+            if "tgt_risk_reward" in code:
+                mentions.add(name)
+            if '"strategies")' in code and "glob.glob(" in code:
+                globbers.add(name)
+
+    # exactly two participants: the ONE projector and the ONE consumer
+    assert mentions == {"config_reader.py", "trading.py"}, \
+        f"an extra R:R reader appeared: {sorted(mentions)}"
+    # ⛔ and only the reader may open the YAML — the consumer must not re-glob it
+    assert globbers == {"config_reader.py"}, \
+        f"strategy YAML is globbed outside config_reader: {sorted(globbers)}"
+    with open(os.path.join(root, "backend", "api", "trading.py"),
+              encoding="utf-8") as fh:
+        assert "config_reader.get_strategies(cfg)" in fh.read()
