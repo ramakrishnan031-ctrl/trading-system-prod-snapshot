@@ -423,6 +423,92 @@ Other strategies: `gap_fade_long` → `2:1`, `range_breakout_long` → `3:1`,
 
 ---
 
+---
+
+## WINDOW CONTINUES: 13-Aug-2026 evening — cross-screen semantic correction
+
+⚠️ **`origin/main` MOVED TONIGHT.** It was `2bfe9e2` when this window opened; Fix 2
+was deployed at **18:56:30 IST** and `origin/main` is now
+**`1c8c710bf4df60fcca8b09375d6cd723590d3820`** (measured two ways at the gate).
+⇒ 🔑 **Carried-forward item 3 has FIRED: this branch is based on `2bfe9e2` and is now
+behind. It needs a refit onto `1c8c710`, its own verification run and a NEW EXACT SHA
+before any deployment. ⛔ Never deploy the pre-refit hash.**
+
+### Entry 9
+
+| Field | Value |
+|---|---|
+| **Date/time** | 2026-08-13 21:41 IST |
+| **Commit** | `00299c6a40be5a6f4ad8af0058b4537024b87098` |
+| **Short** | `00299c6` |
+| **Branch** | `feat/screen06-positions` |
+| **Screen** | **Screens 04 + 05 + 06** — score-label semantics (⛔ NOT Screen-07) |
+| **Pushed** | **NO** |
+| **Deployed** | **NO** |
+| **Reason** | Special no-deployment window; and the branch now needs a refit onto `1c8c710` |
+
+**Why this exists.** It is a **deliberate pre-deployment correction to three already-
+accepted screens**, made on Rama's explicit instruction of 13-Aug-2026, and recorded as
+its own entry so it is not mistaken for Screen-07 work. Screen-07 is **not started** —
+it is built after tomorrow's 08:15 Fix-2 observation.
+
+**The ruling (Rama, quoted).** *"System Score = achieved score = screener_results.score;
+Score Threshold = eligibility threshold = eligible_score / min_pass_score fallback. Do
+not use Signal Score for either of these… Maintain semantic label consistency across the
+entire system. Do not fabricate or relabel a threshold as a score."*
+
+**Change summary**
+- `db_reader.signal_scores()` now returns `{system_score, score_threshold}` — the mapping
+  is **reversed** from what it shipped: `system_score` was `eligible_score` (the
+  THRESHOLD) and `signal_score` was `score`.
+- All three API call sites (`/api/signals`, `/api/orders/screen`,
+  `/api/positions/screen`) remapped; `reject_score`/`required_score` keep their meaning.
+- Export column `Signal Score` → **`Score Threshold`**.
+- `signals.html`, `orders.html`, `positions.html`: column defs, Screen-04 detail card and
+  row mapping.
+- Guard renamed `assert_signal_score_label_is_retired`; `SIGNAL_SCORE_ALLOWED_FILES` is
+  now **EMPTY** (was `{signals,orders,positions}.html`). Kept as a set, ⛔ not deleted.
+- `04_signals_asset_spec.md`: the 11-Aug supersession is marked **SUPERSEDED and
+  retained**, with the current binding table above it.
+
+**🔑 It reverts a documented Rama decision, and that is stated rather than hidden.** The
+11-Aug-2026 supersession of L8 for Screen-04 is **closed**; L8
+(`G5_REDESIGN_PHASE_B.md:11`) is **restored** and now applies everywhere.
+
+**⭐ It is a restoration, not a new rule — the app already carried BOTH meanings at
+once.** `db_reader.screener_scores()` has always returned the ACHIEVED score under the
+label "System Score" for analytics / operations / trade_explorer / trade_logs, while
+`db_reader.signal_scores()` returned the THRESHOLD under the same label for Screens
+04/05/06. One label, two quantities, one application.
+
+**🔴 A real defect was fixed, not just a rename.** The `min_pass` fallback was applied to
+`system_score`, so a signal with no stored `eligible_score` printed the **configured
+threshold** in a per-signal score column. The fallback now belongs to `score_threshold`
+alone.
+
+**⚠️ And the test that claimed to pin the old mapping was VACUOUS.** Neither fixture's
+`screener_results` carries the v14 `eligible_score` column, so
+`assert system_score in (82, None)` could **only ever** see `None` — it never verified
+the mapping it claimed to pin. The rebuilt test `ALTER TABLE`s the column in so both
+quantities are real and the assertion can genuinely go red.
+
+**Measured, ⛔ not assumed** — the one thing that could have made this unsafe:
+*"Signal Score Too Low"* is **not** a production literal. Live reject reasons are
+`REJECTED_SCORE_<n>` (`REJECTED_SCORE_57` ×35,411, `REJECTED_SCORE_59` ×15,123 on the VM
+DB, 13-Aug) and the phrase appears in **no** Python outside `ops_dashboard/`. ⇒ retiring
+the label creates **no** backend/UI mismatch. The spec's claim to the contrary described
+a **test fixture**, and is corrected in place.
+
+**Verification** — full dashboard suite **485 passed / 1 failed**, `104 s`. The single
+failure is `test_isolation.py::test_c_venv_has_no_kiteconnect`, which self-attributes:
+*"kiteconnect IS installed in the GUI venv — isolation I4 violated."* ⭐ **Identical
+count and identical failure to the run recorded for Screen-06**, so nothing regressed.
+Additionally verified end-to-end: all three endpoints emit `system_score` +
+`score_threshold`, the XLSX header reads **Score Threshold**, and no `signal_score` key
+or "Signal Score" label survives anywhere in backend, templates or tests.
+
+---
+
 ## ⚠️ Carried forward for tomorrow's deployment review
 
 1. **`/api/export/orders` does not exist.** Screen-05's *Export XLSX* button navigates
