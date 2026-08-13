@@ -548,6 +548,58 @@ none of these tables). ⇒ ⭐ **the LABELS and the export are verified in the r
 suite instead: `test_system_score_and_threshold_are_two_different_real_columns` (88 vs 82)
 and `test_score_threshold_falls_back_to_config_but_system_score_never_does` (71 vs 60).
 
+### Entry 9 — addendum 2: LOCAL LOGIN FAILED, DIAGNOSED, FIXED (13-Aug-2026 ~22:10 IST)
+
+⚠️ **This supersedes the auth paragraph of addendum 1**, which described a setup that was
+**wrong** and has been removed.
+
+**Symptom.** Rama could not log in locally. ⛔ Not reproduced by guesswork — the server log
+named it: `auth.login_throttled: consecutive_failures=5,6,7 … username='ramakrishnan'`.
+
+## 🔑 **CAUSE — MINE, AND IT IS THE INVENTED-CREDENTIAL CASE:** addendum 1 created a
+local-only credential with a username I made up (**`rama`**) while Rama types his real
+one (**`ramakrishnan`**). ⛔ The password was never reached; the username never matched.
+⚠️ **A second fault in the same overlay:** it set `totp_disabled: true`, i.e. WEAKER than
+the VM, which requires TOTP.
+
+**Config comparison (read-only; ⛔ no secret printed, ⛔ no VM credential copied).**
+
+| | VM GUI `gui_config.local.yaml` (mode 600) | Local overlay, addendum 1 |
+|---|---|---|
+| username | `ramakrishnan` | `rama` ❌ |
+| password_hash | set | set (invented) |
+| totp_secret | set | empty ❌ |
+| totp_disabled | **false — TOTP required** | `true` ❌ weaker |
+
+**⛔ WHY THE VM CREDENTIAL WAS *NOT* REUSED (the preferred option, deliberately declined):**
+it depends on a **TOTP secret**, so reusing it means copying that seed from a mode-600 VM
+file onto the PC. That spreads a secret and runs against the standing direction to reduce
+PC-side secret copies. ⇒ took the sanctioned alternative: a **local-only credential via
+the project's own supported mechanism**.
+
+**Fix — ⛔ no code change; the application already provided everything needed.**
+`python -m backend.auth --setup --username ramakrishnan --config backend/config/gui_config.local.yaml`
+⇒ writes hash + a **fresh local** TOTP secret to the **git-ignored** overlay.
+✅ **TOTP is ENABLED (`totp_disabled: false`) — authentication is NOT weakened and now
+matches the VM's posture.** ⛔ The old `rama` overlay was deleted.
+
+🔒 **Secrets discipline, verified ⛔ not asserted:** `git status` **clean**;
+`git status --ignored` shows the overlay as `!!` and `git check-ignore` resolves it to
+`ops_dashboard/.gitignore:9`; and a scan of **every tracked file** for the hash and the
+TOTP secret returns **NONE**. ⛔ The password and the otpauth URI are deliberately **NOT
+recorded in this ledger**, because this file IS tracked — they were given to Rama in
+session and the URI written to a local scratchpad file only.
+
+**Verification after restart (server restarted, which also cleared the in-memory throttle):**
+- ✅ End-to-end login as `ramakrishnan` **with a TOTP code** → authenticated, redirected off
+  `/login`. The form's fields are `username`, `password`, `totp`.
+- ✅ `/signals` `System Score`×2 · `Score Threshold`×2 · **"Signal Score" ×0**
+- ✅ `/orders` ×1 · ×1 · **×0** · ✅ `/positions` ×2 · ×2 · **×0**
+- ⛔ **PC database still EMPTY and left that way** — ⛔ no data seeded. Labels and layout are
+  verified in the rendered UI; **values remain proven only by the test suite.**
+
+⛔ **NOT PUSHED · NOT DEPLOYED · NOT REFITTED onto `1c8c710`.** ⛔ VM credentials untouched.
+
 ---
 
 ## ⚠️ Carried forward for tomorrow's deployment review
