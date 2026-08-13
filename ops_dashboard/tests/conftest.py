@@ -673,11 +673,34 @@ def client(app):
 # heading mechanism. ⛔ The guard is NARROWED again, ⛔ never deleted: it still
 # fails on every OTHER screen, so L8's drop cannot be undone by accident where
 # it was deliberate. A third widening needs the same kind of explicit decision.
-SIGNAL_SCORE_ALLOWED_FILES = {"signals.html", "orders.html", "positions.html"}
+# ── L8 RESTORED IN FULL, 13-Aug-2026 (Rama) — the exceptions above are CLOSED ─
+# The three widenings recorded above are HISTORY, kept because they were real
+# decisions; they are no longer in force. Rama, 13-Aug-2026, ruled the naming
+# system-wide and reverted his own 11-Aug supersession:
+#     System Score    = the ACHIEVED score  (screener_results.score)
+#     Score Threshold = the minimum required (eligible_score → min_pass_score)
+#     "Signal Score"  = RETIRED as a label AND as a payload key.
+# His words: *"If a screen has no genuine second score, omit 'Signal Score'
+# rather than fabricate/relabel a threshold."*
+#
+# ⭐ WHY THIS IS A RESTORATION AND NOT A NEW RULE: the codebase already carried
+# BOTH meanings of "System Score" at once — db_reader.screener_scores() has
+# always returned the ACHIEVED score under that label for analytics, operations,
+# trade_explorer and trade_logs, while db_reader.signal_scores() returned the
+# THRESHOLD under it for Screens 04/05/06. One label, two quantities, same app.
+#
+# ⇒ THE ALLOW-LIST IS NOW EMPTY, so the guard can go red on ANY file. It is kept
+# as a set rather than deleted so a future widening is again an explicit act.
+SIGNAL_SCORE_ALLOWED_FILES: set = set()
 
 
-def assert_signal_score_confined_to_screen04(frontend_root):
-    """Guard for L8 as amended: the label is permitted only in Screen-04."""
+def assert_signal_score_label_is_retired(frontend_root):
+    """L8 restored: the label 'Signal Score' must appear NOWHERE in the frontend.
+
+    ⛔ Not 'confined to Screen-04' — that exception is closed. The old name of
+    this function said 'confined_to_screen04' and would have been a lie the
+    moment the allow-list emptied.
+    """
     offenders = []
     for dirpath, _dirs, files in os.walk(frontend_root):
         for name in files:
@@ -688,5 +711,5 @@ def assert_signal_score_confined_to_screen04(frontend_root):
                 if "signal score" in fh.read().lower():
                     offenders.append(path)
     assert not offenders, (
-        "'Signal Score' appears outside Screen-04 (L8 still applies there): "
-        + ", ".join(offenders))
+        "'Signal Score' is retired (L8 restored 13-Aug-2026) but still appears "
+        "in: " + ", ".join(offenders))

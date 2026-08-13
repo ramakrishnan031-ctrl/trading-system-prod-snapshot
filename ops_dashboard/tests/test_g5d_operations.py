@@ -9,7 +9,7 @@ import os
 
 from backend.services import operations
 
-from conftest import assert_signal_score_confined_to_screen04   # noqa: E402
+from conftest import assert_signal_score_label_is_retired   # noqa: E402
 
 _FRONTEND = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend")
 
@@ -103,7 +103,7 @@ def test_g5d_endpoints_require_auth(app):
         assert anon.get(ep).status_code == 401, ep
 
 
-# ── Additive-only: pinned shapes + HARD_KILL blink frozen; no Signal Score ───
+# ── Additive-only: pinned shapes + HARD_KILL frozen; label retired (L8) ──────
 def test_pinned_shapes_frozen_after_g5d(client):
     assert len(client.get("/api/dashboard").get_json()["service_health"]) == 6
     assert len(client.get("/api/pipeline").get_json()["stages"]) == 13
@@ -119,4 +119,4 @@ def test_hard_kill_blink_still_single():
 
 
 def test_no_signal_score_after_g5d():
-    assert_signal_score_confined_to_screen04(_FRONTEND)
+    assert_signal_score_label_is_retired(_FRONTEND)

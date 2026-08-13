@@ -30,24 +30,61 @@ already returned by an existing API.
 
 ---
 
-## The two scores — a superseded decision, recorded
+## The two scores — L8 RESTORED 13-Aug-2026; the 11-Aug supersession is CLOSED
+
+> ### ⚠️ CURRENT, BINDING — Rama, 13-Aug-2026, system-wide
+>
+> | Column | Meaning | Real source |
+> |---|---|---|
+> | **System Score** | the **ACHIEVED** score | `screener_results.score` |
+> | **Score Threshold** | the minimum required for eligibility | `screener_results.eligible_score`, falling back to config `min_pass_score` |
+>
+> ⛔ **"Signal Score" is RETIRED** — as a label *and* as a payload key. ⛔ A threshold is
+> never presented as a score under any name. His words: *"If a screen has no genuine second
+> score, omit 'Signal Score' rather than fabricate/relabel a threshold… Maintain semantic
+> label consistency across the entire system."*
+>
+> This **reverts the 11-Aug supersession below and restores L8**, and it applies to Screens
+> 04, 05, 06 and everything built after them.
+>
+> ⭐ **Why it is a restoration, not a new rule:** the app already carried *both* meanings of
+> "System Score" simultaneously — `db_reader.screener_scores()` has always returned the
+> ACHIEVED score under that label for analytics/operations/trade_explorer/trade_logs, while
+> `db_reader.signal_scores()` returned the THRESHOLD under it for Screens 04/05/06. One
+> label, two quantities, one application.
+>
+> 🔴 **A real defect went with it:** the min_pass fallback was applied to `system_score`, so a
+> signal with no stored `eligible_score` printed the **configured threshold** in a per-signal
+> score column. The fallback now belongs to `score_threshold` alone, pinned by
+> `test_score_threshold_falls_back_to_config_but_system_score_never_does`.
+>
+> ⚠️ **And the test that claimed to pin the old mapping was VACUOUS:** neither fixture's
+> `screener_results` carries the v14 `eligible_score` column, so the old
+> `assert system_score in (82, None)` could only ever see `None`. The rebuilt test adds the
+> column so both quantities are real and the assertion can genuinely go red.
+>
+> **Guard:** `conftest.assert_signal_score_label_is_retired()` — `SIGNAL_SCORE_ALLOWED_FILES`
+> is now **EMPTY**, so it fails on *any* file. Kept as a set, ⛔ not deleted, so a future
+> widening is again an explicit act. Four tests (`g5a`/`g5b`/`g5c`/`g5d`) call it.
+
+### SUPERSEDED — the 11-Aug-2026 decision, retained because it was real
 
 **L8** (`docs/G5_REDESIGN_PHASE_B.md`) locked *"single System Score = `screener_results.score`,
 drop 'Signal Score'"*. **Rama superseded L8 for Screen-04 on 11-Aug-2026**, and redefined both
-terms — they are two different quantities, not a rename:
+terms — they were two different quantities, not a rename:
 
-| Column | Meaning | Real source |
+| Column | Meaning (⛔ NO LONGER IN FORCE) | Real source |
 |---|---|---|
 | **System Score** | the minimum score required for eligibility | `screener_results.eligible_score`, falling back to config `min_pass_score` |
 | **Signal Score** | this signal's own score | `screener_results.score` |
 
-⛔ **Nothing is fabricated.** Where neither source exists the cell renders `—`.
-The definition is self-consistent in live data: a signal scoring **64** against a required
-**70** is exactly the row whose `rejection_reason` reads *"Signal Score Too Low"*.
-
-**The L8 guard was narrowed, not deleted.** `conftest.assert_signal_score_confined_to_screen04()`
-still fails if the label appears on any *other* screen; only `signals.html` is exempt. Four
-tests (`g5a`/`g5b`/`g5c`/`g5d`) now call it.
+⛔ **Nothing was fabricated** under that scheme either; where neither source existed the cell
+rendered `—`. ⚠️ **One supporting claim did not survive checking:** the note that a signal
+scoring **64** against a required **70** *"is exactly the row whose `rejection_reason` reads
+'Signal Score Too Low'"* describes a **test fixture**, ⛔ not production — live reject reasons
+are `REJECTED_SCORE_<n>` (measured 13-Aug: `REJECTED_SCORE_57` ×35,411, `REJECTED_SCORE_59`
+×15,123), and the phrase *"Signal Score"* appears in **no** Python outside `ops_dashboard/`.
+⇒ retiring the label creates **no** backend/UI mismatch.
 
 ---
 

@@ -66,7 +66,7 @@ def test_scanner_is_not_an_export_column() -> None:
 APPROVED = [
     # common head, identical to Screens 04/05 — ⛔ no Scanner between them
     "date", "time", "strategy", "symbol", "trade_type", "direction",
-    "system_score", "signal_score",
+    "system_score", "score_threshold",
     "position_status",
     "qty_system", "qty_position",                       # Qty group
     "entry_target_price", "entry_actual_price",         # Entry group: System / Filled
@@ -121,10 +121,10 @@ def test_column_order_is_the_approved_one(tpl: str) -> None:
 
 
 def test_scores_participate_in_the_movable_mechanism(tpl: str) -> None:
-    """System Score and Signal Score are ordinary members of DEFAULT_COLS, so
+    """System Score and Score Threshold are ordinary members of DEFAULT_COLS, so
     they are dragged and persisted by the same mechanism as every other head."""
     cols = _default_cols(tpl)
-    assert "system_score" in cols and "signal_score" in cols
+    assert "system_score" in cols and "score_threshold" in cols
 
 
 def test_headings_are_draggable(tpl: str) -> None:

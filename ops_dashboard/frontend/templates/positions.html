@@ -626,7 +626,7 @@ function positionsPage() {
       af: { strategy: "", symbol: "", trade_type: "", direction: "", position_status: "" },
 
       /* APPROVED ORDER (section D): the common head is Trading Date, Time,
-         Strategy, Symbol, Trade Type, Direction, System Score, Signal Score —
+         Strategy, Symbol, Trade Type, Direction, System Score, Score Threshold —
          with no attribution column (see the top-of-file note). Qty / Entry /
          SL / TGT are GROUPED PAIRS, so System and Broker sit under one merged
          heading and can still be dragged apart. */
@@ -637,8 +637,8 @@ function positionsPage() {
         { key: "symbol",       label: "Symbol",       kind: "sym"  },
         { key: "trade_type",   label: "Trade Type",   kind: "type" },
         { key: "direction",    label: "Direction",    kind: "dir"  },
-        { key: "system_score", label: "System Score", kind: "num", num: true },
-        { key: "signal_score", label: "Signal Score", kind: "num", num: true },
+        { key: "system_score",    label: "System Score",    kind: "num", num: true },
+        { key: "score_threshold", label: "Score Threshold", kind: "num", num: true },
         { key: "position_status", label: "Status",    kind: "status" },
         { key: "qty_system",   label: "System",   group: "Qty", kind: "num", num: true },
         { key: "qty_position", label: "Position", group: "Qty", kind: "num", num: true },

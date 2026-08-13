@@ -6,8 +6,8 @@ unexercised — `test_signals_contract` passed without ever touching them. Each
 test below seeds the chain it needs, so it CAN go red.
 
 Covered:
-  * signal_score / system_score are two DIFFERENT quantities from real columns
-  * system_score falls back to the configured min_pass_score, never invented
+  * system_score / score_threshold are two DIFFERENT quantities from real cols
+  * the min_pass fallback applies to the THRESHOLD only, never to the score
   * Trade Type comes from orders.product (there is no trades.product)
   * trade_result walks the whole lifecycle, not just Accepted/Rejected
   * KPI counts are whole-day, not capped by the row limit
@@ -69,29 +69,55 @@ def _row(client, sid):
     return next((r for r in rows if r["signal_id"] == sid), None)
 
 
-def test_signal_and_system_score_are_two_different_real_columns(gui_config, client):
-    """signal_score = the signal's own score; system_score = the minimum it had
-    to reach. Distinct values, so a swap or an alias would fail here."""
+def test_system_score_and_threshold_are_two_different_real_columns(gui_config, client):
+    """CANONICAL (Rama, 13-Aug-2026): system_score = the ACHIEVED score;
+    score_threshold = the minimum it had to reach.
+
+    ⚠️ THE PREDECESSOR OF THIS TEST WAS VACUOUS AND THAT IS WHY IT IS REBUILT:
+    neither fixture's `screener_results` carries the v14 `eligible_score`
+    column, so the old `assert system_score in (82, None)` could ONLY ever see
+    None — it never once verified the threshold mapping it claimed to pin. The
+    column is therefore ADDED here, so both quantities are real and the
+    assertion can genuinely go red.
+
+    Values are chosen so the OLD (inverted) mapping returns 82 where 88 is now
+    required, and vice versa.
+    """
+    c = _conn(gui_config)
+    try:                                   # v14 column, absent from both fixtures
+        c.execute("ALTER TABLE screener_results ADD COLUMN eligible_score INTEGER")
+        c.commit()
+    except sqlite3.OperationalError:
+        pass                               # already present — fine
+    c.close()
+
     _seed_chain(gui_config, sid="s04_scores", symbol="RELIANCE", score=88, eligible=82)
     r = _row(client, "s04_scores")
     assert r is not None
-    if r["signal_score"] is None:          # v41 fixture has no eligible_score col
-        pytest.skip("screener_results not seeded on this schema variant")
-    assert r["signal_score"] == 88
-    assert r["system_score"] in (82, None) or r["system_score"] == 82
-    assert r["signal_score"] != 82, "signal_score must not be the threshold"
+    assert r["system_score"] == 88, "system_score must be the ACHIEVED score"
+    assert r["score_threshold"] == 82, "score_threshold must be eligible_score"
+    assert r["system_score"] != 82, "system_score must not be the threshold"
+    assert "signal_score" not in r, "'signal_score' is a retired key"
 
 
-def test_system_score_falls_back_to_configured_min_pass_score(gui_config, client):
-    """With no eligible_score stored, system_score comes from config — and when
-    config is absent too it is None, never a guessed number."""
+def test_score_threshold_falls_back_to_config_but_system_score_never_does(
+        gui_config, client):
+    """The min_pass fallback belongs to the THRESHOLD alone.
+
+    ⭐ RED ON THE PRE-13-Aug CODE BY CONSTRUCTION: it applied the fallback to
+    `system_score`, so with no eligible_score stored this row returned 60 — the
+    configured threshold printed in a per-signal score column. The achieved
+    score is 71 and must survive untouched.
+    """
     cfgdir = gui_config["paths"]["config_dir"]
     with open(os.path.join(cfgdir, "scoring_weights.yaml"), "w", encoding="utf-8") as fh:
         fh.write("min_pass_score: 60\n")
     _seed_chain(gui_config, sid="s04_fallback", symbol="TCS", score=71)
     r = _row(client, "s04_fallback")
     assert r is not None
-    assert r["system_score"] == 60
+    assert r["score_threshold"] == 60
+    assert r["system_score"] == 71, "the achieved score must never be replaced " \
+                                    "by the configured threshold"
     assert client.get("/api/signals").get_json()["min_pass_score"] == 60
 
 

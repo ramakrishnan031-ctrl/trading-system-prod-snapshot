@@ -13,7 +13,7 @@ from backend.readers import db_reader
 from backend.services import analytics_period, freshness
 
 from conftest import (TODAY, YDAY, TENDAYS,                    # noqa: E402
-                      assert_signal_score_confined_to_screen04)
+                      assert_signal_score_label_is_retired)
 
 
 # ── Period layer (anti-hallucination anchor) ─────────────────────────────────
@@ -149,7 +149,7 @@ def test_g5c_screens_render(client):
         assert client.get(route).status_code == 200, route
 
 
-# ── Additive-only: existing pinned shapes frozen; no "Signal Score" ──────────
+# ── Additive-only: pinned shapes frozen; "Signal Score" retired (L8 restored) 
 def test_pinned_shapes_frozen_after_g5c(client):
     assert len(client.get("/api/dashboard").get_json()["service_health"]) == 6
     assert len(client.get("/api/pipeline").get_json()["stages"]) == 13
@@ -161,4 +161,4 @@ def test_pinned_shapes_frozen_after_g5c(client):
 
 def test_no_signal_score_after_g5c():
     root = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend")
-    assert_signal_score_confined_to_screen04(root)
+    assert_signal_score_label_is_retired(root)

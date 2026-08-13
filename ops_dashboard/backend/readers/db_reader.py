@@ -1494,15 +1494,30 @@ def screener_scores(cfg: dict, signal_ids) -> dict:
 
 
 def signal_scores(cfg: dict, signal_ids) -> dict:
-    """{signal_id: {"signal_score": int|None, "system_score": int|None}}.
+    """{signal_id: {"system_score": int|None, "score_threshold": int|None}}.
 
-    Screen-04 shows TWO different numbers and they are NOT the same quantity:
-      * signal_score = `screener_results.score`         — THIS signal's own score.
-      * system_score = `screener_results.eligible_score` — the minimum score the
-        signal had to reach to be eligible (v14: per-strategy min_score threshold).
+    CANONICAL NAMING — Rama, 13-Aug-2026, and it is SYSTEM-WIDE, not a
+    Screen-07 preference:
+      * system_score    = `screener_results.score`         — the ACHIEVED score.
+      * score_threshold = `screener_results.eligible_score` — the minimum the
+        signal had to reach (v14: per-strategy min_score threshold).
+
+    ⛔ "Signal Score" is RETIRED as a label and as a key. ⛔ A threshold is never
+    presented as a score under any name — if a threshold is shown it is called
+    "Score Threshold". His words: *"Do not fabricate or relabel a threshold as a
+    score."*
+
+    ⚠️ THIS REVERSES THE MAPPING THIS FUNCTION SHIPPED UNTIL 13-Aug. It used to
+    return `system_score = eligible_score` (the THRESHOLD) and
+    `signal_score = score`. That was the 11-Aug Screen-04 supersession of L8;
+    tonight's ruling RESTORES L8 (`docs/G5_REDESIGN_PHASE_B.md:11`) and makes it
+    apply everywhere. ⭐ It also removes a real split-brain: `screener_scores()`
+    below has always returned the ACHIEVED score under the name "System Score"
+    for analytics/operations/trade_explorer/trade_logs, so the codebase carried
+    BOTH meanings of the same label at once.
 
     `eligible_score` is a v14 column: on an older DB (and in the test fixture)
-    it does not exist, so the SELECT is retried without it and system_score
+    it does not exist, so the SELECT is retried without it and score_threshold
     comes back None — the caller then falls back to the configured
     `min_pass_score`. Nothing here is ever fabricated.
     """
@@ -1529,8 +1544,9 @@ def signal_scores(cfg: dict, signal_ids) -> dict:
     out: dict = {}
     for r in rows:
         out[r["signal_id"]] = {
-            "signal_score": int(r["score"]) if r["score"] is not None else None,
-            "system_score": int(r["eligible"]) if r["eligible"] is not None else None,
+            "system_score": int(r["score"]) if r["score"] is not None else None,
+            "score_threshold": (int(r["eligible"])
+                                if r["eligible"] is not None else None),
         }
     return out
 

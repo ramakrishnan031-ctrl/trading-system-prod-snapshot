@@ -12,7 +12,7 @@ import os
 
 from flask import render_template_string
 
-from conftest import assert_signal_score_confined_to_screen04   # noqa: E402
+from conftest import assert_signal_score_label_is_retired   # noqa: E402
 
 
 def _render(app, snippet):
@@ -127,10 +127,10 @@ def test_pinned_contract_counts_unmoved(client):
         "net_pnl", "win_rate", "expectancy", "success_rate"}
 
 
-# ── L8: no "Signal Score" outside Screen-04 (superseded there on 11-Aug) ─────
+# ── L8 RESTORED 13-Aug-2026: no "Signal Score" ANYWHERE (exception closed) ───
 def test_no_signal_score_label_anywhere_in_frontend():
     root = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend")
-    assert_signal_score_confined_to_screen04(root)
+    assert_signal_score_label_is_retired(root)
 
 
 # ── Framework wiring: components.js loaded + URL-free (I7 CDN discipline) ─────

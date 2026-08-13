@@ -41,20 +41,25 @@ def get_signals():
         strategy=(request.args.get("strategy") or "").strip() or None,
         family=family,
     )
-    # Screen-04 shows TWO different quantities and they are not interchangeable:
-    #   signal_score = this signal's own score  (screener_results.score)
-    #   system_score = the minimum it had to reach (screener_results.eligible_score,
-    #                  falling back to the configured min_pass_score)
+    # CANONICAL, system-wide (Rama, 13-Aug-2026) — two different quantities that
+    # are NOT interchangeable:
+    #   system_score    = the ACHIEVED score        (screener_results.score)
+    #   score_threshold = the minimum it had to reach (screener_results.
+    #                     eligible_score, falling back to config min_pass_score)
+    # ⛔ "Signal Score" is retired. ⛔ The min_pass fallback belongs to the
+    # THRESHOLD only — applying it to system_score (as this did until 13-Aug)
+    # printed a config threshold in a per-signal score column.
     scores = db_reader.signal_scores(cfg, [r.get("signal_id") for r in rows])
     min_pass = config_reader.get_min_pass_score(cfg)
     for r in rows:
         s = scores.get(r.get("signal_id")) or {}
-        r["signal_score"] = s.get("signal_score")
-        sys_score = s.get("system_score")
-        r["system_score"] = min_pass if sys_score is None else sys_score
+        r["system_score"] = s.get("system_score")
+        thr = s.get("score_threshold")
+        r["score_threshold"] = min_pass if thr is None else thr
         # Rejections show the score that was reached vs the score required.
-        r["reject_score"] = r["signal_score"] if r.get("family") == "rejected" else None
-        r["required_score"] = r["system_score"] if r.get("family") == "rejected" else None
+        r["reject_score"] = r["system_score"] if r.get("family") == "rejected" else None
+        r["required_score"] = (r["score_threshold"]
+                               if r.get("family") == "rejected" else None)
     # Denominator strip (the ~82% pre-insert drop stays visible).
     funnel = db_reader.webhook_funnel(cfg, today)
     return jsonify({
@@ -107,19 +112,19 @@ def get_orders_screen():
     today = _date_param()
     rows = db_reader.order_screen_rows(cfg, today)
     ctx = db_reader.order_exec_context(cfg, [r.get("order_id") for r in rows])
-    # Same two score quantities Screen-04 shows, from the same reader — ⛔ no
+    # CANONICAL, system-wide (Rama, 13-Aug-2026), from the same reader — ⛔ no
     # scoring logic is invented here:
-    #   signal_score = this signal's own score (screener_results.score)
-    #   system_score = the minimum it had to reach (eligible_score, falling back
-    #                  to the configured min_pass_score)
+    #   system_score    = the ACHIEVED score (screener_results.score)
+    #   score_threshold = the minimum it had to reach (eligible_score, falling
+    #                     back to the configured min_pass_score)
     scores = db_reader.signal_scores(cfg, [r.get("signal_id") for r in rows])
     min_pass = config_reader.get_min_pass_score(cfg)
     for r in rows:
         r["exec"] = ctx.get(str(r.get("order_id"))) or None
         sc = scores.get(r.get("signal_id")) or {}
-        r["signal_score"] = sc.get("signal_score")
-        sys_score = sc.get("system_score")
-        r["system_score"] = min_pass if sys_score is None else sys_score
+        r["system_score"] = sc.get("system_score")
+        thr = sc.get("score_threshold")
+        r["score_threshold"] = min_pass if thr is None else thr
     return jsonify({
         "date": today,
         "count": len(rows),
@@ -226,7 +231,8 @@ def _position_rows_enriched(cfg, today: str) -> list:
     exc = db_reader.position_excursions(cfg, tids)
 
     # Same two score quantities Screens 04/05 show, from the same reader —
-    # ⛔ no scoring logic is invented here.
+    # ⛔ no scoring logic is invented here. CANONICAL (Rama, 13-Aug-2026):
+    # system_score = ACHIEVED; score_threshold = the minimum required.
     scores = db_reader.signal_scores(cfg, [r.get("signal_id") for r in rows])
     min_pass = config_reader.get_min_pass_score(cfg)
 
@@ -251,9 +257,9 @@ def _position_rows_enriched(cfg, today: str) -> list:
         r["mae_pct"] = ex.get("mae_pct")
 
         sc = scores.get(r.get("signal_id")) or {}
-        r["signal_score"] = sc.get("signal_score")
-        sys_score = sc.get("system_score")
-        r["system_score"] = min_pass if sys_score is None else sys_score
+        r["system_score"] = sc.get("system_score")
+        thr = sc.get("score_threshold")
+        r["score_threshold"] = min_pass if thr is None else thr
 
         rr = (strategies.get(r.get("strategy")) or {}).get("tgt_risk_reward")
         try:
@@ -299,7 +305,7 @@ _POS_EXPORT_COLS = [
     ("Trading Date", "date"), ("Time", "time"),
     ("Strategy", "strategy"), ("Symbol", "symbol"),
     ("Trade Type", "trade_type"), ("Direction", "direction"),
-    ("System Score", "system_score"), ("Signal Score", "signal_score"),
+    ("System Score", "system_score"), ("Score Threshold", "score_threshold"),
     ("Position Status", "position_status"),
     ("Qty (System)", "qty_system"), ("Qty (Position)", "qty_position"),
     ("Entry Price (System)", "entry_target_price"),

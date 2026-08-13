@@ -9,8 +9,10 @@
    Current Time/Log out) is base.html's summary-bar — untouched here.
 
    Two scores, deliberately distinct (Rama, 11-Aug):
-     System Score = the minimum score required for eligibility today
-     Signal Score = this signal's own score
+     System Score    = this signal's ACHIEVED score (screener_results.score)
+     Score Threshold = the minimum required for eligibility
+     CANONICAL system-wide, Rama 13-Aug-2026. The old second label is RETIRED;
+     a threshold is never presented as a score under any name.
    Both come from real columns; neither is ever synthesised. #}
 {% from "components.html" import export_button %}
 <div x-data="signalsPage()" x-init="boot()" @ops-refresh.window="boot()"
@@ -226,7 +228,7 @@
           <div class="sd-cell"><span class="sd-k">Time</span><span class="sd-v num" x-text="sel && sel.time"></span></div>
           <div class="sd-cell"><span class="sd-k">Trade Type</span><span class="sd-v" x-text="sel && (sel.trade_type || '—')"></span></div>
           <div class="sd-cell"><span class="sd-k">System Score</span><span class="sd-v num" x-text="sel && dash(sel.system_score)"></span></div>
-          <div class="sd-cell"><span class="sd-k">Signal Score</span><span class="sd-v num" x-text="sel && dash(sel.signal_score)"></span></div>
+          <div class="sd-cell"><span class="sd-k">Score Threshold</span><span class="sd-v num" x-text="sel && dash(sel.score_threshold)"></span></div>
           <div class="sd-cell"><span class="sd-k">Direction</span>
             <span class="sd-v dir-txt" :class="sel ? dirCls(sel.direction) : ''"
                   x-text="sel && (sel.direction ? cap(sel.direction) : '—')"></span></div>
@@ -330,8 +332,8 @@ function signalsPage() {
         { key: "symbol",           label: "Symbol",         kind: "sym" },
         { key: "trade_type",       label: "Trade Type",     kind: "type" },
         { key: "direction",        label: "Direction",      kind: "dir" },
-        { key: "system_score",     label: "System Score",   kind: "num", num: true },
-        { key: "signal_score",     label: "Signal Score",   kind: "num", num: true },
+        { key: "system_score",     label: "System Score",    kind: "num", num: true },
+        { key: "score_threshold",  label: "Score Threshold", kind: "num", num: true },
         { key: "status_label",     label: "Status",         kind: "status" },
         { key: "rejection_reason", label: "Reject Reason",  kind: "why" },
         { key: "reject_score",     label: "Reject Score",   kind: "num", num: true },
@@ -440,7 +442,7 @@ function signalsPage() {
             received_at: r.received_at,
             symbol: r.symbol, strategy: r.strategy,
             trade_type: r.trade_type, direction: r.direction,
-            system_score: r.system_score, signal_score: r.signal_score,
+            system_score: r.system_score, score_threshold: r.score_threshold,
             family: r.family, status: r.status,
             status_label: this.statusLabel(r),
             rejection_reason: r.rejection_reason,

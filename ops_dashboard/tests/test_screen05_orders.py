@@ -43,7 +43,7 @@ def test_scanner_has_no_filter_or_binding(tpl: str) -> None:
 # ── 2 · the approved column order ───────────────────────────────────────────
 APPROVED = [
     "date", "time", "strategy", "symbol", "trade_type", "direction",
-    "system_score", "signal_score",          # after Direction, before Broker Order ID
+    "system_score", "score_threshold",       # after Direction, before Broker Order ID
     "order_id", "status_label",
     "qty_requested", "qty_filled",          # Qty group: System / Filled
     "entry_target_price", "sl_initial", "tgt_initial",

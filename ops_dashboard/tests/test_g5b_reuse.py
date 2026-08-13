@@ -11,7 +11,7 @@ import os
 from backend.readers import db_reader
 from backend.services import strategy_tower
 
-from conftest import assert_signal_score_confined_to_screen04   # noqa: E402
+from conftest import assert_signal_score_label_is_retired   # noqa: E402
 
 
 # ── Additive readers — exact values on the seed ──────────────────────────────
@@ -112,10 +112,10 @@ def test_honest_gap_strings_rendered(client):
     assert "Pending Broker Source" in client.get("/capital-risk").get_data(as_text=True)
 
 
-# ── ExportButton still OFF everywhere; no "Signal Score" after G5b work ──────
+# ── ExportButton still OFF everywhere; "Signal Score" retired (L8 restored) ──
 def test_export_off_and_no_signal_score():
     root = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend")
-    assert_signal_score_confined_to_screen04(root)
+    assert_signal_score_label_is_retired(root)
 
 
 def test_export_button_disabled_on_g5b_screens(client):
