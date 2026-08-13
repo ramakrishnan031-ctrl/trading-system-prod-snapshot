@@ -809,6 +809,125 @@ final entry's SHA is one `git rev-parse` away.
 
 ---
 
+### Entry 12
+
+| Field | Value |
+|---|---|
+| **Date/time** | 2026-08-13 23:47 IST |
+| **Commit** | `10ac0f4f1da9b1e741bf84c21d7c9ef20494aa95` |
+| **Short** | `10ac0f4` |
+| **Branch** | `feat/screen06-positions` |
+| **Screen** | **Screen-07 Trade Explorer** — Rama's review corrections |
+| **Pushed** | **NO** |
+| **Deployed** | **NO** |
+| **Reason** | Special no-deployment window; branch still needs a refit onto `1c8c710` |
+
+**1 · Scanner removed — ⛔ by MEASUREMENT, not by opinion**
+
+Rama's premise was *"Strategy and Scanner are the same concept/data"*. It was
+checked before anything was deleted, and it holds far wider than the trades table:
+
+| population | rows | scanner = strategy | differing |
+|---|---|---|---|
+| trades | **603** | **603** | **0** |
+| **every signal ever received** | **127,246** | **127,246** | **0** |
+
+13 distinct values on each side. ⇒ the column printed **one value under two
+names**. Removed from the table, the filter bar, the detail drawer, the
+full-details popup, the export **and the API payload** — ⛔ not merely hidden, so
+it cannot return through a template edit alone. ⭐ This is the **same ruling
+Screen-06 already carries**; Screen-07 had reintroduced it and is now back in
+line. 📌 `/scanner-attribution` is untouched.
+
+**2 · Six columns centred** — Time, Trade Type, Direction, System Score, Score
+Threshold, Result. Both score columns **dropped `num: true`** rather than merely
+gaining `ctr`, or the cell would have carried `.rt` and `.ctr` at once. ⭐ A
+complementary test pins that real amounts stay RIGHT-aligned, so the alignment
+test cannot pass by centring everything.
+
+**3 · 🔴 THE ONE THAT WAS A DEFECT, NOT A PREFERENCE — the KPI deck was
+describing a different population from the table**
+
+Filters were applied in the **browser only**. Filtering to one strategy left the
+table showing 46 rows beneath a deck still reporting all **271** — and the pie,
+the win/loss donut, the direction bars, the strategy bars and the result chips
+were all on the unfiltered set too. ⇒ exactly the *"silently mixing"* Rama's
+item D forbids.
+
+✅ **Filters now go to the SERVER, which applies them BEFORE computing the KPIs
+and the summary — using `_apply_trade_filters`, the SAME function the export
+calls.** One list, one filter function, one set of numbers. ⛔ The arithmetic is
+**not** duplicated in JavaScript.
+- **Chip counts** are taken over everything filtered **except the result itself**
+  — a chip answers *"how many if I pick this"*. ⛔ Counting the final set would
+  read **0** on every unselected chip the moment one was chosen.
+- **Dropdown options** come from the **unfiltered** range — ⛔ deriving them from
+  the filtered rows collapses each list to the value already selected and leaves
+  a filter that cannot be changed.
+- A **scope line** under the deck states the base every number describes, and
+  highlights when a filter narrows it.
+
+**📏 Width — measured at five viewports, ⛔ not guessed**
+
+Scanner's width went **straight back into Strategy** (82 → 128px) rather than
+being spread thinly across 26 columns ⇒ ⭐ **all 13 strategy names now render IN
+FULL; there is no ellipsis anywhere on the screen.** The table then came to
+**1460** against the **1448** a 1680 viewport offers; the twelve pixels came from
+the numeric gutters (5 → 4px), ⛔ **not** from the Strategy cap — re-truncating
+the one name that had just become readable to save 12px is the wrong trade.
+
+| viewport | table | available | result |
+|---|---|---|---|
+| 2560 | 2048 | 2048 | **fits** |
+| 1920 | 1688 | 1688 | **fits** |
+| 1680 | 1448 | 1448 | **fits** |
+| 1600 | 1436 | 1368 | scrolls — fallback |
+
+**Verification — on real data, ⛔ not on the templates**
+
+- **6 real rows spanning EVERY outcome** (SL Hit · TGT Hit · Manual Exit ·
+  Closed · Failed · Rejected) reconciled field-by-field against the source DB
+  with every derived value recomputed independently — **120 checks, 0
+  mismatches**, including ROI, R-multiple, planned R:R, both score quantities and
+  the three-way SL/TGT split.
+- **Filters driven through the actual UI**: unfiltered **271** → `direction=SHORT`
+  **52** → `+ result=TGT Hit` **9**, with KPI total, table rows, pie total and the
+  pager agreeing at every step; chips recount to the SHORT subset
+  (9/7/4/27/5 = 52) and **stay put** when a result is selected; **Reset** restores
+  271.
+- **Alignment read as COMPUTED STYLE off the real cells**, ⛔ not from the
+  template source.
+- **Export re-checked**: 44 columns, no Scanner; sheet rows equal the screen count
+  both unfiltered (**271**) and filtered (**9**); on the TGT-Hit sheet **SL
+  (Filled) is populated 0 times** and **TGT (Filled) 9 of 9**.
+- Suite **561 passed / 1 failed** (537 → 561 = the 24 tests added). The failure is
+  the known environmental `test_c_venv_has_no_kiteconnect`.
+
+⚠️ **A test of mine failed first, for a good reason, and it is recorded rather
+than quietly fixed:** it filtered on `direction=LONG` to prove the deck narrows —
+but **every fixture trade is LONG**, so the filter removed nothing and `filtered`
+was correctly `False`. ⭐ The fixture was right and the test was vacuous.
+Rewritten to use a filter that bites, with an explicit assertion **that** it
+bites.
+
+---
+
+### Entry 13
+
+| Field | Value |
+|---|---|
+| **Date/time** | 2026-08-13 23:52 IST |
+| **Commit** | *(this entry; its SHA is the branch tip — `git rev-parse HEAD`)* |
+| **Branch** | `feat/screen06-positions` |
+| **Screen** | — (process artefact) |
+| **Pushed** | **NO** |
+| **Deployed** | **NO** |
+| **Reason** | Special no-deployment window |
+
+**Change summary** — records Entry 12 (`10ac0f4`).
+
+---
+
 ## ⚠️ Carried forward for tomorrow's deployment review
 
 0. 🔴 **`order_execution_log` cannot be joined by `order_id`, and Screen-05 is
