@@ -406,7 +406,6 @@ def _trade_filters() -> dict:
     g = lambda k: (request.args.get(k) or "").strip()  # noqa: E731
     return {
         "strategy": g("strategy"),
-        "scanner": g("scanner"),
         "symbol": g("symbol").upper(),
         "trade_type": g("trade_type"),
         "direction": g("direction").upper(),
@@ -421,8 +420,6 @@ def _apply_trade_filters(rows: list, f: dict) -> list:
     out = rows
     if f.get("strategy"):
         out = [r for r in out if r.get("strategy") == f["strategy"]]
-    if f.get("scanner"):
-        out = [r for r in out if r.get("scanner") == f["scanner"]]
     if f.get("symbol"):
         out = [r for r in out if str(r.get("symbol") or "").upper() == f["symbol"]]
     if f.get("trade_type"):
@@ -487,10 +484,32 @@ def get_trades_screen():
     the schema supports it: Entry (System/Filled), SL and TGT
     (System/Broker/Filled) — and the Filled column is populated ONLY when the
     trade's own exit_reason names that leg. See db_reader for the measurement.
+
+    ⭐⭐ THE FILTERS ARE APPLIED **HERE**, BEFORE THE KPIs AND THE SUMMARY PANELS
+    ARE COMPUTED (Rama, 14-Aug-2026). They used to be applied in the browser
+    only, so filtering to one strategy left the table showing 46 rows while the
+    deck above it still described all 271 — the cards and the table silently
+    describing different populations. Now every number on the screen is computed
+    from ONE list, by ONE filter function, which is the SAME function the export
+    calls. ⛔ The arithmetic is not duplicated in JavaScript.
     """
     cfg = current_app.config["GUI_CONFIG"]
     frm, to = _explorer_range()
-    rows = _trade_rows_enriched(cfg, frm, to)
+    f = _trade_filters()
+
+    unfiltered = _trade_rows_enriched(cfg, frm, to)
+    rows = _apply_trade_filters(unfiltered, f)
+
+    # RESULT CHIP COUNTS are taken over everything filtered EXCEPT the result
+    # itself. ⭐ Counting them over the final set would make every chip read 0
+    # the moment one was selected, which is exactly when the operator needs them
+    # to navigate. Each chip therefore answers "how many if I pick this,
+    # given my other filters" — ⛔ not "how many are showing".
+    counting_base = _apply_trade_filters(unfiltered, dict(f, result=""))
+    result_counts = {name: 0 for name in db_reader.TRADE_RESULTS}
+    for r in counting_base:
+        result_counts[r["result"]] = result_counts.get(r["result"], 0) + 1
+
     return jsonify({
         "from": frm, "to": to,
         "count": len(rows),
@@ -498,7 +517,20 @@ def get_trades_screen():
         "kpis": db_reader.trade_explorer_kpis(rows),
         "summary": db_reader.trade_explorer_summary(rows),
         "results": list(db_reader.TRADE_RESULTS),
+        "result_counts": result_counts,
         "row_cap": db_reader.trade_explorer_cap(),
+        # What the filters were understood to be, echoed back so the screen can
+        # state the base its numbers describe rather than implying one.
+        "filters": f,
+        "range_total": len(unfiltered),
+        "filtered": len(rows) != len(unfiltered),
+        # Dropdown options come from the UNFILTERED range — ⛔ never from the
+        # filtered rows, which would collapse each list to the value already
+        # chosen and make the filter impossible to change.
+        "options": {
+            "strategies": sorted({r["strategy"] for r in unfiltered if r.get("strategy")}),
+            "symbols": sorted({r["symbol"] for r in unfiltered if r.get("symbol")}),
+        },
         # The honest-absence contract, stated on the endpoint so a consumer
         # cannot miss it.
         "unavailable": {
@@ -513,7 +545,7 @@ def get_trades_screen():
 # Column order mirrors the approved table. (label, row-key)
 _TRADE_EXPORT_COLS = [
     ("Trading Date", "date"), ("Time", "time"),
-    ("Strategy", "strategy"), ("Scanner", "scanner"),
+    ("Strategy", "strategy"),
     ("Symbol", "symbol"), ("Trade Type", "trade_type"),
     ("Direction", "direction"),
     ("System Score", "system_score"), ("Score Threshold", "score_threshold"),

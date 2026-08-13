@@ -2463,7 +2463,13 @@ def trade_explorer_rows(cfg: dict, from_date: str, to_date: str,
         "       THEN COALESCE(t.gross_pnl,0) - COALESCE(t.net_pnl,0) "
         "     ELSE NULL END AS charges, "
         "t.closure_source, t.exit_mechanism, t.mode, "
-        "s.scanner AS scanner, s.received_at AS signal_received_at, "
+        # ⛔ `s.scanner` IS NOT PROJECTED. (P) 14-Aug: it equals
+        # trades.strategy on all 603 trades AND on all 127,246 signals ever
+        # received (13 distinct values each side, ZERO differing pairs), so
+        # carrying it would ship one value under two names. The JOIN stays
+        # for `received_at`, which is the lifecycle rail's first stamp and
+        # lives nowhere else. Scanner-level analysis: /scanner-attribution.
+        "s.received_at AS signal_received_at, "
         "o.product AS product, o.placed_at AS order_placed_at, "
         "o.filled_at AS order_filled_at, o.order_id AS entry_order_id "
         "FROM trades t "

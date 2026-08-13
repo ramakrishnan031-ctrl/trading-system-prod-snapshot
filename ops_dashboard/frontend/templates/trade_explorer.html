@@ -85,6 +85,12 @@
       <div class="kc-foot">Σ wins ÷ Σ |losses|</div></div>
   </div>
 
+  <!-- ⭐ THE BASE, STATED. Every card above and every panel below is computed
+       from the SAME filtered list the table shows, and this line says which list
+       that is — ⛔ so a filtered table can never sit under an unfiltered deck
+       without saying so. -->
+  <p class="tex-scope" :class="data.filtered ? 'is-filtered' : ''" x-text="scopeLine()"></p>
+
   <div class="ord-work">
     <div class="ord-left">
 
@@ -109,13 +115,10 @@
               <template x-for="s in strategyOptions()" :key="s"><option :value="s" x-text="s"></option></template>
             </select>
           </label>
-          <label class="flt-field">
-            <span class="flt-k">Scanner</span>
-            <select class="flt-c" x-model="f.scanner">
-              <option value="">All Scanners</option>
-              <template x-for="s in scannerOptions()" :key="s"><option :value="s" x-text="s"></option></template>
-            </select>
-          </label>
+          {# ⛔ NO SCANNER FILTER. It selected on a value identical to Strategy on
+             every row ever recorded (see the DEFAULT_COLS note), so it could only
+             ever have produced the same result set as the Strategy filter beside
+             it — two controls, one effect. #}
           <label class="flt-field">
             <span class="flt-k">Symbol</span>
             <select class="flt-c" x-model="f.symbol">
@@ -342,7 +345,6 @@
 
           <div class="od-kv">
             <div><span>Strategy</span><b x-text="dash(sel.strategy)"></b></div>
-            <div><span>Scanner</span><b x-text="dash(sel.scanner)"></b></div>
             <div><span>Trade Type</span><b x-text="dash(sel.trade_type)"></b></div>
             <div><span>Duration</span><b x-text="dur(sel.duration_sec)"></b></div>
           </div>
@@ -548,7 +550,6 @@
               <div class="od-kv od-kv2">
                 <div><span>Trading Date</span><b x-text="dash(full.date)"></b></div>
                 <div><span>Strategy</span><b x-text="dash(full.strategy)"></b></div>
-                <div><span>Scanner</span><b x-text="dash(full.scanner)"></b></div>
                 <div><span>Trade Type</span><b x-text="dash(full.trade_type)"></b></div>
                 <div><span>System Score</span><b x-text="dash(full.system_score)"></b></div>
                 <div><span>Score Threshold</span><b x-text="dash(full.score_threshold)"></b></div>
@@ -650,27 +651,40 @@ function explorerPage() {
       sel: null, tab: "overview", kpi: {}, sm: {}, full: null,
       RESULTS: ["TGT Hit", "SL Hit", "Manual Exit", "Expired", "Closed",
                 "Partial Exit", "Open", "Failed", "Rejected", "Cancelled"],
-      f:  { from_date: "", to_date: "", strategy: "", scanner: "", symbol: "",
+      f:  { from_date: "", to_date: "", strategy: "", symbol: "",
             trade_type: "", direction: "", result: "" },
-      af: { strategy: "", scanner: "", symbol: "", trade_type: "", direction: "", result: "" },
+      af: { strategy: "", symbol: "", trade_type: "", direction: "", result: "" },
 
-      /* APPROVED ORDER: the Screen-04/05/06 common head (Trading Date, Time,
-         Strategy, Symbol, Trade Type, Direction, System Score, Score Threshold)
-         with Scanner restored — this screen answers "which scanner produced the
-         trades that worked", which Positions deliberately does not ask.
+      /* APPROVED ORDER: the Screen-04/05/06 common head — Trading Date, Time,
+         Strategy, Symbol, Trade Type, Direction, System Score, Score Threshold.
          Qty / Entry / SL / TGT / P&L are GROUPED, so System · Broker · Filled sit
-         under one merged heading and can still be dragged apart. */
+         under one merged heading and can still be dragged apart.
+
+         ⛔ SCANNER IS ABSENT BY MEASUREMENT (Rama, 14-Aug-2026), which is the
+         SAME ruling Screen-06 already carries — Screen-07 had reintroduced it and
+         is now brought back into line. (P) `signals.scanner` EQUALS
+         `trades.strategy` on all 603 trades AND on all 127,246 signals ever
+         received: 13 distinct values on each side, ZERO differing pairs. So the
+         column was a second printing of one value, not a second fact.
+         📌 Scanner-level analysis has its own screen (/scanner-attribution) and
+         is unaffected. ⛔ No column, no filter, no detail row, no export column.
+
+         ⭐ CENTRED COLUMNS (Rama, 14-Aug-2026): Time, Trade Type, Direction,
+         System Score, Score Threshold and Result carry `ctr` rather than `num`.
+         They are labels and short codes, not quantities to be compared down the
+         column — ⛔ only measurable amounts stay right-aligned, which is what
+         makes the decimal points line up where that actually helps. */
       DEFAULT_COLS: [
         { key: "date",            label: "Trading Date",    kind: "text" },
-        { key: "time",            label: "Time",            kind: "text" },
+        { key: "time",            label: "Time",            kind: "text", ctr: true },
         { key: "strategy",        label: "Strategy",        kind: "text" },
-        { key: "scanner",         label: "Scanner",         kind: "text" },
         { key: "symbol",          label: "Symbol",          kind: "sym"  },
-        { key: "trade_type",      label: "Trade Type",      kind: "type" },
-        { key: "direction",       label: "Direction",       kind: "dir"  },
-        { key: "system_score",    label: "System Score",    kind: "num", num: true },
-        { key: "score_threshold", label: "Score Threshold", kind: "num", num: true },
-        { key: "result",          label: "Result",          kind: "result" },
+        { key: "trade_type",      label: "Trade Type",      kind: "type", ctr: true },
+        { key: "direction",       label: "Direction",       kind: "dir",  ctr: true },
+        /* ⛔ Centred, ⛔ NOT right-aligned: a score is a grade, not an amount. */
+        { key: "system_score",    label: "System Score",    kind: "num", ctr: true },
+        { key: "score_threshold", label: "Score Threshold", kind: "num", ctr: true },
+        { key: "result",          label: "Result",          kind: "result", ctr: true },
         { key: "duration_sec",    label: "Duration",        kind: "dur", ctr: true },
         { key: "qty_system",      label: "System", group: "Qty",     kind: "int", num: true },
         { key: "qty_filled",      label: "Filled", group: "Qty",     kind: "int", num: true },
@@ -695,12 +709,21 @@ function explorerPage() {
         { key: "net_pnl",         label: "Net",   group: "P&L ₹", kind: "signed", num: true },
       ],
       cols: [], dragKey: "", overKey: "", _dragEndAt: 0,
-      COLS_KEY: "screen07.trades.colOrder.v1",
+      /* v1 -> v2: the column SET changed (Scanner removed) and six columns became
+         centred. Bumping retires a stale saved order rather than relying on the
+         merge in initCols happening to reconcile a set it was not written for. */
+      COLS_KEY: "screen07.trades.colOrder.v2",
 
+      /* ⭐ EVERY filter goes to the SERVER. The KPI deck, the four summary
+         panels, the result chip counts and the table are then all computed from
+         one filtered list by one function — ⛔ the cards can no longer describe
+         a different population from the rows beneath them. It is also the same
+         function the export calls, so the sheet cannot disagree either. */
       qs() {
         const p = new URLSearchParams();
         if (this.f.from_date) p.set("from", this.f.from_date);
         if (this.f.to_date) p.set("to", this.f.to_date);
+        Object.keys(this.af).forEach(k => { if (this.af[k]) p.set(k, this.af[k]); });
         const s = p.toString();
         return s ? "?" + s : "";
       },
@@ -720,7 +743,11 @@ function explorerPage() {
         await this.fetchInto();
         if (!this.f.from_date && this.data && this.data.from) this.f.from_date = this.data.from;
         if (!this.f.to_date && this.data && this.data.to) this.f.to_date = this.data.to;
-        this.applyFilters();
+        /* ⛔ Sync the applied set WITHOUT calling applyFilters(), which now does
+           a server round trip — the first load has already fetched, and the
+           filter set is empty, so a second request would fetch the same rows. */
+        Object.keys(this.af).forEach(k => this.af[k] = this.f[k]);
+        this.tPage = 1;
       },
       /* THE POLL PATH. ⛔ Must not reset the pager or the filters — see the note
          on the root element. Same data, same view. */
@@ -935,34 +962,57 @@ function explorerPage() {
         return n > 8 ? "(top 8 of " + n + " by size)" : "";
       },
 
-      strategyOptions() { return [...new Set(this.rows().map(r => r.strategy).filter(Boolean))].sort(); },
-      scannerOptions()  { return [...new Set(this.rows().map(r => r.scanner).filter(Boolean))].sort(); },
-      symbolOptions()   { return [...new Set(this.rows().map(r => r.symbol).filter(Boolean))].sort(); },
+      /* Options come from the server, over the UNFILTERED range. ⛔ Deriving
+         them from the loaded rows would collapse each list to the value already
+         selected the moment a filter was applied — a filter you cannot change. */
+      strategyOptions() { return (this.data && this.data.options && this.data.options.strategies) || []; },
+      symbolOptions()   { return (this.data && this.data.options && this.data.options.symbols) || []; },
 
-      applyFilters() { Object.keys(this.af).forEach(k => this.af[k] = this.f[k]); this.tPage = 1; },
-      resetFilters() {
+      /* Applying a filter is a SERVER round trip, because the server is what
+         recomputes the deck and the panels. tPage returns to 1: this is a
+         different result set, not a different page of the same one. */
+      async applyFilters() {
+        Object.keys(this.af).forEach(k => this.af[k] = this.f[k]);
+        this.tPage = 1;
+        await this.fetchInto();
+      },
+      async resetFilters() {
         this.f = { from_date: (this.data && this.data.from) || "",
                    to_date: (this.data && this.data.to) || "",
-                   strategy: "", scanner: "", symbol: "", trade_type: "",
+                   strategy: "", symbol: "", trade_type: "",
                    direction: "", result: "" };
-        this.applyFilters();
+        await this.applyFilters();
       },
-      toggleResult(s) {
+      async toggleResult(s) {
         this.f.result = (this.f.result === s) ? "" : s;
-        this.applyFilters();
+        await this.applyFilters();
       },
 
-      view() {
-        const a = this.af;
-        return this.rows().filter(r =>
-          (!a.strategy   || r.strategy === a.strategy) &&
-          (!a.scanner    || r.scanner === a.scanner) &&
-          (!a.symbol     || r.symbol === a.symbol) &&
-          (!a.trade_type || r.trade_type === a.trade_type) &&
-          (!a.direction  || String(r.direction || "").toUpperCase() === a.direction) &&
-          (!a.result     || r.result === a.result));
+      /* The server already applied every filter, so the view IS the rows. ⛔ A
+         second client-side predicate here is exactly how the table and the deck
+         drifted apart in the first place. */
+      view() { return this.rows(); },
+      /* Counted over everything filtered EXCEPT the result itself — so a chip
+         says "how many if I pick this", ⛔ not "how many are showing", which
+         would read 0 on every other chip the moment one was selected. */
+      resultCount(s) {
+        const c = (this.data && this.data.result_counts) || {};
+        return c[s] || 0;
       },
-      resultCount(s) { return this.rows().filter(r => r.result === s).length; },
+      /* ⭐ The base every number on this screen describes, stated rather than
+         implied. When a filter narrows the set, the deck and the table move
+         together and this line says by how much. */
+      scopeLine() {
+        const d = this.data || {};
+        if (!d.from) return "";
+        const base = d.from + " → " + d.to;
+        if (!d.filtered) return base + " · all " + (d.range_total || 0) + " trades in range";
+        const on = Object.keys(this.af).filter(k => this.af[k])
+                         .map(k => k.replace(/_/g, " ") + " = " + this.af[k]);
+        return base + " · " + d.count + " of " + d.range_total +
+               " trades — filtered by " + on.join(", ") +
+               ". Every card, chart and count below describes this filtered set.";
+      },
       rangeLabel() {
         const n = this.view().length;
         if (!n) return "No entries";
@@ -1047,7 +1097,7 @@ function explorerPage() {
         const p = new URLSearchParams();
         if (this.f.from_date) p.set("from", this.f.from_date);
         if (this.f.to_date) p.set("to", this.f.to_date);
-        ["strategy", "scanner", "symbol", "trade_type", "direction", "result"]
+        ["strategy", "symbol", "trade_type", "direction", "result"]
           .forEach(k => { if (a[k]) p.set(k, a[k]); });
         window.location = "/api/export/trades?" + p.toString();
       },
