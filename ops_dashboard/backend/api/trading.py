@@ -7,6 +7,8 @@ Trading modules M2-M5 (all read-only, login_required, filtered + capped):
 """
 from __future__ import annotations
 
+from datetime import date
+
 from flask import Blueprint, current_app, jsonify, request
 
 from ..auth import login_required
@@ -361,6 +363,219 @@ def export_positions():
     return send_file(
         buf, as_attachment=True,
         download_name="positions_%s.xlsx" % today,
+        mimetype=("application/vnd.openxmlformats-officedocument"
+                  ".spreadsheetml.sheet"),
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Screen-07 Trade Explorer (14-Aug-2026). ADDITIVE — the G5c `/api/trades`
+# endpoint in api/analytics2.py is UNTOUCHED and still serves its own contract;
+# this screen gets `/api/trades/screen`, exactly as Screen-05 and Screen-06 got
+# `/api/orders/screen` and `/api/positions/screen` beside the originals.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_EXPLORER_DEFAULT_DAYS = 30
+
+
+def _explorer_range() -> tuple:
+    """(from_date, to_date) — a real RANGE, because the Explorer's question is
+    historical. Defaults to the last 30 days ending today; ⛔ never silently
+    widened to 'everything', which would make the KPI deck describe a period the
+    operator did not choose."""
+    from datetime import timedelta
+
+    def _iso(v):
+        v = (v or "").strip()
+        return v if (len(v) == 10 and v[4] == "-" and v[7] == "-") else None
+
+    to = _iso(request.args.get("to")) or freshness.ist_today_iso()
+    frm = _iso(request.args.get("from"))
+    if frm is None:
+        try:
+            end = date.fromisoformat(to)
+            frm = (end - timedelta(days=_EXPLORER_DEFAULT_DAYS)).isoformat()
+        except ValueError:
+            frm = to
+    if frm > to:
+        frm, to = to, frm
+    return frm, to
+
+
+def _trade_filters() -> dict:
+    g = lambda k: (request.args.get(k) or "").strip()  # noqa: E731
+    return {
+        "strategy": g("strategy"),
+        "scanner": g("scanner"),
+        "symbol": g("symbol").upper(),
+        "trade_type": g("trade_type"),
+        "direction": g("direction").upper(),
+        "result": g("result"),
+    }
+
+
+def _apply_trade_filters(rows: list, f: dict) -> list:
+    """Server-side twin of the client's view(). ⭐ THE EXPORT CALLS THIS SAME
+    FUNCTION, so "the sheet is the filtered result set" is true by construction
+    rather than by two implementations that drift apart."""
+    out = rows
+    if f.get("strategy"):
+        out = [r for r in out if r.get("strategy") == f["strategy"]]
+    if f.get("scanner"):
+        out = [r for r in out if r.get("scanner") == f["scanner"]]
+    if f.get("symbol"):
+        out = [r for r in out if str(r.get("symbol") or "").upper() == f["symbol"]]
+    if f.get("trade_type"):
+        out = [r for r in out if r.get("trade_type") == f["trade_type"]]
+    if f.get("direction"):
+        out = [r for r in out
+               if str(r.get("direction") or "").upper() == f["direction"]]
+    if f.get("result"):
+        out = [r for r in out if r.get("result") == f["result"]]
+    return out
+
+
+def _trade_rows_enriched(cfg, frm: str, to: str) -> list:
+    """Rows + broker-standing exits + excursions + the two score quantities.
+
+    ⭐ EVERY ENRICHMENT REUSES SCREEN-06's READER. The broker-standing SL/TGT
+    comes from db_reader.position_broker_exits — the same function, with the
+    same superseded-leg exclusion — so the Explorer and Positions can never
+    report a different standing trigger for the same trade.
+
+    ⛔ Every join is a LEFT join in spirit: no exit legs, no excursion row or no
+    score leaves None and the UI renders an em-dash. Nothing defaults to zero.
+    """
+    rows = db_reader.trade_explorer_rows(cfg, frm, to)
+    tids = [r.get("trade_id") for r in rows]
+    exits = db_reader.position_broker_exits(cfg, tids)
+    exc = db_reader.position_excursions(cfg, tids)
+
+    # CANONICAL, system-wide (Rama, 13-Aug-2026) — the same two quantities
+    # Screens 04/05/06 show, from the same reader. ⛔ No scoring logic here.
+    #   system_score    = the ACHIEVED score        (screener_results.score)
+    #   score_threshold = the minimum it had to reach (eligible_score, falling
+    #                     back to the configured min_pass_score)
+    scores = db_reader.signal_scores(cfg, [r.get("signal_id") for r in rows])
+    min_pass = config_reader.get_min_pass_score(cfg)
+
+    for r in rows:
+        tid = str(r.get("trade_id"))
+        bx = exits.get(tid) or {}
+        r["sl_broker"] = bx.get("sl_broker")
+        r["sl_broker_status"] = bx.get("sl_broker_status")
+        r["tgt_broker"] = bx.get("tgt_broker")
+        r["tgt_broker_status"] = bx.get("tgt_broker_status")
+
+        ex = exc.get(tid) or {}
+        r["mfe_pct"] = ex.get("mfe_pct")
+        r["mae_pct"] = ex.get("mae_pct")
+
+        sc = scores.get(r.get("signal_id")) or {}
+        r["system_score"] = sc.get("system_score")
+        thr = sc.get("score_threshold")
+        r["score_threshold"] = min_pass if thr is None else thr
+    return rows
+
+
+@trading_api.route("/api/trades/screen", methods=["GET"])
+@login_required
+def get_trades_screen():
+    """Screen-07 Trade Explorer. ADDITIVE — /api/trades (G5c) is untouched.
+
+    Row grain is the TRADE over a date range. Prices are split three ways where
+    the schema supports it: Entry (System/Filled), SL and TGT
+    (System/Broker/Filled) — and the Filled column is populated ONLY when the
+    trade's own exit_reason names that leg. See db_reader for the measurement.
+    """
+    cfg = current_app.config["GUI_CONFIG"]
+    frm, to = _explorer_range()
+    rows = _trade_rows_enriched(cfg, frm, to)
+    return jsonify({
+        "from": frm, "to": to,
+        "count": len(rows),
+        "rows": rows,
+        "kpis": db_reader.trade_explorer_kpis(rows),
+        "summary": db_reader.trade_explorer_summary(rows),
+        "results": list(db_reader.TRADE_RESULTS),
+        "row_cap": db_reader.trade_explorer_cap(),
+        # The honest-absence contract, stated on the endpoint so a consumer
+        # cannot miss it.
+        "unavailable": {
+            "fields": ["sl_filled", "tgt_filled"],
+            "reason": "orders.avg_fill_price is NULL on every order ever placed; "
+                      "a leg's executed price is known only when the trade's "
+                      "exit_reason names that leg (SL_HIT / TGT_HIT).",
+        },
+    })
+
+
+# Column order mirrors the approved table. (label, row-key)
+_TRADE_EXPORT_COLS = [
+    ("Trading Date", "date"), ("Time", "time"),
+    ("Strategy", "strategy"), ("Scanner", "scanner"),
+    ("Symbol", "symbol"), ("Trade Type", "trade_type"),
+    ("Direction", "direction"),
+    ("System Score", "system_score"), ("Score Threshold", "score_threshold"),
+    ("Result", "result"), ("Duration (sec)", "duration_sec"),
+    ("Qty (System)", "qty_system"), ("Qty (Filled)", "qty_filled"),
+    ("Entry (System)", "entry_target_price"),
+    ("Entry (Filled)", "entry_actual_price"),
+    ("SL (System)", "sl_initial"), ("SL (Broker)", "sl_broker"),
+    ("SL (Filled)", "sl_filled"),
+    ("TGT (System)", "tgt_initial"), ("TGT (Broker)", "tgt_broker"),
+    ("TGT (Filled)", "tgt_filled"),
+    ("SL Points (Rs/share)", "sl_points"),
+    ("TGT Points (Rs/share)", "tgt_points"),
+    ("Slippage (Rs/share)", "slippage_rs"), ("Slippage %", "slippage_pct"),
+    ("Slippage Source", "slippage_source"),
+    ("R:R (planned)", "rr_applied"), ("R:R (implied by levels)", "expected_rr"),
+    ("R-multiple (achieved)", "r_multiple"),
+    ("Committed Capital", "capital_committed"), ("ROI %", "roi_pct"),
+    ("Risk Amount", "risk_amount"),
+    ("Gross P&L", "gross_pnl"), ("Charges", "charges"), ("Net P&L", "net_pnl"),
+    ("Highest Profit %", "mfe_pct"), ("Highest Drawdown %", "mae_pct"),
+    ("Exit Price", "exit_price"), ("Exit Reason", "exit_reason"),
+    ("Closure Source", "closure_source"), ("Exit Mechanism", "exit_mechanism"),
+    ("Entry Time", "entry_time"), ("Exit Time", "exit_time"),
+    ("Sector", "sector"), ("Trade ID", "trade_id"),
+]
+
+
+@trading_api.route("/api/export/trades", methods=["GET"])
+@login_required
+def export_trades():
+    """XLSX of the FILTERED Trade Explorer result set.
+
+    ⭐ The filters are applied by _apply_trade_filters — the same function the
+    screen's contract test pins — so the sheet and the table cannot disagree.
+    ⛔ "Signal Score" is not a column here or anywhere: the two quantities are
+    System Score (achieved) and Score Threshold (required).
+    """
+    import io
+
+    from openpyxl import Workbook
+    from flask import send_file
+
+    cfg = current_app.config["GUI_CONFIG"]
+    frm, to = _explorer_range()
+    rows = _apply_trade_filters(_trade_rows_enriched(cfg, frm, to),
+                                _trade_filters())
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Trades"
+    ws.append([label for label, _ in _TRADE_EXPORT_COLS])
+    for r in rows:
+        ws.append([r.get(key) for _, key in _TRADE_EXPORT_COLS])
+    ws.freeze_panes = "A2"
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return send_file(
+        buf, as_attachment=True,
+        download_name="trades_%s_to_%s.xlsx" % (frm, to),
         mimetype=("application/vnd.openxmlformats-officedocument"
                   ".spreadsheetml.sheet"),
     )

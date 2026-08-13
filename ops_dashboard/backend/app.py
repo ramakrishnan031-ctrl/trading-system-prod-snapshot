@@ -42,6 +42,59 @@ _DEFAULT_CONFIG = os.path.join(_HERE, "config", "gui_config.yaml")
 
 _LOGIN_EXEMPT = {"auth.login_get", "auth.login_post"}
 
+# Hosts that count as "this machine" for the local-development session bootstrap
+# below. ⛔ Deliberately a closed set — no CIDR parsing, no hostname resolution,
+# nothing that could be widened by a DNS answer.
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+# The environment variable that ARMS the local-development session bootstrap.
+# ⭐ It is the gate that a git push cannot carry: it lives in the developer's
+# shell, never in a tracked file and never in a config file, so no branch merge
+# and no `checkout -f` can turn the bootstrap on anywhere.
+_LOCAL_DEV_ENV = "OPS_DASHBOARD_LOCAL_DEV"
+
+
+def _is_loopback_client(addr: Optional[str]) -> bool:
+    """True only for a request that originated on this machine.
+
+    127.0.0.0/8 is matched by prefix (a client can legitimately arrive as
+    127.0.0.1 or 127.0.1.1); everything else must match the closed set exactly.
+    """
+    a = (addr or "").strip()
+    if not a:
+        return False
+    if a.startswith("::ffff:"):          # IPv4-mapped IPv6
+        a = a[7:]
+    return a in _LOOPBACK_HOSTS or a.startswith("127.")
+
+
+def _local_dev_armed(cfg: dict) -> bool:
+    """Whether the LOCAL-DEVELOPMENT session bootstrap may run at all.
+
+    ⛔⛔ THIS IS NOT AN AUTHENTICATION BYPASS FOR THE APPLICATION. It is a
+    development-only convenience so a screen URL can be opened directly during
+    visual verification, and it is armed only when ALL of these hold:
+
+      1. `local_dev.auto_login: true` in the merged config. The TRACKED
+         gui_config.yaml ships **false**; the value is meant to be set only in
+         gui_config.local.yaml, which is git-ignored.
+      2. The environment carries OPS_DASHBOARD_LOCAL_DEV=1. ⭐ THIS IS THE GATE
+         THAT CANNOT TRAVEL: it is not in any file, so it cannot ride a push, a
+         merge or the post-receive `checkout -f`, and the VM's systemd unit does
+         not set it.
+      3. The server is bound to a loopback host (isolation rule I6).
+      4. — checked per request — the client itself is on the loopback interface.
+
+    ⚠️ (1) and (3) alone would NOT protect the VM, whose GUI also binds
+    127.0.0.1 behind a TLS terminator; (2) is what makes the guard hold there.
+    """
+    if not bool((cfg.get("local_dev") or {}).get("auto_login", False)):
+        return False
+    if (os.environ.get(_LOCAL_DEV_ENV) or "").strip() != "1":
+        return False
+    bind = str((cfg.get("server") or {}).get("bind_host", "127.0.0.1"))
+    return bind in _LOOPBACK_HOSTS
+
 # The Flask session key is persisted here when `auth.secret_key` is not configured.
 # data_store/ is gitignored and survives the post-receive `checkout -f`, so the key
 # outlives both restarts and deploys.
@@ -166,11 +219,37 @@ def create_app(config_path: Optional[str] = None, gui_config: Optional[dict] = N
             "reports_download_enabled": bool(cfg.get("reports_download_enabled", False)),
         }}
 
+    # Resolved ONCE at start-up so the decision is visible in the log rather
+    # than re-derived silently on every request.
+    local_dev = _local_dev_armed(cfg)
+    app.config["LOCAL_DEV_AUTO_LOGIN"] = local_dev
+    if local_dev:
+        # ASCII ONLY in console/log output. The Windows console encodes with
+        # cp1252 and a non-ASCII character here raises UnicodeEncodeError at
+        # start-up — i.e. the warning would take the server down instead of
+        # warning anyone. Comments and templates stay UTF-8; console text does not.
+        app.logger.warning(
+            "gui: LOCAL-DEVELOPMENT session bootstrap is ARMED - loopback "
+            "clients are authenticated without the login form. This requires "
+            "local_dev.auto_login=true AND %s=1 AND a loopback bind, and it is "
+            "refused for any non-loopback client. Never enable it on a "
+            "deployed host.", _LOCAL_DEV_ENV,
+        )
+
     @app.before_request
     def _enforce_login():
         if request.endpoint in _LOGIN_EXEMPT:
             return None
         if session.get("user"):
+            return None
+        # LOCAL-DEVELOPMENT ONLY — see _local_dev_armed for the four gates.
+        # The per-request gate is here because the other three are properties of
+        # the process, and this one is a property of the caller.
+        if (current_app.config.get("LOCAL_DEV_AUTO_LOGIN")
+                and _is_loopback_client(request.remote_addr)):
+            session["user"] = str(
+                (cfg.get("local_dev") or {}).get("username") or "local-dev")
+            session["local_dev"] = True          # marks the session's provenance
             return None
         if request.path.startswith("/api/"):
             return jsonify({"error": "authentication required"}), 401
@@ -238,9 +317,13 @@ def main() -> int:
     host = server.get("bind_host", "127.0.0.1")
     port = int(server.get("bind_port", 8500))
     threads = int(server.get("threads", 4))
-    if host not in ("127.0.0.1", "localhost", "::1"):
+    if host not in _LOOPBACK_HOSTS:
         raise RuntimeError(f"Refusing to bind non-loopback host {host!r} (isolation rule I6).")
     print(f"ops_dashboard serving on http://{host}:{port} (loopback only)")
+    if app.config.get("LOCAL_DEV_AUTO_LOGIN"):
+        print("  LOCAL-DEV session bootstrap ARMED - loopback clients skip the "
+              "login form. Screens open directly, e.g. /trades. "
+              "Development only; never on a deployed host.")
     serve(app, host=host, port=port, threads=threads)
     return 0
 

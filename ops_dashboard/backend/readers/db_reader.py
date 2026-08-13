@@ -2230,3 +2230,428 @@ def position_summary(cfg: dict, today: str) -> dict:
         "status_breakdown": breakdown,
         "status_total": len(rows),
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Screen-07 Trade Explorer (14-Aug-2026)
+#
+# ROW GRAIN = the TRADE, over a DATE RANGE. Screen-06's grain is also the trade
+# but its question is "what is open right now"; this one is "what happened, and
+# why". They stay separate readers.
+#
+# ⭐ WHAT IS NEW HERE, AND WHY IT COULD NOT LIVE ON SCREEN-06:
+#   ROI          net_pnl / margin_reserved            — realised return on the
+#                capital actually COMMITTED. ⛔ NOT on the leveraged notional
+#                (qty x price), which would flatter every intraday row by the
+#                leverage factor. margin_reserved is populated and > 0 on all
+#                603 trades (measured 13-Aug), so the denominator is real.
+#   R-multiple   net_pnl / risk_amount                — the realised outcome in
+#                units of the risk taken. ⛔ A DIFFERENT QUANTITY FROM R:R and
+#                never a substitute for it: R:R is what was PLANNED, R-multiple
+#                is what was ACHIEVED. Both are shown, side by side.
+#   SL/TGT       Filled = the price at which that leg ACTUALLY EXECUTED, and it
+#                exists here only because a CLOSED trade records it.
+#
+# ⛔⛔ THE FILLED COLUMNS ARE NOT FABRICATED, AND THE RULE IS NARROW:
+#    orders.avg_fill_price is STILL NULL on all 977 orders ever placed
+#    (re-measured 13-Aug: ENTRY 469 / SL 247 / TGT 235 / EOD 26, zero populated
+#    in every leg) — Screen-06's finding reproduces on a larger corpus. The
+#    executed price lives on trades.exit_price, and trades.exit_reason NAMES the
+#    leg that fired. So, and ONLY so:
+#        exit_reason = SL_HIT   ⇒ SL (Filled)  = exit_price
+#        exit_reason = TGT_HIT  ⇒ TGT (Filled) = exit_price
+#    Every other reason leaves BOTH empty. ⚠️ GTT_EXIT is a MECHANISM, not a
+#    leg — it does not say whether the stop or the target went, so it fills
+#    NEITHER column (the same treatment _position_status_of gives it).
+#    (P) 114/114 SL_HIT and 76/76 TGT_HIT rows carry an exit_price.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# The Explorer is historical, so its cap is the range cap the other range
+# readers use (closed_trades_range), NOT the 500-row today cap.
+_EXPLORER_CAP = 2000
+
+TRADE_RESULTS = ("TGT Hit", "SL Hit", "Manual Exit", "Expired", "Closed",
+                 "Partial Exit", "Open", "Failed", "Rejected", "Cancelled")
+
+
+def trade_explorer_cap() -> int:
+    return _EXPLORER_CAP
+
+
+def _trade_result_of(r: dict) -> str:
+    """Derived outcome. ⭐ Reuses Screen-06's exit-reason vocabulary constants
+    (_POS_SL/_POS_TGT/_POS_MANUAL/_POS_EXPIRED) rather than re-typing them, so
+    the two screens can never disagree about what SL_HIT means.
+
+    ⛔ Nothing is guessed: an unrecognised exit_reason resolves to the neutral
+    'Closed', never to SL Hit / TGT Hit.
+
+    ⚠️ The Explorer sees the states Screen-06 never shows, because two-thirds of
+    all trade rows never opened exposure: FAILED 278 / REJECTED 69 /
+    CANCELLED 9 of 603 (measured 13-Aug). They are their own results — ⛔ NOT
+    folded into 'Closed', which would read as a completed round trip.
+    """
+    st = (r.get("status") or "").upper()
+    if st == "FAILED":
+        return "Failed"
+    if st == "REJECTED":
+        return "Rejected"
+    if st in ("CANCELLED", "CANCELED"):
+        return "Cancelled"
+    if st in ("OPEN", "EXITING", "PENDING_FILL"):
+        return "Open"
+    if st == "PARTIAL":
+        return "Partial Exit"
+    reason = (r.get("exit_reason") or "").upper()
+    if st == "CLOSED_MANUAL" or reason in _POS_MANUAL:
+        return "Manual Exit"
+    if reason in _POS_SL:
+        return "SL Hit"
+    if reason in _POS_TGT:
+        return "TGT Hit"
+    if reason in _POS_EXPIRED:
+        return "Expired"
+    return "Closed"
+
+
+def roi_pct(net_pnl, margin_reserved) -> Optional[float]:
+    """ROI = 100 x net_pnl / margin_reserved.
+
+    📌 THE BASE IS THE COMMITTED (RESERVED) CAPITAL — the money the system
+    actually set aside for this trade. ⛔ NOT the position notional
+    (qty x price): with intraday leverage the notional is several times the
+    margin, so dividing by it would report a materially smaller return and
+    would answer a question nobody asked.
+
+    ⛔ Returns None — never 0.0 — when the P&L is unknown or the margin is
+    missing/zero. A zero would read as "this trade returned nothing".
+    """
+    if net_pnl is None or margin_reserved in (None, 0):
+        return None
+    try:
+        m = float(margin_reserved)
+        if m <= 0:
+            return None
+        return round(float(net_pnl) / m * 100.0, 2)
+    except (TypeError, ValueError):
+        return None
+
+
+def r_multiple(net_pnl, risk_amount) -> Optional[float]:
+    """R-multiple = net_pnl / risk_amount — the realised result expressed in
+    units of the risk that was taken.
+
+    ⛔⛔ THIS IS NOT R:R AND MUST NEVER BE PRINTED IN AN R:R COLUMN. R:R is the
+    ratio the strategy PLANNED (reward per unit of risk, decided before entry);
+    R-multiple is what the trade ACHIEVED. A trade with R:R 1.5 that stops out
+    scores about -1R; the two numbers answer different questions and both are
+    shown.
+    """
+    if net_pnl is None or risk_amount in (None, 0):
+        return None
+    try:
+        risk = float(risk_amount)
+        if risk <= 0:
+            return None
+        return round(float(net_pnl) / risk, 2)
+    except (TypeError, ValueError):
+        return None
+
+
+def _duration_sec(entry_time, exit_time) -> Optional[int]:
+    """Holding period in seconds. None unless BOTH stamps exist — ⛔ an open
+    trade's duration is not measured against 'now' here, because the row would
+    then change every time the page is refreshed."""
+    if not entry_time or not exit_time:
+        return None
+    try:
+        from datetime import datetime
+        a = datetime.fromisoformat(str(entry_time))
+        b = datetime.fromisoformat(str(exit_time))
+        return max(0, int((b - a).total_seconds()))
+    except (TypeError, ValueError):
+        return None
+
+
+def entry_slippage(entry_system, entry_filled, direction):
+    """(rupees_per_share, percent) of ENTRY slippage. POSITIVE = ADVERSE.
+
+        LONG   filled - system      (bought higher than intended = worse)
+        SHORT  system - filled      (sold lower than intended = worse)
+
+    ⭐⭐ THIS FORMULA IS NOT INVENTED — IT IS THE PRODUCTION ONE, RECOVERED AND
+    VERIFIED. order_execution_log records slippage_rs/slippage_pct, but its
+    `parent_trade_id` was only back-filled from July (measured: 0/72 rows in
+    June, 100/290 in July, 74/74 in August), so only 91 of 246 filled trades can
+    be joined to a recorded row.
+
+    Rather than leave 63% of the column empty, the recorded rows were used as
+    the CONTROL: on all 91 overlapping trades this formula reproduces
+    `slippage_rs` to <=0.005 and `slippage_pct` to <=0.01, and the log's own
+    `intended_price`/`actual_price` are equal to trades.entry_target_price /
+    trades.entry_actual_price on 91/91. ⇒ the derived value is the SAME function
+    of the SAME operands, ⛔ not a second definition.
+
+    The row still says which source it used (`slippage_source`), so a reader can
+    tell a recorded measurement from a reproduced one.
+    """
+    if entry_system is None or entry_filled is None:
+        return None, None
+    try:
+        sysp, fill = float(entry_system), float(entry_filled)
+    except (TypeError, ValueError):
+        return None, None
+    d = (fill - sysp) if str(direction or "").upper() == "LONG" else (sysp - fill)
+    pct = (d / sysp * 100.0) if sysp else None
+    return round(d, 4), (round(pct, 4) if pct is not None else None)
+
+
+def trade_recorded_slippage(cfg: dict, trade_ids) -> dict:
+    """{trade_id: {slippage_rs, slippage_pct, intended_price, actual_price}} for
+    the ENTRY leg, from order_execution_log.
+
+    ⚠️⚠️ THE JOIN KEY IS `parent_trade_id`, AND THAT IS A MEASURED CHOICE, NOT A
+    PREFERENCE: `order_execution_log.order_id` holds an INTERNAL id
+    (`ord_<hex>`) while `orders.order_id` holds the BROKER id (`260813170888908`).
+    They are DIFFERENT ID SPACES — joining them returns 0 rows on production
+    data for every trade ever placed. ⛔ Do not "simplify" this to an order_id
+    join.
+    """
+    ids = [str(t) for t in (trade_ids or []) if t]
+    if not ids:
+        return {}
+    out: dict = {}
+    with _ro(cfg) as conn:
+        for chunk in (ids[i:i + 400] for i in range(0, len(ids), 400)):
+            q = ("SELECT parent_trade_id, intended_price, actual_price, "
+                 "slippage_rs, slippage_pct FROM order_execution_log "
+                 "WHERE leg = 'ENTRY' AND parent_trade_id IN (" +
+                 ",".join("?" * len(chunk)) + ") ORDER BY id ASC")
+            for r in conn.execute(q, tuple(chunk)).fetchall():
+                # ORDER BY id ASC ⇒ the LATEST row wins deterministically when a
+                # retry produced more than one (measured: 1 trade in 603).
+                out[str(r["parent_trade_id"])] = dict(r)
+    return out
+
+
+def trade_explorer_rows(cfg: dict, from_date: str, to_date: str,
+                        limit: int = _EXPLORER_CAP) -> list:
+    """Trades whose TRADING DAY falls in [from_date, to_date], shaped for
+    Screen-07. Read-only.
+
+    📌 DATED BY `COALESCE(entry_time, created_at)` — the day the trade HAPPENED,
+    the same rule Screen-06 uses. ⛔ NOT by exit_time: a trade that never filled
+    has no exit and would vanish from its own day, and two-thirds of all rows
+    are exactly that. The exit day is carried separately as `exit_date`.
+    """
+    sql = (
+        "SELECT t.trade_id, t.signal_id, t.symbol, t.strategy, t.direction, "
+        "t.status, t.sector, t.qty_planned, t.qty_filled, "
+        "t.entry_target_price, t.entry_actual_price, t.sl_initial, t.tgt_initial, "
+        "t.risk_amount, t.margin_reserved, t.actual_position_value_rs, "
+        "t.tgt_risk_reward_applied, t.binding_constraint, "
+        "t.created_at, t.entry_time, t.exit_time, "
+        "t.exit_price, t.exit_reason, t.gross_pnl, t.net_pnl, "
+        # ⛔ THE gross-minus-net FALLBACK IS GATED ON A ROUND TRIP HAVING
+        # HAPPENED. The ungated form (used by trades_in_range) yields 0.00 for
+        # every trade that never opened exposure — and two-thirds of all rows
+        # are exactly that — so a Charges column would print a measured-looking
+        # zero for 161 of 271 rows. NULL is the truth there: nothing was traded,
+        # so nothing was charged and nothing was recorded.
+        "CASE WHEN t.charges IS NOT NULL THEN t.charges "
+        "     WHEN t.gross_pnl IS NOT NULL OR t.net_pnl IS NOT NULL "
+        "       THEN COALESCE(t.gross_pnl,0) - COALESCE(t.net_pnl,0) "
+        "     ELSE NULL END AS charges, "
+        "t.closure_source, t.exit_mechanism, t.mode, "
+        "s.scanner AS scanner, s.received_at AS signal_received_at, "
+        "o.product AS product, o.placed_at AS order_placed_at, "
+        "o.filled_at AS order_filled_at, o.order_id AS entry_order_id "
+        "FROM trades t "
+        "LEFT JOIN signals s ON s.signal_id = t.signal_id "
+        "LEFT JOIN orders o ON o.trade_id = t.trade_id AND o.leg = 'ENTRY' "
+        "WHERE substr(COALESCE(t.entry_time, t.created_at), 1, 10) BETWEEN ? AND ? "
+        "ORDER BY COALESCE(t.entry_time, t.created_at) DESC LIMIT ?"
+    )
+    with _ro(cfg) as conn:
+        rows = [dict(r) for r in conn.execute(
+            sql, (from_date, to_date,
+                  max(1, min(int(limit), _EXPLORER_CAP)))).fetchall()]
+
+    recorded = trade_recorded_slippage(cfg, [r["trade_id"] for r in rows])
+
+    for r in rows:
+        stamp = r.get("entry_time") or r.get("created_at") or ""
+        r["date"] = stamp[:10]
+        r["time"] = stamp[11:19]
+        r["exit_date"] = (r.get("exit_time") or "")[:10] or None
+        r["trade_type"] = _trade_type_of_product(r.get("product"))
+        r["result"] = _trade_result_of(r)
+
+        # Qty: the system-ordered quantity and the broker-filled one are kept
+        # side by side, never collapsed — Screen-06's rule, unchanged.
+        r["qty_system"] = r.get("qty_planned")
+        r["qty_filled"] = r.get("qty_filled")
+
+        direction = r.get("direction")
+        entry_sys = r.get("entry_target_price")
+
+        # ── SL / TGT: System · Broker · Filled ────────────────────────────────
+        # System and Filled are computed here; Broker is joined by the caller
+        # from position_broker_exits (the SAME reader Screen-06 uses, so the
+        # standing trigger cannot be reported two different ways).
+        reason = (r.get("exit_reason") or "").upper()
+        exit_px = r.get("exit_price")
+        r["sl_filled"] = exit_px if reason in _POS_SL else None
+        r["tgt_filled"] = exit_px if reason in _POS_TGT else None
+
+        r["sl_points"] = _level_points(entry_sys, r.get("sl_initial"), direction, True)
+        r["tgt_points"] = _level_points(entry_sys, r.get("tgt_initial"), direction, False)
+
+        # ── R:R (planned) vs R-multiple (achieved) ────────────────────────────
+        # R:R comes from the trade's OWN recorded ratio, ⛔ not from today's
+        # strategy YAML: this screen shows history, and a YAML edited since would
+        # silently rewrite what a past trade was planned against. A trade with no
+        # recorded ratio renders '—'; ⛔ no fallback, ⛔ no global default.
+        rr = r.get("tgt_risk_reward_applied")
+        try:
+            r["rr_applied"] = float(rr) if rr is not None else None
+        except (TypeError, ValueError):
+            r["rr_applied"] = None
+        r["expected_rr"] = _expected_rr(
+            entry_sys, r.get("sl_initial"), r.get("tgt_initial"), direction)
+        r["r_multiple"] = r_multiple(r.get("net_pnl"), r.get("risk_amount"))
+
+        # ── ROI on COMMITTED capital ─────────────────────────────────────────
+        r["roi_pct"] = roi_pct(r.get("net_pnl"), r.get("margin_reserved"))
+        r["capital_committed"] = (round(float(r["margin_reserved"]), 2)
+                                  if r.get("margin_reserved") is not None else None)
+
+        # ── Entry slippage ───────────────────────────────────────────────────
+        rec = recorded.get(str(r["trade_id"])) or {}
+        if rec.get("slippage_rs") is not None:
+            r["slippage_rs"] = round(float(rec["slippage_rs"]), 4)
+            r["slippage_pct"] = (round(float(rec["slippage_pct"]), 4)
+                                 if rec.get("slippage_pct") is not None else None)
+            r["slippage_source"] = "recorded"
+        else:
+            srs, spct = entry_slippage(entry_sys, r.get("entry_actual_price"), direction)
+            r["slippage_rs"] = srs
+            r["slippage_pct"] = spct
+            r["slippage_source"] = "derived" if srs is not None else None
+
+        r["duration_sec"] = _duration_sec(r.get("entry_time"), r.get("exit_time"))
+        # win / loss / flat / undecided — one classifier, used by the row, the
+        # KPI deck and the summary panels alike.
+        net = r.get("net_pnl")
+        r["outcome"] = (None if net is None
+                        else "win" if float(net) > 0
+                        else "loss" if float(net) < 0 else "flat")
+    return rows
+
+
+def trade_explorer_kpis(rows: list) -> dict:
+    """The six KPI cards, computed over the SAME rows the table shows — so the
+    deck and the table can never describe different populations.
+
+    ⛔ Every average is taken over the rows that HAVE the quantity, and the count
+    of those rows is returned beside it. An average silently taken over a
+    denominator that includes rows with no value is a different number wearing
+    the same label.
+    """
+    total = len(rows)
+    closed = [r for r in rows if r.get("net_pnl") is not None]
+    wins = [r for r in closed if r["outcome"] == "win"]
+    losses = [r for r in closed if r["outcome"] == "loss"]
+    decided = len(wins) + len(losses)
+
+    nets = [float(r["net_pnl"]) for r in closed]
+    gross = [float(r["gross_pnl"]) for r in rows if r.get("gross_pnl") is not None]
+    charges = [float(r["charges"]) for r in rows if r.get("charges") is not None]
+    rois = [r["roi_pct"] for r in rows if r.get("roi_pct") is not None]
+    rms = [r["r_multiple"] for r in rows if r.get("r_multiple") is not None]
+
+    win_sum = sum(float(r["net_pnl"]) for r in wins)
+    loss_sum = abs(sum(float(r["net_pnl"]) for r in losses))
+
+    return {
+        "total_trades": total,
+        "closed_trades": len(closed),
+        "open_trades": sum(1 for r in rows if r["result"] == "Open"),
+        # ⛔ Trades that never opened exposure are counted and NAMED, not hidden:
+        # they are the majority of rows and a screen that omits them would
+        # overstate how much the system actually traded.
+        "no_exposure_trades": sum(1 for r in rows
+                                  if r["result"] in ("Failed", "Rejected", "Cancelled")),
+        "wins": len(wins), "losses": len(losses), "decided": decided,
+        "win_rate": round(len(wins) / decided * 100.0, 2) if decided else None,
+        "net_pnl": round(sum(nets), 2) if nets else None,
+        "gross_pnl": round(sum(gross), 2) if gross else None,
+        "total_charges": round(sum(charges), 2) if charges else None,
+        "avg_roi_pct": round(sum(rois) / len(rois), 2) if rois else None,
+        "roi_basis": len(rois),
+        "avg_r_multiple": round(sum(rms) / len(rms), 2) if rms else None,
+        "r_basis": len(rms),
+        # Σ winning net ÷ Σ |losing net|. None when there are no losses — ⛔ not
+        # infinity and ⛔ not a large sentinel.
+        "profit_factor": round(win_sum / loss_sum, 2) if loss_sum else None,
+        "best_trade": round(max(nets), 2) if nets else None,
+        "worst_trade": round(min(nets), 2) if nets else None,
+    }
+
+
+def trade_explorer_summary(rows: list) -> dict:
+    """The four bottom panels, over the same rows. All four are REAL — this
+    screen is historical, so nothing here needs a live price."""
+    outcome_mix = {k: 0 for k in TRADE_RESULTS}
+    for r in rows:
+        outcome_mix[r["result"]] = outcome_mix.get(r["result"], 0) + 1
+
+    def _side(side):
+        sub = [r for r in rows if str(r.get("direction") or "").upper() == side]
+        closed = [r for r in sub if r.get("net_pnl") is not None]
+        w = sum(1 for r in closed if r["outcome"] == "win")
+        d = sum(1 for r in closed if r["outcome"] in ("win", "loss"))
+        return {
+            "trades": len(sub), "closed": len(closed),
+            "net": round(sum(float(r["net_pnl"]) for r in closed), 2) if closed else None,
+            "win_rate": round(w / d * 100.0, 2) if d else None,
+        }
+
+    by_strategy: dict = {}
+    for r in rows:
+        name = r.get("strategy") or "—"
+        agg = by_strategy.setdefault(name, {"strategy": name, "trades": 0,
+                                            "closed": 0, "wins": 0, "losses": 0,
+                                            "net": 0.0})
+        agg["trades"] += 1
+        if r.get("net_pnl") is not None:
+            agg["closed"] += 1
+            agg["net"] = round(agg["net"] + float(r["net_pnl"]), 2)
+            if r["outcome"] == "win":
+                agg["wins"] += 1
+            elif r["outcome"] == "loss":
+                agg["losses"] += 1
+    strat_rows = sorted(by_strategy.values(), key=lambda a: -abs(a["net"]))
+
+    wins = sum(1 for r in rows if r.get("outcome") == "win")
+    losses = sum(1 for r in rows if r.get("outcome") == "loss")
+    flats = sum(1 for r in rows if r.get("outcome") == "flat")
+
+    return {
+        "outcome_mix": outcome_mix,
+        "outcome_total": len(rows),
+        "win_loss": {"wins": wins, "losses": losses, "flat": flats,
+                     "decided": wins + losses},
+        "by_direction": {"long": _side("LONG"), "short": _side("SHORT")},
+        "by_strategy": strat_rows,
+        # Coverage of the two enrichment sources, surfaced rather than implied by
+        # a column full of em-dashes.
+        "coverage": {
+            "slippage_recorded": sum(1 for r in rows
+                                     if r.get("slippage_source") == "recorded"),
+            "slippage_derived": sum(1 for r in rows
+                                    if r.get("slippage_source") == "derived"),
+            "roi_valued": sum(1 for r in rows if r.get("roi_pct") is not None),
+            "rr_recorded": sum(1 for r in rows if r.get("rr_applied") is not None),
+        },
+    }

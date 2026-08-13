@@ -1,74 +1,1105 @@
 {% extends "base.html" %}
-{% from "components.html" import kpi_row, kpi_card, period_selector, filter_bar, data_table, export_button, lifecycle_timeline, score_chip %}
-{% block title %}AlgoCore Systems — Trade Explorer{% endblock %}
+{% block title %}Trade Explorer{% endblock %}
 {% block nav_trade_explorer %}active{% endblock %}
 {% block content %}
-{# G5c: one trade = one story. Per-trade forensic table (trades ⋈ signals ⋈ orders
-   ⋈ execution) + a lifecycle drill. Per-stage validation/risk/capital timings are
-   NOT persisted (G-2) → the timeline shows them as honest "not captured". System
-   Score only (L8). READ-ONLY. #}
-<div x-data="explorerPage()" x-init="load(); $watch('pPeriod', () => load())" @ops-refresh.window="load()">
-  <h2 class="panel-title">Trade Explorer
-    <span class="panel-sub" x-text="(data.count!=null?data.count+' trades · ':'') + (data.from ? (data.from+' → '+data.to) : '')"></span></h2>
+{#
+  SCREEN-07 TRADE EXPLORER — 14-Aug-2026.
 
-  {{ period_selector() }}
-  {{ filter_bar([
-    {"key":"strategy","label":"Strategy"},
-    {"key":"symbol","label":"Symbol"},
-    {"key":"direction","label":"Direction","type":"select","options":["LONG","SHORT"]},
-  ]) }}
-  {{ export_button("Export Trades") }}
+  ⭐ REUSE, NOT RE-DESIGN: the root carries `ord-page` AND `pos-page` as well as
+     `tex-page`, so every accepted Screen-05/06 rule applies verbatim — the same
+     .pg-title top spacing (12px 2px 14px), .kc KPI cards, .flt-* filters,
+     .st-tbl density, .ord-scroll, the .od-* detail card, the pos-drawer, the
+     modal shell and Screen-04's drag-to-reorder. `tex-page` adds ONLY what this
+     screen genuinely introduces: a multi-segment pie and a ranked bar list.
+     ⛔ No new spacing value invented, ⛔ no CSS hack for the top gap.
 
-  {{ data_table("trades", [
-    {"key":"trade_date","label":"Date","kind":"date"},
-    {"key":"trade_time","label":"Time"},
-    {"key":"strategy","label":"Strategy"},
-    {"key":"scanner","label":"Scanner"},
-    {"key":"symbol","label":"Symbol"},
-    {"key":"direction","label":"Dir"},
-    {"key":"system_score","label":"Score","kind":"num"},
-    {"key":"qty","label":"Qty","kind":"num"},
-    {"key":"entry","label":"Entry","kind":"num"},
-    {"key":"exit","label":"Exit","kind":"num"},
-    {"key":"net","label":"Net","kind":"money"},
-    {"key":"exit_reason","label":"Exit"},
-    {"key":"status","label":"Status"},
-  ], rows_expr="data.rows") }}
+  ⭐ ONE MEANING PER LABEL (Rama, 13-Aug-2026), unchanged here:
+       System Score    = the ACHIEVED score        (screener_results.score)
+       Score Threshold = the score it had to reach (eligible_score → min_pass)
+     ⛔ The retired third label is used NOWHERE on this screen or in its export.
+     📌 It is not spelled out even in this comment: the L8 guard is a plain
+        substring scan over the whole frontend, and a comment is not exempt from
+        it — quite rightly, since that is where a copy-paste would start.
 
-  <p class="panel-sub">Click a Trade ID below to open its story.</p>
-  <div class="filters">
-    <input class="flt" placeholder="trade id → story" x-model="storyId">
-    <button class="rt-btn" @click="openStory()">Open story</button>
+  ⭐ THREE QUANTITIES THAT ARE ROUTINELY CONFUSED, KEPT APART ON PURPOSE:
+       R:R          — what the strategy PLANNED (trades.tgt_risk_reward_applied)
+       R-multiple   — what the trade ACHIEVED   (net_pnl / risk_amount)
+       ROI %        — return on the capital COMMITTED (net_pnl / margin_reserved)
+     ⛔ ROI is NOT computed on the leveraged notional; ⛔ R-multiple is NEVER
+     printed in an R:R column. All three are separate columns.
+
+  ⭐ SYSTEM · BROKER · FILLED — the words are load-bearing:
+       System = what the system decided        Broker = what stands at the broker
+       Filled = a price that ACTUALLY EXECUTED
+  ⛔⛔ A FILLED SL/TGT IS SHOWN ONLY WHEN THE TRADE'S OWN exit_reason NAMES THAT
+     LEG (SL_HIT → SL Filled, TGT_HIT → TGT Filled), because that is the only
+     case in which the executed price is known. orders.avg_fill_price is NULL on
+     all 977 orders ever placed. GTT_EXIT is a MECHANISM, not a leg, and fills
+     neither. ⛔ Nothing is inferred from the standing broker value.
+#}
+{# ⚠️ THE POLL CALLS refresh(), ⛔ NOT boot(). base.html broadcasts `ops-refresh`
+   every 60s off-hours and every 5s DURING MARKET HOURS. boot() re-applies the
+   defaults, which resets the pager to page 1 and clears the applied filters —
+   so on a market-hours poll this screen would throw the operator back to page 1
+   with an empty filter set every five seconds. refresh() reloads the same data
+   and leaves the page, the sort and the filters exactly as they were. #}
+<div x-data="explorerPage()" x-init="boot()" @ops-refresh.window="refresh()"
+     class="dash-page ord-page pos-page tex-page">
+
+  <div class="pg-title">
+    <h1>Trade Explorer</h1>
+    <span class="pg-sub">One trade, one story — outcome, execution quality, risk and return</span>
   </div>
 
-  <!-- Trade story drill -->
-  <section class="panel" x-show="story.trade_id" x-cloak>
-    <h3 class="panel-title">Trade Story <span class="panel-sub" x-text="story.trade_id"></span></h3>
-    <div class="failstrip" style="margin-bottom:8px">
-      <span>Scanner: <b x-text="story.scanner || '—'"></b></span>
-      <span>{{ score_chip("story.system_score") }}</span>
-      <span>Exit: <b x-text="(story.trade && story.trade.exit_reason) || '—'"></b></span>
-      <span>Net: <b x-text="story.trade ? money(story.trade.net_pnl) : '—'"></b></span>
+  <!-- ═══ KPI DECK (6) ═══ -->
+  <div class="ok-deck">
+    <div class="kc"><div class="kc-ic">◈</div><div class="kc-label">Total Trades</div>
+      <div class="kc-val" x-text="k('total_trades')"></div>
+      <div class="kc-foot" x-text="tradesFoot()"></div></div>
+
+    <div class="kc" :class="rateTone(kpi.win_rate)"><div class="kc-ic">◑</div>
+      <div class="kc-label">Win Rate</div>
+      <div class="kc-val" x-text="kpi.win_rate == null ? '—' : kpi.win_rate.toFixed(2) + '%'"></div>
+      <div class="kc-foot" x-text="winFoot()"></div></div>
+
+    <div class="kc" :class="pnlTone(kpi.net_pnl)"><div class="kc-ic">₹</div>
+      <div class="kc-label">Net P&amp;L</div>
+      <div class="kc-val" x-text="kpi.net_pnl == null ? '—' : money(kpi.net_pnl)"></div>
+      <div class="kc-foot" x-text="netFoot()"></div></div>
+
+    <div class="kc" :class="pnlTone(kpi.avg_roi_pct)"><div class="kc-ic">%</div>
+      <div class="kc-label">Avg ROI</div>
+      <div class="kc-val" x-text="kpi.avg_roi_pct == null ? '—' : kpi.avg_roi_pct.toFixed(2) + '%'"></div>
+      <!-- ⭐ The BASE is named on the card, because a return percentage without
+           its base is not a number. -->
+      <div class="kc-foot" x-text="roiFoot()"></div></div>
+
+    <div class="kc" :class="pnlTone(kpi.avg_r_multiple)"><div class="kc-ic">R</div>
+      <div class="kc-label">Avg R-multiple</div>
+      <div class="kc-val" x-text="kpi.avg_r_multiple == null ? '—' : kpi.avg_r_multiple.toFixed(2) + 'R'"></div>
+      <div class="kc-foot" x-text="rFoot()"></div></div>
+
+    <div class="kc" :class="pfTone(kpi.profit_factor)"><div class="kc-ic">⚖</div>
+      <div class="kc-label">Profit Factor</div>
+      <div class="kc-val" x-text="kpi.profit_factor == null ? '—' : kpi.profit_factor.toFixed(2)"></div>
+      <div class="kc-foot">Σ wins ÷ Σ |losses|</div></div>
+  </div>
+
+  <div class="ord-work">
+    <div class="ord-left">
+
+      <!-- ═══ FILTERS ═══ -->
+      <section class="panel mc-panel">
+        <div class="mc-head"><h2 class="mc-title">Filters</h2></div>
+        <div class="flt-row ord-flt">
+          <label class="flt-field flt-daterange">
+            <span class="flt-k">Date Range</span>
+            <span class="flt-dr">
+              <input class="flt-c" type="date" x-model="f.from_date">
+              <span class="flt-to">to</span>
+              <input class="flt-c" type="date" x-model="f.to_date">
+              <button class="flt-reload" type="button" title="Reload for this range"
+                      @click="reloadRange()" aria-label="Reload">⟳</button>
+            </span>
+          </label>
+          <label class="flt-field">
+            <span class="flt-k">Strategy</span>
+            <select class="flt-c" x-model="f.strategy">
+              <option value="">All Strategies</option>
+              <template x-for="s in strategyOptions()" :key="s"><option :value="s" x-text="s"></option></template>
+            </select>
+          </label>
+          <label class="flt-field">
+            <span class="flt-k">Scanner</span>
+            <select class="flt-c" x-model="f.scanner">
+              <option value="">All Scanners</option>
+              <template x-for="s in scannerOptions()" :key="s"><option :value="s" x-text="s"></option></template>
+            </select>
+          </label>
+          <label class="flt-field">
+            <span class="flt-k">Symbol</span>
+            <select class="flt-c" x-model="f.symbol">
+              <option value="">All Symbols</option>
+              <template x-for="s in symbolOptions()" :key="s"><option :value="s" x-text="s"></option></template>
+            </select>
+          </label>
+          <label class="flt-field">
+            <span class="flt-k">Trade Type</span>
+            <select class="flt-c" x-model="f.trade_type">
+              <option value="">All Types</option>
+              <option value="Intraday">Intraday</option>
+              <option value="Delivery">Delivery</option>
+            </select>
+          </label>
+          <label class="flt-field">
+            <span class="flt-k">Direction</span>
+            <select class="flt-c" x-model="f.direction">
+              <option value="">All Directions</option>
+              <option value="LONG">Long</option>
+              <option value="SHORT">Short</option>
+            </select>
+          </label>
+          <label class="flt-field">
+            <span class="flt-k">Result</span>
+            <select class="flt-c" x-model="f.result">
+              <option value="">All Results</option>
+              <template x-for="s in RESULTS" :key="s"><option :value="s" x-text="s"></option></template>
+            </select>
+          </label>
+          <div class="flt-actions">
+            <button class="btn-ghost" type="button" @click="resetFilters()">Reset Filters</button>
+            <button class="btn-primary" type="button" @click="applyFilters()">Apply Filters</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══ RESULT STRIP ═══ (a filter, not decoration) -->
+      <section class="panel mc-panel pos-strip-panel">
+        <div class="pos-strip">
+          <span class="pos-strip-k">Result</span>
+          <template x-for="s in RESULTS" :key="s">
+            <button class="pos-chip" type="button" x-show="resultCount(s) > 0" x-cloak
+                    :class="[f.result === s ? 'is-on' : '', chipTone(s)]"
+                    @click="toggleResult(s)">
+              <span x-text="s"></span><b x-text="resultCount(s)"></b>
+            </button>
+          </template>
+        </div>
+      </section>
+
+      <!-- ═══ TABLE ═══ -->
+      <section class="panel mc-panel">
+        <div class="ord-toolbar">
+          <span class="ord-rpp">
+            <span class="ord-rpp-k">Rows per page:</span>
+            <template x-for="n in tPageSizes" :key="n">
+              <button class="ord-rpp-b" type="button" :class="tPageSize === n ? 'is-on' : ''"
+                      @click="tPageSize = n; tPage = 1" x-text="n"></button>
+            </template>
+            <button class="ord-colreset" type="button" x-show="!isDefaultOrder()" x-cloak
+                    @click="resetCols()" title="Restore the approved column order">↺ Reset column order</button>
+          </span>
+          <button class="btn-export" type="button" @click="exportXlsx()">⭳ Export XLSX</button>
+        </div>
+
+        <div class="ord-scroll">
+          <table class="st-tbl ord-tbl pos-tbl tex-tbl">
+            <thead>
+              <!-- group row: consecutive columns sharing `group` merge (Excel-style).
+                   This is what carries Qty / Entry / SL / TGT / P&L as merged heads. -->
+              <tr class="ord-grp">
+                <template x-for="g in groups()" :key="g.id">
+                  <th :colspan="g.span" :class="g.label ? 'is-grp' : ''"><span x-text="g.label"></span></th>
+                </template>
+              </tr>
+              <tr>
+                <template x-for="c in cols" :key="c.key">
+                  <th :class="[c.num ? 'rt' : '', c.ctr ? 'ctr' : '', dragKey === c.key ? 'is-drag' : '',
+                               overKey === c.key ? 'is-over' : '']"
+                      draggable="true" role="button" tabindex="0"
+                      :title="(c.group ? c.group + ' — ' : '') + c.label + ' — click to sort, drag to reorder'"
+                      @dragstart="onDragStart(c.key, $event)"
+                      @dragover.prevent="overKey = c.key"
+                      @dragleave="overKey === c.key && (overKey = '')"
+                      @drop.prevent="onDrop(c.key)"
+                      @dragend="onDragEnd()"
+                      @click="headClick(c.key)" @keyup.enter="tSort(c.key)">
+                    <span class="st-grip" aria-hidden="true">⠿</span><span x-text="c.label"></span><span
+                          class="st-arw" x-text="tArrow(c.key)"></span>
+                  </th>
+                </template>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="r in tPaged(view())" :key="r.trade_id">
+                <tr class="ord-row" :class="sel && sel.trade_id === r.trade_id ? 'is-sel' : ''"
+                    @click="sel = r; tab = 'overview'">
+                  <template x-for="c in cols" :key="c.key">
+                    <td :class="[c.num ? 'rt' : '', c.ctr ? 'ctr' : '']" x-html="cell(r, c)"></td>
+                  </template>
+                </tr>
+              </template>
+              <tr x-show="!view().length" x-cloak>
+                <td :colspan="cols.length" class="ord-empty">No trades match the current filters.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="ord-pager">
+          <span class="ord-count" x-text="rangeLabel()"></span>
+          <span class="ord-pages">
+            <button class="ord-pg" type="button" @click="tPage = Math.max(1, tPage - 1)">‹</button>
+            <button class="ord-pg is-on" type="button" x-text="tPage"></button>
+            <button class="ord-pg" type="button"
+                    @click="tPage = Math.min(tPageCount(view()), tPage + 1)">›</button>
+          </span>
+        </div>
+
+        <!-- Coverage is STATED, not left to be inferred from a column of
+             em-dashes: the reader is told how many rows carry each enrichment. -->
+        <p class="ord-legend-note tex-cover" x-text="coverageLine()"></p>
+      </section>
+
+      <!-- ═══ BOTTOM SUMMARY (4) ═══ -->
+      <div class="ord-cards">
+        <section class="panel mc-panel">
+          <div class="mc-head"><h2 class="mc-title">Outcome Distribution</h2></div>
+          <div class="pos-donut-wrap">
+            <!-- ⚠️ THE ARCS ARE INJECTED WITH x-html, ⛔ NOT `<template x-for>`.
+                 A template inside an <svg> does not clone into the SVG namespace,
+                 so an x-for there produced exactly ONE arc and the pie silently
+                 rendered as a single slice while the legend beside it listed six.
+                 innerHTML on an SVG element parses in the SVG namespace, so the
+                 circles are real. ⭐ Caught by rendering the page, ⛔ not by the
+                 contract tests — which were green throughout. -->
+            <svg class="pos-donut tex-pie" viewBox="0 0 42 42" aria-hidden="true">
+              <circle class="pd-track" cx="21" cy="21" r="15.9155"></circle>
+              <g x-html="pieMarkup()"></g>
+            </svg>
+            <div class="ord-legend pos-legend tex-legend">
+              <template x-for="s in pieSegs()" :key="s.key">
+                <div><span class="dot" :class="s.dot"></span><span x-text="s.key"></span>
+                  <b x-text="s.n + ' (' + s.pct.toFixed(1) + '%)'"></b></div>
+              </template>
+              <div x-show="!pieSegs().length" x-cloak class="tex-empty">No trades in range.</div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel mc-panel">
+          <div class="mc-head"><h2 class="mc-title">Win / Loss Split</h2></div>
+          <div class="pos-donut-wrap">
+            <svg class="pos-donut" viewBox="0 0 42 42" aria-hidden="true">
+              <circle class="pd-track" cx="21" cy="21" r="15.9155"></circle>
+              <circle class="pd-arc pd-long" cx="21" cy="21" r="15.9155"
+                      :stroke-dasharray="donut(winPct())"></circle>
+            </svg>
+            <div class="ord-legend pos-legend">
+              <div><span class="dot dot-green"></span>Wins <b x-text="wl('wins')"></b></div>
+              <div><span class="dot dot-red"></span>Losses <b x-text="wl('losses')"></b></div>
+              <div><span class="dot dot-gray"></span>Break-even
+                <b x-text="sm.win_loss ? sm.win_loss.flat : '—'"></b></div>
+              <div><span class="dot dot-purple"></span>Decided
+                <b x-text="sm.win_loss ? sm.win_loss.decided : '—'"></b></div>
+            </div>
+          </div>
+          <!-- ⭐ The denominator is named: trades that never opened exposure are
+               not "losses" and are excluded from the decided base. -->
+          <p class="ord-legend-note" x-text="decidedNote()"></p>
+        </section>
+
+        <section class="panel mc-panel">
+          <div class="mc-head"><h2 class="mc-title">Direction Performance</h2></div>
+          <div class="pos-bars tex-dirbars">
+            <template x-for="d in dirRows()" :key="d.key">
+              <div class="tex-dir">
+                <span class="pb-k" x-text="d.label"></span>
+                <span class="pb-track"><i :class="d.tone" :style="'width:' + d.share + '%'"></i></span>
+                <b class="pb-v"><span x-text="d.trades"></span><em x-text="d.wr"></em></b>
+                <span class="tex-dir-net" :class="pnlCls(d.net)"
+                      x-text="d.net == null ? '—' : money(d.net)"></span>
+              </div>
+            </template>
+            <div x-show="!dirRows().length" x-cloak class="tex-empty">No trades in range.</div>
+          </div>
+        </section>
+
+        <section class="panel mc-panel">
+          <div class="mc-head"><h2 class="mc-title">Net P&amp;L by Strategy</h2>
+            <span class="mc-today" x-text="stratNote()"></span></div>
+          <div class="pos-bars tex-stratbars">
+            <template x-for="s in stratRows()" :key="s.strategy">
+              <div class="tex-strat">
+                <span class="pb-k" :title="s.strategy" x-text="s.strategy"></span>
+                <span class="tex-axis">
+                  <i class="tex-fill" :class="s.net >= 0 ? 'is-pos' : 'is-neg'"
+                     :style="s.style"></i>
+                </span>
+                <b class="pb-v" :class="pnlCls(s.net)" x-text="money(s.net)"></b>
+              </div>
+            </template>
+            <div x-show="!stratRows().length" x-cloak class="tex-empty">No closed trades in range.</div>
+          </div>
+        </section>
+      </div>
     </div>
-    {{ lifecycle_timeline("story.timeline") }}
-    <p class="panel-sub" x-text="story.timeline_note || ''"></p>
-    <details x-show="story.raw_payload" x-cloak><summary class="panel-sub">Raw Chartink payload (signals.webhook_payload)</summary>
-      <pre class="logpre" x-text="story.raw_payload"></pre></details>
-  </section>
+
+    <!-- ═══ TRADE DETAILS — overlay drawer (Screen-06's treatment) ═══ -->
+    <aside class="panel mc-panel ord-detail pos-drawer" x-show="sel" x-cloak>
+      <div class="od-head">
+        <h2 class="mc-title">Trade Details</h2>
+        <button class="od-x" type="button" @click="sel = null" aria-label="Close">✕</button>
+      </div>
+
+      <template x-if="sel">
+        <div>
+          <div class="od-id">
+            <span class="od-oid" x-text="sel.symbol"></span>
+            <span class="pill" :class="dirPill(sel.direction)" x-text="dirLabel(sel.direction)"></span>
+            <span class="pill" :class="resultPill(sel.result)" x-text="sel.result"></span>
+          </div>
+
+          <div class="od-kv">
+            <div><span>Strategy</span><b x-text="dash(sel.strategy)"></b></div>
+            <div><span>Scanner</span><b x-text="dash(sel.scanner)"></b></div>
+            <div><span>Trade Type</span><b x-text="dash(sel.trade_type)"></b></div>
+            <div><span>Duration</span><b x-text="dur(sel.duration_sec)"></b></div>
+          </div>
+
+          <div class="od-tabs">
+            <button type="button" :class="tab==='overview' ? 'is-on':''" @click="tab='overview'">Overview</button>
+            <button type="button" :class="tab==='lifecycle'? 'is-on':''" @click="tab='lifecycle'">Lifecycle</button>
+            <button type="button" :class="tab==='sltgt'    ? 'is-on':''" @click="tab='sltgt'">SL / TGT</button>
+            <button type="button" :class="tab==='perf'     ? 'is-on':''" @click="tab='perf'">Performance</button>
+          </div>
+
+          <button class="pos-full-btn" type="button" @click="full = sel">
+            ⤢ View Full Details</button>
+
+          <!-- ── OVERVIEW ── -->
+          <div x-show="tab==='overview'">
+            <div class="od-sec">Trade</div>
+            <div class="od-kv od-kv2">
+              <div><span>Trading Date</span><b x-text="dash(sel.date)"></b></div>
+              <div><span>Entry Time</span><b x-text="clock(sel.entry_time)"></b></div>
+              <div><span>Exit Time</span><b x-text="clock(sel.exit_time)"></b></div>
+              <div><span>Sector</span><b x-text="dash(sel.sector)"></b></div>
+              <div><span>Qty (System ordered)</span><b x-text="dash(sel.qty_system)"></b></div>
+              <div><span>Qty (Broker filled)</span><b x-text="dash(sel.qty_filled)"></b></div>
+              <div><span>Entry Price (System)</span><b x-text="rs(sel.entry_target_price)"></b></div>
+              <div><span>Entry Price (Filled)</span><b x-text="rs(sel.entry_actual_price)"></b></div>
+              <div><span>Sizing Constraint</span><b x-text="dash(sel.binding_constraint)"></b></div>
+              <div><span>Mode</span><b x-text="dash(sel.mode)"></b></div>
+            </div>
+
+            <div class="od-sec">Scoring</div>
+            <div class="od-kv od-kv2">
+              <!-- ⛔ Two different quantities, never one label. -->
+              <div><span>System Score (achieved)</span><b x-text="dash(sel.system_score)"></b></div>
+              <div><span>Score Threshold (required)</span><b x-text="dash(sel.score_threshold)"></b></div>
+            </div>
+
+            <div class="od-sec">Execution Quality</div>
+            <div class="od-kv od-kv2">
+              <div><span>Entry Slippage (₹/share)</span>
+                <b :class="slipCls(sel.slippage_rs)" x-text="slip(sel.slippage_rs)"></b></div>
+              <!-- ⛔ FOUR decimals, ⛔ not the screen's usual two: entry slippage
+                   runs in thousandths of a percent (0.0045%), and toFixed(2)
+                   printed "0.00%" beside a non-zero rupee figure — which reads as
+                   "no slippage" when there was some. -->
+              <div><span>Entry Slippage %</span>
+                <b :class="slipCls(sel.slippage_rs)" x-text="slipPct(sel.slippage_pct)"></b></div>
+              <div><span>Slippage source</span><b x-text="dash(sel.slippage_source)"></b></div>
+            </div>
+            <div class="od-line pos-note">
+              <b>Positive slippage is adverse</b> — a long filled above, or a short
+              filled below, the price the system intended.
+              <em x-show="sel.slippage_source === 'derived'" x-cloak>
+                Reproduced from the system and filled entry prices: this trade has no
+                execution-log row, and the formula was verified against every trade
+                that has one.</em>
+            </div>
+          </div>
+
+          <!-- ── LIFECYCLE ── -->
+          <div x-show="tab==='lifecycle'" x-cloak>
+            <div class="od-sec">Trade Lifecycle</div>
+            <ul class="od-time">
+              <li :class="sel.signal_received_at ? '' : 'is-off'">
+                <i :class="sel.signal_received_at ? 'd-on':'d-off'"></i>
+                <span x-text="clock(sel.signal_received_at)"></span><em>Signal received</em></li>
+              <li :class="sel.created_at ? '' : 'is-off'">
+                <i :class="sel.created_at ? 'd-on':'d-off'"></i>
+                <span x-text="clock(sel.created_at)"></span><em>Trade created — capital reserved</em></li>
+              <li :class="sel.order_placed_at ? '' : 'is-off'">
+                <i :class="sel.order_placed_at ? 'd-on':'d-off'"></i>
+                <span x-text="clock(sel.order_placed_at)"></span><em>Entry order placed</em></li>
+              <li :class="sel.entry_time ? '' : 'is-off'">
+                <i :class="sel.entry_time ? 'd-on':'d-off'"></i>
+                <span x-text="clock(sel.entry_time)"></span><em>Position open (filled)</em></li>
+              <li class="is-off">
+                <i class="d-off"></i><span>—</span><em>Validation / Risk / Capital — not captured (G-2)</em></li>
+              <li :class="sel.exit_time ? '' : 'is-off'">
+                <i :class="sel.exit_time ? 'd-on':'d-off'"></i>
+                <span x-text="clock(sel.exit_time)"></span><em>Exit</em></li>
+            </ul>
+            <div class="od-line pos-note">
+              Per-stage validation, risk and capital timings are not persisted (G-2),
+              so that step reads as not captured rather than being back-filled from
+              the trade's own timestamps.
+            </div>
+
+            <div class="od-sec">Exit</div>
+            <div class="od-kv od-kv2">
+              <div><span>Exit Price (executed)</span><b x-text="rs(sel.exit_price)"></b></div>
+              <div><span>Exit Reason</span><b x-text="dash(sel.exit_reason)"></b></div>
+              <div><span>Closure Source</span><b x-text="dash(sel.closure_source)"></b></div>
+              <div><span>Exit Mechanism</span><b x-text="dash(sel.exit_mechanism)"></b></div>
+              <div><span>Duration</span><b x-text="dur(sel.duration_sec)"></b></div>
+            </div>
+          </div>
+
+          <!-- ── SL / TGT ── -->
+          <div x-show="tab==='sltgt'" x-cloak>
+            <div class="od-sec">Stop Loss</div>
+            <div class="od-kv od-kv2">
+              <div><span>SL (System)</span><b x-text="rs(sel.sl_initial)"></b></div>
+              <div><span>SL (Broker standing)</span><b x-text="rs(sel.sl_broker)"></b></div>
+              <div><span>SL (Filled)</span><b x-text="rs(sel.sl_filled)"></b></div>
+              <div><span>SL leg status</span><b x-text="dash(sel.sl_broker_status)"></b></div>
+              <div><span>SL points (₹/share)</span><b x-text="rs(sel.sl_points)"></b></div>
+            </div>
+            <div class="od-sec">Target</div>
+            <div class="od-kv od-kv2">
+              <div><span>TGT (System)</span><b x-text="rs(sel.tgt_initial)"></b></div>
+              <div><span>TGT (Broker standing)</span><b x-text="rs(sel.tgt_broker)"></b></div>
+              <div><span>TGT (Filled)</span><b x-text="rs(sel.tgt_filled)"></b></div>
+              <div><span>TGT leg status</span><b x-text="dash(sel.tgt_broker_status)"></b></div>
+              <div><span>TGT points (₹/share)</span><b x-text="rs(sel.tgt_points)"></b></div>
+            </div>
+            <div class="od-line pos-note">
+              <b>System</b> is the level the system decided, <b>Broker</b> is the
+              trigger or limit that actually rested at the broker, and <b>Filled</b>
+              is a price that genuinely executed. A Filled value appears on the SL
+              row only when this trade's exit reason is <em>SL_HIT</em>, and on the
+              TGT row only when it is <em>TGT_HIT</em> — those are the only cases in
+              which the executed price of a leg is known. <em>GTT_EXIT</em> says the
+              broker's trigger fired but not which leg, so it fills neither.
+            </div>
+            <div class="od-line pos-note" x-show="mismatch(sel)" x-cloak>
+              <b>System and broker values differ on this trade.</b>
+              That is what these paired columns exist to surface; it is reported, not
+              resolved here.
+            </div>
+          </div>
+
+          <!-- ── PERFORMANCE ── -->
+          <div x-show="tab==='perf'" x-cloak>
+            <div class="od-sec">Return</div>
+            <div class="od-kv od-kv2">
+              <div><span>Gross P&amp;L</span>
+                <b :class="pnlCls(sel.gross_pnl)" x-text="sel.gross_pnl == null ? '—' : money(sel.gross_pnl)"></b></div>
+              <div><span>Charges</span><b x-text="rs(sel.charges)"></b></div>
+              <div><span>Net P&amp;L</span>
+                <b :class="pnlCls(sel.net_pnl)" x-text="sel.net_pnl == null ? '—' : money(sel.net_pnl)"></b></div>
+              <div><span>Committed Capital</span><b x-text="rs(sel.capital_committed)"></b></div>
+              <div><span>ROI %</span>
+                <b :class="pnlCls(sel.roi_pct)" x-text="pct(sel.roi_pct)"></b></div>
+            </div>
+            <div class="od-line pos-note">
+              <b>ROI is net P&amp;L over the capital committed to this trade</b>
+              (the reserved margin), <em>not</em> over the leveraged position value —
+              which on an intraday trade is several times larger and would report a
+              much smaller return for the same rupees earned.
+            </div>
+
+            <div class="od-sec">Risk &amp; Reward</div>
+            <div class="od-kv od-kv2">
+              <div><span>Risk Amount</span><b x-text="rs(sel.risk_amount)"></b></div>
+              <!-- THREE DIFFERENT QUANTITIES, side by side on purpose. -->
+              <div><span>R:R (planned)</span><b x-text="rr(sel.rr_applied)"></b></div>
+              <div><span>R:R (implied by levels)</span><b x-text="rr(sel.expected_rr)"></b></div>
+              <div><span>R-multiple (achieved)</span>
+                <b :class="pnlCls(sel.r_multiple)" x-text="rmult(sel.r_multiple)"></b></div>
+            </div>
+            <div class="od-line pos-note">
+              <b>R:R is what was planned; R-multiple is what was achieved.</b>
+              A trade planned at 1.5:1 that stops out scores about −1R — the two are
+              never substituted for each other. <em>Implied by levels</em> is the
+              ratio this trade's own system SL and TGT actually give.
+            </div>
+
+            <div class="od-sec">Excursion</div>
+            <div class="od-kv od-kv2">
+              <div><span>Highest Profit %</span><b class="v-pos" x-text="pct(sel.mfe_pct)"></b></div>
+              <div><span>Highest Drawdown %</span><b class="v-neg" x-text="pct(sel.mae_pct)"></b></div>
+            </div>
+            <div class="od-line pos-note" x-show="sel.mfe_pct == null && sel.mae_pct == null" x-cloak>
+              Excursions are reconstructed by a scheduled job; this trade has no row
+              yet, so both read as unavailable rather than zero.
+            </div>
+          </div>
+        </div>
+      </template>
+    </aside>
+  </div>
+
+  <!-- ═══ VIEW FULL DETAILS — every section at once, read-only ═══ -->
+  <div class="pos-modal" x-show="full" x-cloak @click.self="full = null">
+    <div class="pos-modal-box pos-full-box" x-show="full">
+      <template x-if="full">
+        <div>
+          <div class="pos-modal-head">
+            <h2 class="mc-title">Trade — Full Details</h2>
+            <button class="od-x" type="button" @click="full = null" aria-label="Close">✕</button>
+          </div>
+
+          <div class="od-id pos-full-id">
+            <span class="od-oid" x-text="full.symbol"></span>
+            <span class="pill" :class="dirPill(full.direction)" x-text="dirLabel(full.direction)"></span>
+            <span class="pill" :class="resultPill(full.result)" x-text="full.result"></span>
+            <span class="pos-full-tid mono" x-text="full.trade_id"></span>
+          </div>
+
+          <div class="pos-full-grid">
+            <section>
+              <div class="od-sec">Trade</div>
+              <div class="od-kv od-kv2">
+                <div><span>Trading Date</span><b x-text="dash(full.date)"></b></div>
+                <div><span>Strategy</span><b x-text="dash(full.strategy)"></b></div>
+                <div><span>Scanner</span><b x-text="dash(full.scanner)"></b></div>
+                <div><span>Trade Type</span><b x-text="dash(full.trade_type)"></b></div>
+                <div><span>System Score</span><b x-text="dash(full.system_score)"></b></div>
+                <div><span>Score Threshold</span><b x-text="dash(full.score_threshold)"></b></div>
+                <div><span>Qty (System / Filled)</span>
+                  <b x-text="dash(full.qty_system) + ' / ' + dash(full.qty_filled)"></b></div>
+                <div><span>Duration</span><b x-text="dur(full.duration_sec)"></b></div>
+              </div>
+            </section>
+
+            <section>
+              <div class="od-sec">Prices</div>
+              <div class="od-kv od-kv2">
+                <div><span>Entry (System)</span><b x-text="rs(full.entry_target_price)"></b></div>
+                <div><span>Entry (Filled)</span><b x-text="rs(full.entry_actual_price)"></b></div>
+                <div><span>SL (System / Broker / Filled)</span>
+                  <b x-text="rs(full.sl_initial) + ' / ' + rs(full.sl_broker) + ' / ' + rs(full.sl_filled)"></b></div>
+                <div><span>TGT (System / Broker / Filled)</span>
+                  <b x-text="rs(full.tgt_initial) + ' / ' + rs(full.tgt_broker) + ' / ' + rs(full.tgt_filled)"></b></div>
+                <div><span>Exit Price (executed)</span><b x-text="rs(full.exit_price)"></b></div>
+                <div><span>Entry Slippage</span>
+                  <b :class="slipCls(full.slippage_rs)" x-text="slip(full.slippage_rs)"></b></div>
+              </div>
+            </section>
+
+            <section>
+              <div class="od-sec">Return</div>
+              <div class="od-kv od-kv2">
+                <div><span>Gross P&amp;L</span>
+                  <b :class="pnlCls(full.gross_pnl)" x-text="full.gross_pnl == null ? '—' : money(full.gross_pnl)"></b></div>
+                <div><span>Charges</span><b x-text="rs(full.charges)"></b></div>
+                <div><span>Net P&amp;L</span>
+                  <b :class="pnlCls(full.net_pnl)" x-text="full.net_pnl == null ? '—' : money(full.net_pnl)"></b></div>
+                <div><span>Committed Capital</span><b x-text="rs(full.capital_committed)"></b></div>
+                <div><span>ROI %</span><b :class="pnlCls(full.roi_pct)" x-text="pct(full.roi_pct)"></b></div>
+              </div>
+            </section>
+
+            <section>
+              <div class="od-sec">Risk &amp; Reward</div>
+              <div class="od-kv od-kv2">
+                <div><span>Risk Amount</span><b x-text="rs(full.risk_amount)"></b></div>
+                <div><span>R:R (planned)</span><b x-text="rr(full.rr_applied)"></b></div>
+                <div><span>R:R (implied by levels)</span><b x-text="rr(full.expected_rr)"></b></div>
+                <div><span>R-multiple (achieved)</span>
+                  <b :class="pnlCls(full.r_multiple)" x-text="rmult(full.r_multiple)"></b></div>
+                <div><span>Highest Profit %</span><b class="v-pos" x-text="pct(full.mfe_pct)"></b></div>
+                <div><span>Highest Drawdown %</span><b class="v-neg" x-text="pct(full.mae_pct)"></b></div>
+              </div>
+            </section>
+
+            <section>
+              <div class="od-sec">Lifecycle</div>
+              <ul class="od-time">
+                <li :class="full.signal_received_at ? '' : 'is-off'">
+                  <i :class="full.signal_received_at ? 'd-on':'d-off'"></i>
+                  <span x-text="clock(full.signal_received_at)"></span><em>Signal received</em></li>
+                <li :class="full.created_at ? '' : 'is-off'">
+                  <i :class="full.created_at ? 'd-on':'d-off'"></i>
+                  <span x-text="clock(full.created_at)"></span><em>Trade created</em></li>
+                <li :class="full.order_placed_at ? '' : 'is-off'">
+                  <i :class="full.order_placed_at ? 'd-on':'d-off'"></i>
+                  <span x-text="clock(full.order_placed_at)"></span><em>Entry order placed</em></li>
+                <li :class="full.entry_time ? '' : 'is-off'">
+                  <i :class="full.entry_time ? 'd-on':'d-off'"></i>
+                  <span x-text="clock(full.entry_time)"></span><em>Position open</em></li>
+                <li :class="full.exit_time ? '' : 'is-off'">
+                  <i :class="full.exit_time ? 'd-on':'d-off'"></i>
+                  <span x-text="clock(full.exit_time)"></span><em>Exit</em></li>
+              </ul>
+            </section>
+
+            <section>
+              <div class="od-sec">Exit</div>
+              <div class="od-kv od-kv2">
+                <div><span>Result</span><b x-text="dash(full.result)"></b></div>
+                <div><span>Exit Reason</span><b x-text="dash(full.exit_reason)"></b></div>
+                <div><span>Closure Source</span><b x-text="dash(full.closure_source)"></b></div>
+                <div><span>Exit Mechanism</span><b x-text="dash(full.exit_mechanism)"></b></div>
+                <div><span>Sector</span><b x-text="dash(full.sector)"></b></div>
+              </div>
+            </section>
+          </div>
+
+          <div class="pos-modal-foot">
+            <button class="btn-ghost" type="button" @click="full = null">Close</button>
+          </div>
+        </div>
+      </template>
+    </div>
+  </div>
 </div>
+
 <script>
 function explorerPage() {
-  return Object.assign(pageBase("/api/trades"), tableMixin({ defaultSize: 100 }),
-    periodMixin("week"), filterMixin([{key:"strategy"},{key:"symbol"},{key:"direction"}]), {
-    storyId: "", story: {},
-    qs() { const f = this.fQuery(); const p = this.pQuery(); return p + (f ? "&" + f.slice(1) : ""); },
-    async openStory() {
-      const id = (this.storyId || "").trim();
-      if (!id) return;
-      const r = await fetch("/api/trade-story/" + encodeURIComponent(id), {credentials:"same-origin"});
-      this.story = r.ok ? await r.json() : { trade_id: id, timeline: [], timeline_note: "trade not found" };
-    },
-  });
+  return Object.assign(
+    pageBase("/api/trades/screen"),
+    tableMixin({ defaultSize: 100, pageSizes: [50, 100, 200], sortKey: "", sortDir: -1 }),
+    {
+      sel: null, tab: "overview", kpi: {}, sm: {}, full: null,
+      RESULTS: ["TGT Hit", "SL Hit", "Manual Exit", "Expired", "Closed",
+                "Partial Exit", "Open", "Failed", "Rejected", "Cancelled"],
+      f:  { from_date: "", to_date: "", strategy: "", scanner: "", symbol: "",
+            trade_type: "", direction: "", result: "" },
+      af: { strategy: "", scanner: "", symbol: "", trade_type: "", direction: "", result: "" },
+
+      /* APPROVED ORDER: the Screen-04/05/06 common head (Trading Date, Time,
+         Strategy, Symbol, Trade Type, Direction, System Score, Score Threshold)
+         with Scanner restored — this screen answers "which scanner produced the
+         trades that worked", which Positions deliberately does not ask.
+         Qty / Entry / SL / TGT / P&L are GROUPED, so System · Broker · Filled sit
+         under one merged heading and can still be dragged apart. */
+      DEFAULT_COLS: [
+        { key: "date",            label: "Trading Date",    kind: "text" },
+        { key: "time",            label: "Time",            kind: "text" },
+        { key: "strategy",        label: "Strategy",        kind: "text" },
+        { key: "scanner",         label: "Scanner",         kind: "text" },
+        { key: "symbol",          label: "Symbol",          kind: "sym"  },
+        { key: "trade_type",      label: "Trade Type",      kind: "type" },
+        { key: "direction",       label: "Direction",       kind: "dir"  },
+        { key: "system_score",    label: "System Score",    kind: "num", num: true },
+        { key: "score_threshold", label: "Score Threshold", kind: "num", num: true },
+        { key: "result",          label: "Result",          kind: "result" },
+        { key: "duration_sec",    label: "Duration",        kind: "dur", ctr: true },
+        { key: "qty_system",      label: "System", group: "Qty",     kind: "int", num: true },
+        { key: "qty_filled",      label: "Filled", group: "Qty",     kind: "int", num: true },
+        { key: "entry_target_price", label: "System", group: "Entry ₹", kind: "rs", num: true },
+        { key: "entry_actual_price", label: "Filled", group: "Entry ₹", kind: "rs", num: true },
+        { key: "sl_initial",      label: "System", group: "SL ₹",  kind: "rs", num: true },
+        { key: "sl_broker",       label: "Broker", group: "SL ₹",  kind: "rs", num: true },
+        /* ⛔ Populated ONLY on an SL_HIT row — see the top-of-file note. */
+        { key: "sl_filled",       label: "Filled", group: "SL ₹",  kind: "rs", num: true },
+        { key: "tgt_initial",     label: "System", group: "TGT ₹", kind: "rs", num: true },
+        { key: "tgt_broker",      label: "Broker", group: "TGT ₹", kind: "rs", num: true },
+        { key: "tgt_filled",      label: "Filled", group: "TGT ₹", kind: "rs", num: true },
+        { key: "slippage_rs",     label: "Slippage ₹",      kind: "slip", num: true },
+        /* PLANNED ratio — ⛔ never the achieved one. */
+        { key: "rr_applied",      label: "R:R",             kind: "rr",   ctr: true },
+        /* ACHIEVED — ⛔ a different quantity from R:R and never merged with it. */
+        { key: "r_multiple",      label: "R-multiple",      kind: "rmult", num: true },
+        /* On COMMITTED capital (margin reserved), ⛔ not on notional. */
+        { key: "roi_pct",         label: "ROI %",           kind: "roi",  num: true },
+        { key: "gross_pnl",       label: "Gross", group: "P&L ₹", kind: "signed", num: true },
+        { key: "charges",         label: "Charges", group: "P&L ₹", kind: "rs", num: true },
+        { key: "net_pnl",         label: "Net",   group: "P&L ₹", kind: "signed", num: true },
+      ],
+      cols: [], dragKey: "", overKey: "", _dragEndAt: 0,
+      COLS_KEY: "screen07.trades.colOrder.v1",
+
+      qs() {
+        const p = new URLSearchParams();
+        if (this.f.from_date) p.set("from", this.f.from_date);
+        if (this.f.to_date) p.set("to", this.f.to_date);
+        const s = p.toString();
+        return s ? "?" + s : "";
+      },
+
+      /* The data fetch, with NO view state touched. Everything that changes what
+         the operator is looking at lives in the callers below. */
+      async fetchInto() {
+        await this.load();
+        this.kpi = (this.data && this.data.kpis) || {};
+        this.sm  = (this.data && this.data.summary) || {};
+        if ((this.data && this.data.results || []).length) this.RESULTS = this.data.results;
+      },
+      /* FIRST LOAD ONLY: seeds the date inputs from the range the server chose
+         and applies the (empty) filter set. */
+      async boot() {
+        this.initCols();
+        await this.fetchInto();
+        if (!this.f.from_date && this.data && this.data.from) this.f.from_date = this.data.from;
+        if (!this.f.to_date && this.data && this.data.to) this.f.to_date = this.data.to;
+        this.applyFilters();
+      },
+      /* THE POLL PATH. ⛔ Must not reset the pager or the filters — see the note
+         on the root element. Same data, same view. */
+      async refresh() { await this.fetchInto(); },
+      /* A date-range change is a SERVER round trip (the range decides the row
+         set); every other filter is client-side over the loaded rows. The page
+         returns to 1 because this genuinely IS a different result set — ⛔ the
+         filters the operator set are kept. */
+      async reloadRange() { await this.fetchInto(); this.tPage = 1; },
+
+      rows() { return (this.data && this.data.rows) || []; },
+      k(key) { const v = this.kpi[key]; return (v === null || v === undefined) ? "—" : v; },
+      dash(v) { return (v === null || v === undefined || v === "") ? "—" : v; },
+      rs(v) { return (v === null || v === undefined || v === "") ? "—" : this.money(v); },
+
+      /* TABLE CELLS CARRY NO CURRENCY SYMBOL — the column heading does
+         (ENTRY ₹, SL ₹, P&L ₹ …). ⛔ TABLE-ONLY: the detail card keeps rs()/money(),
+         because there the label sits beside the value, not above a column.
+         ⛔ Precision unchanged — two decimals, sign preserved. */
+      num(v) {
+        if (v === null || v === undefined || v === "") return "—";
+        const n = Number(v);
+        if (!isFinite(n)) return "—";
+        return (n < 0 ? "-" : "") + Math.abs(n).toFixed(2);
+      },
+      /* Quantities are whole shares — ⛔ never printed with decimals. */
+      int(v) {
+        if (v === null || v === undefined || v === "") return "—";
+        const n = Number(v);
+        return isFinite(n) ? String(Math.round(n)) : "—";
+      },
+      pct(v) { return (v === null || v === undefined) ? "—" : Number(v).toFixed(2) + "%"; },
+      /* R:R as "1.5:1" / "2:1" — a whole number drops its ".0". ⛔ Absent stays an
+         em-dash; ⛔ nothing is defaulted. ONE helper, so the table and the detail
+         card can never render the same ratio two different ways. */
+      rr(v) {
+        if (v === null || v === undefined || v === "") return "—";
+        const n = Number(v);
+        if (!isFinite(n)) return "—";
+        return (n % 1 === 0 ? String(n) : String(n)) + ":1";
+      },
+      /* R-multiple wears its unit so it can never be mistaken for the ratio. */
+      rmult(v) {
+        if (v === null || v === undefined) return "—";
+        const n = Number(v);
+        return isFinite(n) ? (n >= 0 ? "+" : "") + n.toFixed(2) + "R" : "—";
+      },
+      slip(v) {
+        if (v === null || v === undefined) return "—";
+        const n = Number(v);
+        if (!isFinite(n)) return "—";
+        return (n > 0 ? "+" : "") + n.toFixed(4);
+      },
+      slipPct(v) {
+        if (v === null || v === undefined) return "—";
+        const n = Number(v);
+        if (!isFinite(n)) return "—";
+        return (n > 0 ? "+" : "") + n.toFixed(4) + "%";
+      },
+      /* Positive slippage is ADVERSE, so the colours are inverted against P&L —
+         and the detail card says so in words, because a red "+" is otherwise
+         ambiguous. */
+      slipCls(v) { return v == null ? "" : (Number(v) > 0 ? "v-neg" : Number(v) < 0 ? "v-pos" : "v-zero"); },
+      dur(sec) {
+        if (sec === null || sec === undefined) return "—";
+        const s = Number(sec);
+        if (!isFinite(s)) return "—";
+        if (s < 60) return Math.round(s) + "s";
+        if (s < 3600) return Math.floor(s / 60) + "m " + Math.round(s % 60) + "s";
+        if (s < 86400) { const h = Math.floor(s / 3600); return h + "h " + Math.round((s - h * 3600) / 60) + "m"; }
+        const d = Math.floor(s / 86400);
+        return d + (d === 1 ? " day" : " days");
+      },
+      dirLabel(d) { const s = String(d || "").toUpperCase();
+        return s === "LONG" ? "Long" : s === "SHORT" ? "Short" : "—"; },
+      clock(ts) { return ts ? String(ts).slice(11, 19) : "—"; },
+      pnlCls(v) { return v == null ? "" : (Number(v) > 0 ? "v-pos" : Number(v) < 0 ? "v-neg" : "v-zero"); },
+      pnlTone(v) { return v == null ? "kc-muted" : (Number(v) >= 0 ? "kc-green" : "kc-red"); },
+      rateTone(v) { return v == null ? "kc-muted" : (Number(v) >= 50 ? "kc-green" : "kc-yellow"); },
+      pfTone(v) { return v == null ? "kc-muted" : (Number(v) >= 1 ? "kc-green" : "kc-red"); },
+
+      /* ── KPI footers: every rate and average names its own base ───────────── */
+      tradesFoot() {
+        const k = this.kpi;
+        if (k.total_trades == null) return "";
+        return (k.closed_trades || 0) + " closed · " + (k.open_trades || 0) +
+               " open · " + (k.no_exposure_trades || 0) + " no exposure";
+      },
+      winFoot() {
+        const k = this.kpi;
+        if (!k.decided) return "no decided trades";
+        return k.wins + " won / " + k.losses + " lost of " + k.decided + " decided";
+      },
+      netFoot() {
+        const k = this.kpi;
+        if (k.net_pnl == null) return "";
+        return "gross " + this.money(k.gross_pnl) + " · charges " + this.money(k.total_charges);
+      },
+      roiFoot() {
+        const k = this.kpi;
+        if (k.avg_roi_pct == null) return "on committed capital";
+        return "on committed capital · " + k.roi_basis + " trades";
+      },
+      rFoot() {
+        const k = this.kpi;
+        if (k.avg_r_multiple == null) return "net ÷ risk amount";
+        return "net ÷ risk amount · " + k.r_basis + " trades";
+      },
+      coverageLine() {
+        const c = this.sm && this.sm.coverage;
+        if (!c) return "";
+        return "Coverage over " + this.rows().length + " rows — slippage: " +
+               c.slippage_recorded + " recorded, " + c.slippage_derived +
+               " reproduced from entry prices · ROI: " + c.roi_valued +
+               " valued · planned R:R: " + c.rr_recorded + " recorded.";
+      },
+      decidedNote() {
+        const w = this.sm && this.sm.win_loss;
+        if (!w) return "";
+        return "Decided = trades with a realised P&L. Trades that never opened " +
+               "exposure are excluded — they are not losses.";
+      },
+
+      /* ── Outcome pie: consecutive arcs on ONE circle (dasharray + offset) ──
+         ⛔ Only results that actually occur get a slice; a zero-count result is
+         absent rather than drawn as a hairline that reads as "a few". */
+      PIE: {
+        "TGT Hit":      { cls: "sg-green",  dot: "dot-green"  },
+        "SL Hit":       { cls: "sg-red",    dot: "dot-red"    },
+        "Manual Exit":  { cls: "sg-orange", dot: "dot-orange" },
+        "Expired":      { cls: "sg-purple", dot: "dot-purple" },
+        "Closed":       { cls: "sg-blue",   dot: "dot-blue"   },
+        "Partial Exit": { cls: "sg-violet", dot: "dot-violet" },
+        "Open":         { cls: "sg-cyan",   dot: "dot-cyan"   },
+        "Failed":       { cls: "sg-gray",   dot: "dot-gray"   },
+        "Rejected":     { cls: "sg-slate",  dot: "dot-slate"  },
+        "Cancelled":    { cls: "sg-dim",    dot: "dot-dim"    },
+      },
+      pieSegs() {
+        const mix = (this.sm && this.sm.outcome_mix) || {};
+        const total = (this.sm && this.sm.outcome_total) || 0;
+        if (!total) return [];
+        const out = []; let acc = 0;
+        this.RESULTS.forEach(key => {
+          const n = mix[key] || 0;
+          if (!n) return;
+          const pct = n / total * 100;
+          const style = this.PIE[key] || { cls: "sg-gray", dot: "dot-gray" };
+          out.push({
+            key: key, n: n, pct: pct, cls: style.cls, dot: style.dot,
+            dash: pct.toFixed(3) + " " + (100 - pct).toFixed(3),
+            offset: (-acc).toFixed(3),
+          });
+          acc += pct;
+        });
+        return out;
+      },
+      /* The arcs as SVG source. ⛔ Not a `<template x-for>` — see the note beside
+         the <svg>. One helper feeds the chart, and the legend below reads the
+         SAME pieSegs(), so a slice and its label can never disagree. */
+      pieMarkup() {
+        return this.pieSegs().map(s =>
+          '<circle class="pd-arc ' + s.cls + '" cx="21" cy="21" r="15.9155" ' +
+          'stroke-dasharray="' + s.dash + '" stroke-dashoffset="' + s.offset + '"></circle>'
+        ).join("");
+      },
+      donut(pct) { const p = Math.max(0, Math.min(100, Number(pct) || 0));
+        return p.toFixed(2) + " " + (100 - p).toFixed(2); },
+      winPct() {
+        const w = this.sm && this.sm.win_loss;
+        return (w && w.decided) ? (w.wins / w.decided * 100) : 0;
+      },
+      wl(key) {
+        const w = this.sm && this.sm.win_loss;
+        if (!w) return "—";
+        const n = w[key], d = w.decided;
+        return d ? n + " (" + (n / d * 100).toFixed(1) + "%)" : String(n);
+      },
+
+      dirRows() {
+        const d = this.sm && this.sm.by_direction;
+        if (!d) return [];
+        const total = (d.long.trades || 0) + (d.short.trades || 0);
+        if (!total) return [];
+        return [
+          { key: "long",  label: "Long",  tone: "dot-green", d: d.long },
+          { key: "short", label: "Short", tone: "dot-red",   d: d.short },
+        ].map(x => ({
+          key: x.key, label: x.label, tone: x.tone,
+          trades: x.d.trades, net: x.d.net,
+          share: total ? (x.d.trades / total * 100).toFixed(2) : 0,
+          wr: x.d.win_rate == null ? "(no decided)" : "(" + x.d.win_rate.toFixed(1) + "% win)",
+        }));
+      },
+
+      /* Diverging bars from a shared centre line: profit right, loss left, both
+         scaled to the largest absolute value so the comparison is honest. */
+      stratRows() {
+        const rows = ((this.sm && this.sm.by_strategy) || []).filter(s => s.closed > 0);
+        if (!rows.length) return [];
+        const max = Math.max(...rows.map(s => Math.abs(s.net))) || 1;
+        return rows.slice(0, 8).map(s => {
+          const w = Math.abs(s.net) / max * 50;
+          return Object.assign({}, s, {
+            style: s.net >= 0 ? ("left:50%;width:" + w.toFixed(2) + "%")
+                              : ("right:50%;width:" + w.toFixed(2) + "%"),
+          });
+        });
+      },
+      stratNote() {
+        const n = ((this.sm && this.sm.by_strategy) || []).filter(s => s.closed > 0).length;
+        return n > 8 ? "(top 8 of " + n + " by size)" : "";
+      },
+
+      strategyOptions() { return [...new Set(this.rows().map(r => r.strategy).filter(Boolean))].sort(); },
+      scannerOptions()  { return [...new Set(this.rows().map(r => r.scanner).filter(Boolean))].sort(); },
+      symbolOptions()   { return [...new Set(this.rows().map(r => r.symbol).filter(Boolean))].sort(); },
+
+      applyFilters() { Object.keys(this.af).forEach(k => this.af[k] = this.f[k]); this.tPage = 1; },
+      resetFilters() {
+        this.f = { from_date: (this.data && this.data.from) || "",
+                   to_date: (this.data && this.data.to) || "",
+                   strategy: "", scanner: "", symbol: "", trade_type: "",
+                   direction: "", result: "" };
+        this.applyFilters();
+      },
+      toggleResult(s) {
+        this.f.result = (this.f.result === s) ? "" : s;
+        this.applyFilters();
+      },
+
+      view() {
+        const a = this.af;
+        return this.rows().filter(r =>
+          (!a.strategy   || r.strategy === a.strategy) &&
+          (!a.scanner    || r.scanner === a.scanner) &&
+          (!a.symbol     || r.symbol === a.symbol) &&
+          (!a.trade_type || r.trade_type === a.trade_type) &&
+          (!a.direction  || String(r.direction || "").toUpperCase() === a.direction) &&
+          (!a.result     || r.result === a.result));
+      },
+      resultCount(s) { return this.rows().filter(r => r.result === s).length; },
+      rangeLabel() {
+        const n = this.view().length;
+        if (!n) return "No entries";
+        const s = (this.tPage - 1) * this.tPageSize + 1;
+        return "Showing " + s + " to " + Math.min(s + this.tPageSize - 1, n) + " of " + n + " entries";
+      },
+
+      mismatch(r) {
+        const a = (x, y) => x != null && y != null && Math.abs(Number(x) - Number(y)) > 0.005;
+        return a(r.sl_initial, r.sl_broker) || a(r.tgt_initial, r.tgt_broker);
+      },
+
+      /* group header row: merge CONSECUTIVE columns sharing `group`. A drag that
+         separates a pair simply un-merges it — the group never traps a column. */
+      groups() {
+        const out = []; let i = 0, id = 0;
+        while (i < this.cols.length) {
+          const g = this.cols[i].group || "";
+          let n = 1;
+          while (g && i + n < this.cols.length && this.cols[i + n].group === g) n++;
+          out.push({ id: id++, label: g && n > 1 ? g : "", span: g && n > 1 ? n : 1 });
+          i += (g && n > 1) ? n : 1;
+        }
+        return out;
+      },
+
+      cell(r, c) {
+        const v = r[c.key];
+        if (c.kind === "rs")   return this.num(v);        /* ⛔ no ₹ in cells */
+        if (c.kind === "int")  return this.int(v);
+        if (c.kind === "rr")   return this.rr(v);
+        if (c.kind === "dur")  return this.dur(v);
+        if (c.kind === "rmult") {
+          if (v === null || v === undefined) return "—";
+          return '<span class="' + this.pnlCls(v) + '">' + this.rmult(v) + "</span>";
+        }
+        if (c.kind === "roi") {
+          if (v === null || v === undefined) return "—";
+          return '<span class="' + this.pnlCls(v) + '">' + Number(v).toFixed(2) + "%</span>";
+        }
+        if (c.kind === "signed") {
+          if (v === null || v === undefined) return "—";
+          return '<span class="' + this.pnlCls(v) + '">' + this.num(v) + "</span>";
+        }
+        if (c.kind === "slip") {
+          if (v === null || v === undefined) return "—";
+          const t = r.slippage_source === "derived"
+                  ? "Reproduced from the system and filled entry prices (no execution-log row)"
+                  : "Recorded by order_execution_log";
+          return '<span class="' + this.slipCls(v) + '" title="' + t + '">' +
+                 this.slip(v) + (r.slippage_source === "derived" ? '<i class="tex-drv">·</i>' : "") +
+                 "</span>";
+        }
+        if (c.kind === "dir") {
+          const s = String(v || "").toUpperCase();
+          if (s !== "LONG" && s !== "SHORT") return "—";
+          return '<span class="' + (s === "LONG" ? "d-long" : "d-short") + '">' +
+                 (s === "LONG" ? "Long" : "Short") + "</span>";
+        }
+        if (c.kind === "type") return v ? '<span class="t-' + String(v).toLowerCase() + '">' + v + "</span>" : "—";
+        if (c.kind === "result")
+          return '<span class="pill ' + this.resultPill(v) + '">' + (v || "—") + "</span>";
+        return (v === null || v === undefined || v === "") ? "—" : v;
+      },
+      resultPill(s) {
+        return s === "TGT Hit" ? "p-green" : s === "SL Hit" ? "p-red"
+             : s === "Manual Exit" ? "p-orange" : s === "Partial Exit" ? "p-purple"
+             : s === "Open" ? "p-green" : s === "Expired" ? "p-purple" : "p-gray";
+      },
+      chipTone(s) {
+        return s === "TGT Hit" ? "dot-green" : s === "SL Hit" ? "dot-red"
+             : s === "Manual Exit" ? "dot-orange" : s === "Partial Exit" ? "dot-purple"
+             : s === "Open" ? "dot-green" : s === "Expired" ? "dot-purple" : "dot-gray";
+      },
+      dirPill(d) { return String(d || "").toUpperCase() === "LONG" ? "p-green" : "p-red"; },
+
+      /* Export carries the RANGE and the APPLIED filters, so the sheet is the
+         filtered set — the server re-applies the same predicates (see
+         _apply_trade_filters). */
+      exportXlsx() {
+        const a = this.af;
+        const p = new URLSearchParams();
+        if (this.f.from_date) p.set("from", this.f.from_date);
+        if (this.f.to_date) p.set("to", this.f.to_date);
+        ["strategy", "scanner", "symbol", "trade_type", "direction", "result"]
+          .forEach(k => { if (a[k]) p.set(k, a[k]); });
+        window.location = "/api/export/trades?" + p.toString();
+      },
+
+      /* ── column order: Screen-04/05/06's mechanism, verbatim ──────────────── */
+      initCols() {
+        this.cols = this.DEFAULT_COLS.slice();
+        let saved = null;
+        try { saved = JSON.parse(window.localStorage.getItem(this.COLS_KEY) || "null"); }
+        catch (e) { saved = null; }
+        if (!Array.isArray(saved) || !saved.length) return;
+        const byKey = {};
+        this.DEFAULT_COLS.forEach(c => { byKey[c.key] = c; });
+        const next = [];
+        saved.forEach(k => { if (byKey[k] && next.indexOf(byKey[k]) === -1) next.push(byKey[k]); });
+        this.DEFAULT_COLS.forEach(c => { if (next.indexOf(c) === -1) next.push(c); });
+        if (next.length === this.DEFAULT_COLS.length) this.cols = next;
+      },
+      saveCols() {
+        try { window.localStorage.setItem(this.COLS_KEY, JSON.stringify(this.cols.map(c => c.key))); }
+        catch (e) {}
+      },
+      isDefaultOrder() { return this.cols.every((c, i) => c.key === this.DEFAULT_COLS[i].key); },
+      resetCols() {
+        this.cols = this.DEFAULT_COLS.slice();
+        try { window.localStorage.removeItem(this.COLS_KEY); } catch (e) {}
+      },
+      onDragStart(key, ev) {
+        this.dragKey = key;
+        if (ev && ev.dataTransfer) {
+          ev.dataTransfer.effectAllowed = "move";
+          try { ev.dataTransfer.setData("text/plain", key); } catch (e) {}
+        }
+      },
+      onDrop(targetKey) {
+        const from = this.cols.findIndex(c => c.key === this.dragKey);
+        const to = this.cols.findIndex(c => c.key === targetKey);
+        this.overKey = "";
+        if (from < 0 || to < 0 || from === to) return;
+        const next = this.cols.slice();
+        next.splice(to, 0, next.splice(from, 1)[0]);
+        this.cols = next;
+        this.saveCols();
+        this._dragEndAt = Date.now();
+      },
+      onDragEnd() { this.dragKey = ""; this.overKey = ""; this._dragEndAt = Date.now(); },
+      headClick(key) {
+        if (Date.now() - this._dragEndAt < 250) return;   /* drag, not a sort click */
+        this.tSort(key);
+      },
+    }
+  );
 }
 </script>
 {% endblock %}

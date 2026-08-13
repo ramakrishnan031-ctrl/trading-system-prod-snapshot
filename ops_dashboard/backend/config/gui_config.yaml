@@ -68,6 +68,35 @@ market_clock:
   market_close:      "15:30"
   active_weekdays:   [0, 1, 2, 3, 4]   # Mon-Fri (Python weekday(): Mon=0)
 
+# --- LOCAL DEVELOPMENT ONLY: direct-open screen URLs (14-Aug-2026) ------------
+# When ARMED, a request arriving on the loopback interface is given a session
+# without the login form, so http://127.0.0.1:8500/trades opens the screen
+# directly during visual verification.
+#
+# ⛔⛔ THIS IS NOT A PRODUCTION BYPASS AND CANNOT BECOME ONE BY ACCIDENT.
+# It is armed only when ALL FOUR of these hold (backend/app.py:_local_dev_armed):
+#   1. auto_login: true            — set it in gui_config.local.yaml, which is
+#                                    GIT-IGNORED. The value below stays false.
+#   2. OPS_DASHBOARD_LOCAL_DEV=1   — an ENVIRONMENT variable. ⭐ This is the gate
+#                                    that cannot travel: it is in no file, so it
+#                                    cannot ride a push, a merge or the
+#                                    post-receive `checkout -f`, and the VM's
+#                                    systemd unit does not set it.
+#   3. server.bind_host is loopback (isolation rule I6, already enforced).
+#   4. the CLIENT is on the loopback interface — checked per request.
+# ⚠️ 1+3 alone would NOT protect the VM, which also binds 127.0.0.1 behind a TLS
+#    terminator; 2 is what makes the guard hold there.
+#
+# To use it locally:
+#   ops_dashboard/backend/config/gui_config.local.yaml:
+#       local_dev: { auto_login: true, username: local-dev }
+#   then:  OPS_DASHBOARD_LOCAL_DEV=1 python -m backend.app
+# ⛔ Normal username + password + TOTP authentication is untouched and remains
+#    the only way in for every other caller.
+local_dev:
+  auto_login: false
+  username: "local-dev"
+
 # --- Auth (single user). Populated by `python -m backend.auth --setup`. ---
 # NEVER store plaintext. password_hash = pbkdf2_hmac(sha256) salted;
 # totp_secret = base32 for pyotp. Empty until setup is run.

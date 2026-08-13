@@ -683,11 +683,22 @@ def test_rr_backend_path_is_not_duplicated() -> None:
     open the strategy YAML, and everyone else must go through
     config_reader.get_strategies. trading.py reading the projected key off that
     dict is the single path working correctly, ⛔ not a second one.
+
+    ⚠️ NARROWED 14-Aug-2026, and the distinction is real rather than a loosening:
+    the guard matched the bare substring `tgt_risk_reward`, which also matches
+    the trades table's `tgt_risk_reward_applied` — a DIFFERENT quantity from a
+    DIFFERENT store (the ratio FROZEN AT PLACEMENT on the trade row,
+    core/schema.sql:230), which Screen-07 reads because a historical screen must
+    not be re-scored by a YAML edited since. The regex below excludes only that
+    column, so a genuine third reader of the strategy YAML key still fails, and
+    the per-trade column gets its own single-reader assertion beneath.
     """
     import os
+    import re
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-    mentions, globbers = set(), set()
+    yaml_key = re.compile(r"tgt_risk_reward(?!_applied)")
+    mentions, globbers, per_trade = set(), set(), set()
     for dirpath, _d, files in os.walk(os.path.join(root, "backend")):
         for name in files:
             if not name.endswith(".py"):
@@ -695,14 +706,20 @@ def test_rr_backend_path_is_not_duplicated() -> None:
             p = os.path.join(dirpath, name)
             code = "\n".join(l for l in open(p, encoding="utf-8", errors="ignore")
                              if not l.lstrip().startswith("#"))
-            if "tgt_risk_reward" in code:
+            if yaml_key.search(code):
                 mentions.add(name)
+            if "tgt_risk_reward_applied" in code:
+                per_trade.add(name)
             if '"strategies")' in code and "glob.glob(" in code:
                 globbers.add(name)
 
     # exactly two participants: the ONE projector and the ONE consumer
     assert mentions == {"config_reader.py", "trading.py"}, \
         f"an extra R:R reader appeared: {sorted(mentions)}"
+    # the PER-TRADE ratio has exactly one reader too — db_reader selects it and
+    # hands it on as `rr_applied`; ⛔ nobody else may go back to the column.
+    assert per_trade == {"db_reader.py"}, \
+        f"an extra reader of the frozen per-trade R:R appeared: {sorted(per_trade)}"
     # ⛔ and only the reader may open the YAML — the consumer must not re-glob it
     assert globbers == {"config_reader.py"}, \
         f"strategy YAML is globbed outside config_reader: {sorted(globbers)}"

@@ -72,7 +72,13 @@ DDL = [
         total_latency_ms INTEGER,
         -- W8 closure axes (v45). Screen-06 surfaces them verbatim in the detail
         -- card and NEVER infers one from the other.
-        closure_source TEXT, exit_mechanism TEXT)""",
+        closure_source TEXT, exit_mechanism TEXT,
+        -- Screen-07: all three exist in core/schema.sql and were simply absent
+        -- here; the fixture's own contract is to match schema.sql for every
+        -- column a reader touches. `tgt_risk_reward_applied` is the PLANNED R:R
+        -- "frozen at placement" (schema.sql:230) — which is why the Explorer
+        -- reads it rather than today's strategy YAML.
+        tgt_risk_reward_applied REAL, binding_constraint TEXT, mode TEXT)""",
     """CREATE TABLE fm_ledger (ledger_id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL,
         entry_type TEXT NOT NULL, amount REAL, bucket TEXT, balance_before REAL, balance_after REAL,
         signal_id TEXT, reservation_id TEXT, reason TEXT, session_id TEXT, direction TEXT,
@@ -137,8 +143,12 @@ DDL = [
         mae_price REAL, mae_pct REAL, entry_candle_open REAL, entry_candle_high REAL,
         entry_candle_low REAL, entry_candle_close REAL, updated_at TEXT)""",
     # G5c: screener score = System Score (L8). Absent in the pre-G5c fixture.
+    # `eligible_score` is the v14 THRESHOLD column and it exists in
+    # core/schema.sql; it was absent here, which is what made the pre-13-Aug
+    # mapping test vacuous. The fixture's contract is to match schema.sql for
+    # every column a reader touches, and signal_scores() touches this one.
     """CREATE TABLE screener_results (id INTEGER PRIMARY KEY AUTOINCREMENT,
-        signal_id TEXT, score INTEGER, created_at TEXT)""",
+        signal_id TEXT, score INTEGER, eligible_score INTEGER, created_at TEXT)""",
 ]
 
 DDL_V42_EXTRA = [
@@ -346,10 +356,14 @@ def _seed(conn: sqlite3.Connection, schema_version: int) -> None:
                   "VALUES(?,?,?,?,?,?)",
                   (f"sig_{tid}", "AAA", scn, "gap_fade_long", f"{YDAY}T10:00:00+05:30", "TRADED"))
 
-    # G5c: screener scores (System Score, L8) for the trade-linked signals.
+    # G5c: screener scores for the trade-linked signals. ⭐ The ACHIEVED score
+    # (72) and the THRESHOLD it had to reach (65) are seeded as DIFFERENT
+    # numbers on purpose: with one value for both, a reader that returned the
+    # threshold under the "System Score" label — which is exactly the defect
+    # corrected on 13-Aug — would pass every assertion.
     for sid in ("sig_trd_c1", "sig_trd_c4"):
-        c.execute("INSERT INTO screener_results(signal_id,score,created_at) VALUES(?,?,?)",
-                  (sid, 72, _ts("10:30:00")))
+        c.execute("INSERT INTO screener_results(signal_id,score,eligible_score,created_at) "
+                  "VALUES(?,?,?,?)", (sid, 72, 65, _ts("10:30:00")))
 
     # G5c multi-day trades for the period layer — gap_fade_long closed on YDAY
     # (within trailing-7) + TENDAYS (trailing-30 only). created_at+exit_time dated
@@ -469,6 +483,16 @@ def _seed(conn: sqlite3.Connection, schema_version: int) -> None:
                    1000.0 + slip, slip, 10, 10, "COMPLETE", _ts("10:39:30"), _ts("10:40:00")))
     c.execute("INSERT INTO trade_excursions(trade_id,mfe_pct,mae_pct,updated_at) VALUES(?,?,?,?)",
               ("trd_c1", 1.2, -0.8, _ts("15:50:00")))
+
+    # ── Screen-07: the PLANNED R:R frozen at placement, plus the sizing
+    # constraint and the mode. ⭐ THREE DIFFERENT VALUES AND ONE DELIBERATE NULL:
+    # every production strategy currently configures 1.5, so a fixture seeded
+    # 1.5-everywhere could not tell a per-trade read from a constant, and a test
+    # that only asserted "None when unset" would pass on a completely broken one.
+    for tid, rr, bc in (("trd_c1", 1.5, "concentration"), ("trd_c2", 2.0, "capital"),
+                        ("trd_c3", 3.0, "risk"), ("trd_c4", None, "flat")):
+        c.execute("UPDATE trades SET tgt_risk_reward_applied=?, binding_constraint=?, mode=? "
+                  "WHERE trade_id=?", (rr, bc, "LIVE", tid))
 
     # ── events ──
     for et, scn, tm in (("STARTUP", "COLD", "08:15:00"), ("RECOVERY", None, "08:16:00"),

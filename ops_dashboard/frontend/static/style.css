@@ -1469,3 +1469,115 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
    it ever needs. ⛔ No column was removed to make room for it. */
 .pos-page .pos-tbl th.ctr, .pos-page .pos-tbl td.ctr { text-align: center; }
 .pos-page .pos-tbl td.ctr { font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SCREEN-07 TRADE EXPLORER (14-Aug-2026)
+
+   ⭐ REUSE FIRST: the page element carries `ord-page` AND `pos-page` as well as
+   `tex-page`, so every Screen-05/06 rule above already applies — .pg-title and
+   its accepted 12px top gap, .kc cards, .flt-* filters, .st-tbl density,
+   .ord-scroll, .ord-cards, the .od-* detail card, .pos-drawer, the modal shell,
+   the status-chip strip and the drag-to-reorder header. ⛔ Nothing below
+   re-states a spacing, font or colour those screens already define.
+
+   This block adds only what the Explorer genuinely introduces:
+     · a MULTI-SEGMENT pie (Screen-06's donut draws one arc; outcome mix needs
+       up to ten consecutive arcs on the same circle)
+     · a DIVERGING bar list (P&L by strategy has a sign, so it needs a centre
+       line rather than a left-anchored track)
+     · the width work for 28 columns.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Outcome pie ───────────────────────────────────────────────────────────
+   Consecutive arcs on ONE circle: r = 15.9155 makes the circumference exactly
+   100, so a slice is `stroke-dasharray: pct (100-pct)` offset by the running
+   total. Same geometry as Screen-06's donut — ⛔ no second chart mechanism. */
+.tex-page .tex-pie .pd-arc { transition: none; }   /* ⛔ ten arcs animating at once reads as a glitch */
+.tex-page .sg-green  { stroke: var(--pos); }
+.tex-page .sg-red    { stroke: var(--neg); }
+.tex-page .sg-orange { stroke: var(--orange); }
+.tex-page .sg-purple { stroke: var(--purple); }
+.tex-page .sg-blue   { stroke: var(--blue); }
+.tex-page .sg-violet { stroke: #8957e5; }
+.tex-page .sg-cyan   { stroke: #39c5cf; }
+.tex-page .sg-gray   { stroke: #6e7681; }
+.tex-page .sg-slate  { stroke: #484f58; }
+.tex-page .sg-dim    { stroke: #30363d; }
+
+.tex-page .dot-blue   { background: var(--blue); }
+.tex-page .dot-violet { background: #8957e5; }
+.tex-page .dot-cyan   { background: #39c5cf; }
+.tex-page .dot-slate  { background: #484f58; }
+.tex-page .dot-dim    { background: #30363d; }
+
+/* Up to ten legend rows in a card sized for four, so the list scrolls inside
+   the card. ⛔ The card does not grow and push the row of four out of line. */
+.tex-page .tex-legend { max-height: 132px; overflow-y: auto; padding-right: 4px; gap: 5px; }
+.tex-page .tex-legend > div { font-size: 12px; }
+.tex-page .tex-empty { color: var(--dim); font-size: 12.5px; }
+
+/* ── Direction performance ─────────────────────────────────────────────────
+   The share bar reuses Screen-06's .pb-track; the signed net sits after it, so
+   the row is a 4-column grid rather than Screen-06's 3. */
+.tex-page .tex-dir { display: grid; grid-template-columns: 52px minmax(0, 1fr) auto auto;
+  align-items: center; gap: 9px; font-size: 13px; }
+.tex-page .tex-dir .pb-v { font-size: 12.5px; }
+.tex-page .tex-dir .pb-v em { font-size: 11.5px; }
+.tex-page .tex-dir-net { font-variant-numeric: tabular-nums; font-weight: 700;
+  min-width: 74px; text-align: right; }
+
+/* ── Net P&L by strategy — DIVERGING bars ──────────────────────────────────
+   A signed quantity needs a centre line: profit grows right of it, loss left.
+   Both sides are scaled to the largest ABSOLUTE net in the set, so the two
+   halves are directly comparable — ⛔ not two independently-scaled charts. */
+.tex-page .tex-strat { display: grid; grid-template-columns: 118px minmax(0, 1fr) 78px;
+  align-items: center; gap: 9px; font-size: 12.5px; }
+.tex-page .tex-strat .pb-k { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tex-page .tex-axis { position: relative; height: 9px; border-radius: 4px;
+  background: rgba(var(--t-gray), .3); }
+.tex-page .tex-axis::before { content: ""; position: absolute; left: 50%; top: -2px; bottom: -2px;
+  width: 1px; background: var(--border); }
+.tex-page .tex-fill { position: absolute; top: 0; bottom: 0; border-radius: 3px; }
+.tex-page .tex-fill.is-pos { background: var(--pos); }
+.tex-page .tex-fill.is-neg { background: var(--neg); }
+.tex-page .tex-strat .pb-v { text-align: right; font-size: 12px; }
+
+/* Coverage line under the table: it states how many rows carry each enrichment,
+   so a column of em-dashes reads as measured absence rather than a bug. */
+.tex-page .tex-cover { margin: 8px 2px 0; line-height: 1.5; }
+
+/* The marker on a slippage value that was reproduced rather than recorded.
+   Deliberately faint and tiny — it qualifies the number, it is not the number. */
+.tex-page .tex-drv { font-style: normal; color: var(--dim); margin-left: 2px; }
+
+/* ── 28 columns ────────────────────────────────────────────────────────────
+   Screen-06 fits 22. This screen adds Scanner, Duration, the third (Filled)
+   column on both SL and TGT, Slippage, R-multiple, ROI and the Gross/Charges
+   pair. Its Screen-06 inheritance already wraps headers and hides the drag grip
+   until hover; the two genuinely long TEXT fields — Strategy and Scanner — are
+   each capped with an ellipsis and keep their full value in the detail card.
+   ⛔ No column removed, ⛔ no heading abbreviated, ⛔ no font below the accepted
+   floor. Below the width where 28 columns cannot fit, .ord-scroll is the
+   fallback — which keeps data reachable rather than clipped. */
+/* MEASURED, then changed, then PARTLY REVERTED — and the reversal is the point.
+   Squeezing horizontal padding to 1px did make all 28 columns fit a 1680
+   viewport (1448/1448)… and the render showed why that was the wrong trade:
+   adjacent right-aligned numerics collided, so the Entry pair printed
+   "524.12524.10" as one number. ⛔ A table that fits but cannot be read is not a
+   table that fits.
+   Numeric cells therefore keep a real left gutter (they are right-aligned, so
+   the gap they need is on the left), and the narrow-viewport fallback below
+   ~1550px is .ord-scroll — exactly the fallback Screen-06 accepted. ⛔ Nothing
+   was hidden, abbreviated or shrunk to buy the width. */
+.tex-page .tex-tbl th, .tex-page .tex-tbl td { padding: 6px 1px; }
+.tex-page .tex-tbl th.rt, .tex-page .tex-tbl td.rt,
+.tex-page .tex-tbl th.ctr, .tex-page .tex-tbl td.ctr { padding-left: 5px; }
+.tex-page .tex-tbl td { font-size: 11.5px; }
+.tex-page .tex-tbl th { font-size: 10.5px; }
+/* Strategy (3) and Scanner (4) — the only two truncations on the screen, and
+   both keep their full value in the detail card. ⛔ Nothing else truncates. */
+.tex-page .tex-tbl td:nth-child(3), .tex-page .tex-tbl td:nth-child(4) {
+  max-width: 82px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tex-page .tex-tbl th:nth-child(3), .tex-page .tex-tbl th:nth-child(4) { max-width: 82px; }
+.tex-page .tex-tbl .pill { padding: 1px 5px; font-size: 10px; }
