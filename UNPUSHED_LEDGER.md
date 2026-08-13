@@ -602,8 +602,229 @@ session and the URI written to a local scratchpad file only.
 
 ---
 
+### Entry 10
+
+| Field | Value |
+|---|---|
+| **Date/time** | 2026-08-13 23:12 IST |
+| **Commit** | `fb44522fbd59197eaf160a3d6fc9244216792985` |
+| **Short** | `fb44522` |
+| **Branch** | `feat/screen06-positions` |
+| **Screen** | **Screen-07 Trade Explorer** (+ a local-development direct-open mode) |
+| **Pushed** | **NO** |
+| **Deployed** | **NO** |
+| **Reason** | Special no-deployment window; and the branch still needs a refit onto `1c8c710` |
+
+📌 **This supersedes Entry 9's *"Screen-07 is not started — it is built after
+tomorrow's 08:15 Fix-2 observation"*.** Rama asked for it tonight; that is his call
+and it is recorded rather than quietly re-planned. ⛔ Nothing about tomorrow's
+observation changed — no deploy, no push, no VM action.
+
+**Change summary**
+
+- **Screen-07 built in the accepted language.** Root carries `ord-page` *and*
+  `pos-page` as well as `tex-page`, so every approved Screen-05/06 rule applies
+  verbatim (top spacing, `.kc` cards, `.flt-*`, `.st-tbl`, `.ord-scroll`, the
+  `.od-*` detail card, the drawer, the modal, drag-to-reorder). `tex-page` adds
+  only a multi-segment pie, a diverging bar list, and the width work.
+- **ADDITIVE**: the G5c `/api/trades` endpoint is **untouched** and its contract
+  test still passes; Screen-07 gets `/api/trades/screen` + `/api/export/trades`.
+- 28 columns, four merged groups (Qty · Entry ₹ · SL ₹ · TGT ₹ · P&L ₹), a Result
+  chip strip, six KPI cards, four summary panels, a detail drawer with four tabs,
+  *View Full Details*, and an XLSX export of the **filtered** set.
+
+**🔑 Three quantities that are routinely confused, kept apart as separate columns**
+
+| | Definition | ⛔ Not |
+|---|---|---|
+| **ROI %** | `net_pnl / margin_reserved` — return on the capital **committed** | ⛔ on the leveraged notional (at 5× it reports a fifth of the return) |
+| **R-multiple** | `net_pnl / risk_amount` — what the trade **achieved** | ⛔ never printed in an R:R column |
+| **R:R** | `trades.tgt_risk_reward_applied` — what was **planned**, frozen at placement | ⛔ not today's strategy YAML, which would re-score a past trade |
+
+**⛔⛔ The Filled SL/TGT columns are not fabricated, and the rule is narrow**
+
+`orders.avg_fill_price` is **still NULL on all 977 orders ever placed** —
+re-measured on a corpus grown from 927: ENTRY 469 / SL 247 / TGT 235 / EOD 26,
+zero populated in every leg. ⇒ Screen-06's finding **reproduces**. A leg's
+executed price is knowable only from `trades.exit_price` on a trade whose
+`exit_reason` **names** that leg:
+
+- `SL_HIT` ⇒ SL (Filled) · `TGT_HIT` ⇒ TGT (Filled) · **every other reason fills neither**
+- ⚠️ `GTT_EXIT` is a **MECHANISM, not a leg** — it fills neither, the same
+  treatment `_position_status_of` already gives it.
+- (P) **114/114** `SL_HIT` and **76/76** `TGT_HIT` rows carry an `exit_price`;
+  measured on the rendered payload, **0 rows** carry a Filled leg that does not
+  match their own exit reason.
+
+**⭐ Slippage — a RECOVERED formula, ⛔ not an invented one**
+
+`order_execution_log.parent_trade_id` was only back-filled from July — (P) **0/72**
+rows in June, **100/290** in July, **74/74** in August — so only **91 of 246**
+filled trades join to a recorded row. Rather than leave 63 % of the column empty,
+the recorded rows became the **control**: on all **91** overlapping trades the
+direction-aware formula reproduces `slippage_rs` to ≤0.005 and `slippage_pct` to
+≤0.01, and the log's own `intended_price`/`actual_price` equal
+`entry_target_price`/`entry_actual_price` on **91/91**. ⇒ the derived value is the
+**same function of the same operands**. Each row carries `slippage_source`, so a
+measurement stays distinguishable from a reproduction.
+
+**🔴 MEASURED WHILE BUILDING — and it bears on an already-accepted screen**
+
+`order_execution_log.order_id` holds an **INTERNAL** id (`ord_<hex>`);
+`orders.order_id` holds the **BROKER** id (`260813170888908`). They are
+**different id spaces**, so `db_reader.order_exec_context` — which joins them —
+returns **ZERO rows on production data for every trade ever placed**, and
+Screen-05's execution/slippage block renders *"not captured"* for every order.
+⛔ **Screen-05 was NOT changed here**: fixing it is an unrelated change to an
+accepted screen and belongs in its own commit with its own decision. Carried
+forward below. Screen-07 joins on `parent_trade_id` and a test pins that key.
+
+**⛔ Honest absence, corrected**
+
+`charges` no longer falls back to gross-minus-net on a trade that never opened
+exposure — the ungated form printed a measured-looking **0.00 for 161 of 271
+rows**. Now NULL there; the KPI total is **unchanged at ₹59.53**, which is the
+proof the fix moved only the display and not a real number.
+
+**🔐 Local-development direct-open — FOUR gates, and one of them cannot travel**
+
+A loopback request may be given a session without the login form. Armed only when
+**all four** hold (`backend/app.py:_local_dev_armed`):
+
+1. `local_dev.auto_login: true` — meant for the **git-ignored** overlay; the
+   tracked `gui_config.yaml` ships **`false`** (pinned by a test).
+2. **`OPS_DASHBOARD_LOCAL_DEV=1` in the ENVIRONMENT** — ⭐ the gate that cannot
+   ride a push, a merge or the post-receive `checkout -f`, because it is in no
+   file. The VM's systemd unit does not set it.
+3. a loopback `bind_host` (isolation rule I6, already enforced);
+4. a loopback **client**, checked per request.
+
+⚠️ **1 + 3 alone would NOT protect the VM**, whose GUI also binds `127.0.0.1`
+behind a TLS terminator — **2 is what makes the guard hold there.**
+⛔ Normal username + password + TOTP is untouched and remains the only way in for
+every other caller.
+
+**✅ PROVEN IT CAN REFUSE, ⛔ not merely that it permits** — the discriminating
+test, same config, single variable: with the overlay flag still `true` but the env
+var **absent**, `GET /trades` → **302** (redirect to login) and
+`/api/trades/screen` → **401**. With the env var present: **200**.
+
+**🖥️ Verified by RENDERING, and three defects only a render exposed**
+
+⭐ The contract tests were green through all three — they verify *what the screen
+says*, not *that it can be read*.
+
+1. **The outcome pie drew ONE arc** while its legend listed six: an Alpine
+   `<template x-for>` inside an `<svg>` does not clone into the SVG namespace.
+   Rebuilt with `x-html` on a `<g>`; now 6 arcs.
+2. **`@ops-refresh` called `boot()`**, which resets the pager and clears the
+   filters — and base.html fires that event **every 5 s during market hours**, so
+   the screen would have been unusable while the market was open. It now calls
+   `refresh()`. Verified: page 2 + a `Failed` filter both **survive** the event.
+3. **Squeezing padding to fit 1680 made adjacent right-aligned numerics collide**
+   (`"524.12524.10"` as one number). ⛔ Reverted — a table that fits but cannot be
+   read has not fitted. Numeric cells keep a real left gutter.
+
+**📏 Width, measured at five viewports (natural table width 1526px)**
+
+| viewport | table | available | result |
+|---|---|---|---|
+| 2560 | 2048 | 2048 | **fits** |
+| 1920 | 1688 | 1688 | **fits** |
+| 1680 | 1526 | 1448 | scrolls — narrow-viewport fallback |
+| 1440 | 1526 | 1208 | scrolls |
+
+⛔ **How this was NOT achieved**: no column hidden, no heading abbreviated, no
+value truncated except Strategy and Scanner (both ellipsised, both full in the
+detail card), no font below the sizes Screen-05/06 already ship. Below ~1550px
+`.ord-scroll` is the fallback — exactly the one Screen-06 accepted at 1440.
+
+**Verification status — VERIFIED LOCALLY, ⛔ NOT VERIFIED LIVE**
+
+- Suite **537 passed / 1 failed**. ⭐ **Non-vacuous**: 485 → 537 is **+52**,
+  exactly the number of tests added. The single failure is the known
+  environmental `test_isolation.py::test_c_venv_has_no_kiteconnect`, **identical**
+  to the run recorded for Screen-06 and for Entry 9 ⇒ nothing regressed.
+- **Rendered and read on REAL data** (see the data note below): 271 trades over
+  14-Jul → 13-Aug. Read out of the DOM, not from the templates:
+  28 columns in the approved order; the group row merges correctly; a real SL-Hit
+  row (**HGINFRA**) renders **SL 528.32 / 528.32 / 528.65** and **TGT 517.83 /
+  517.78 / —** — the three-way split and the narrow Filled rule both visibly
+  working, on one row.
+- **Score labels checked case-INSENSITIVELY over the raw HTML** — ⛔ the
+  case-sensitive form was tried first and returned 0 for *every* label, because
+  the headers are uppercased by CSS: it could never have gone red. Corrected:
+  `signal score` **×0**, `signal_score` **×0**, `system score` **×6**,
+  `score threshold` **×6**.
+- **Values now proven, which Entry 9 could not do** — its addendum recorded that
+  the PC database was empty so *"the LABELS are verified but the VALUES are NOT"*.
+  A real row now shows **System Score 62 against Score Threshold 60** — two
+  different real numbers side by side.
+- Filters (7), the Result chip strip, pagination (1→2→3, 271 rows) and
+  rows-per-page all exercised in the browser and verified by their own counts.
+- **XLSX export downloaded and parsed with openpyxl**, ⛔ not read off the source:
+  45 columns, 271 rows unfiltered; filtered `result=TGT Hit&direction=LONG` →
+  **24** rows, distinct Result `{TGT Hit}`, distinct Direction `{LONG}`,
+  **SL (Filled) populated 0** and **TGT (Filled) 24/24**. Header carries
+  **System Score** + **Score Threshold**; `"Signal Score" in header` is **False**.
+- All touched files pure LF (`tr -cd '\r' | wc -c` = 0 on each).
+
+**🗄️ REAL DATA — a read-only local snapshot, and the VM was not modified**
+
+- Source: `/home/ubuntu/systems/trading-system/data_store/trading_system.db`
+  (296,632,320 bytes). Transferred by a **pure file read** (`gzip -c` over ssh);
+  ⛔ no VM write, ⛔ no `sqlite3` invocation against the live DB, ⛔ no service
+  action, ⛔ no cron touched.
+- **Consistency proven, ⛔ not assumed**: source `md5 f2ca4616d0b9aec5d2cab515aee66978`
+  read **before and after** the transfer and **unchanged**, with `-wal` at 0 bytes
+  both times ⇒ the copy is a consistent point-in-time image. Local copy verified
+  **byte-identical** (same md5, same size).
+- Lands at `data_store/vm_snapshot/` — **git-ignored** (`.gitignore:17`), and
+  `git status` is clean of it. The GUI is pointed at it by
+  `backend/config/gui_config.local.yaml`, also **git-ignored**
+  (`ops_dashboard/.gitignore:9`), verified with `git check-ignore`.
+- ⛔ **Nothing was seeded, mocked or invented** to populate the UI. Every figure
+  on the screen is a production row.
+- 🔒 **No secret was written to a tracked file.** The overlay's existing `auth:`
+  block (Rama's local credential from Entry 9 addendum 2) was **not touched** —
+  two new top-level blocks were appended beside it. ⛔ No VM credential copied.
+
+---
+
+### Entry 11
+
+| Field | Value |
+|---|---|
+| **Date/time** | 2026-08-13 23:18 IST |
+| **Commit** | *(this entry; its SHA is the branch tip — `git rev-parse HEAD`)* |
+| **Branch** | `feat/screen06-positions` |
+| **Screen** | — (process artefact) |
+| **Pushed** | **NO** |
+| **Deployed** | **NO** |
+| **Reason** | Special no-deployment window |
+
+**Change summary** — records Entry 10 (`fb44522`) and the two carried-forward
+items it added. 📌 Per Entry 3's rule, an entry cannot contain its own hash; the
+final entry's SHA is one `git rev-parse` away.
+
+---
+
 ## ⚠️ Carried forward for tomorrow's deployment review
 
+0. 🔴 **`order_execution_log` cannot be joined by `order_id`, and Screen-05 is
+   affected.** `order_execution_log.order_id` holds an INTERNAL id (`ord_<hex>`);
+   `orders.order_id` holds the BROKER id (`260813170888908`). `db_reader.
+   order_exec_context` joins them and therefore returns **zero rows on production
+   data for every order ever placed** — Screen-05's execution/slippage detail
+   renders *"not captured"* everywhere, and it is not a data gap. The working key
+   is `parent_trade_id` (⚠️ itself only back-filled from July: 0/72 June, 100/290
+   July, 74/74 August). ⛔ **NOT fixed here** — an unrelated change to an accepted
+   screen, and it needs its own decision about the July gap.
+0b. ⚠️ **`@ops-refresh` → `boot()` may have the same effect on Screens 04/05/06.**
+   Screen-07 was fixed; the others were **not inspected or changed**. The event
+   fires every 5 s during market hours, so if they reset their pager/filters the
+   same way it will show under live conditions, not off-hours. ⛔ Measure before
+   assuming — it is stated here as an unverified suspicion, not a finding.
 1. **`/api/export/orders` does not exist.** Screen-05's *Export XLSX* button navigates
    to it and gets a **404**. Verified wide: there is no export route anywhere under
    `ops_dashboard/**/*.py`. Screen-06 ships a working `/api/export/positions`;
