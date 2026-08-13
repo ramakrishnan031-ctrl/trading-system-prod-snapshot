@@ -507,6 +507,47 @@ Additionally verified end-to-end: all three endpoints emit `system_score` +
 `score_threshold`, the XLSX header reads **Score Threshold**, and no `signal_score` key
 or "Signal Score" label survives anywhere in backend, templates or tests.
 
+### Entry 9 — addendum: LOCAL BROWSER VERIFICATION (13-Aug-2026 ~21:55 IST)
+
+⛔ **No code commit.** Rama asked to see the change rendered before tomorrow's
+observation. ⛔ Nothing was deployed, pushed or refitted; ⛔ no design or semantic change
+was made during the check.
+
+**Server:** `python -m backend.app` → `http://127.0.0.1:8500`, waitress, 4 threads.
+⚠️ **Loopback ONLY, and that is enforced in code, not by convention:** `app.py:241`
+raises `RuntimeError` on any non-loopback bind (isolation rule I6), so there is **no LAN
+address** and none was created.
+
+**Auth** was unconfigured (`password_hash: ""` → *"Auth not configured"*). Resolved
+WITHOUT touching a tracked file: credentials written to
+`backend/config/gui_config.local.yaml`, which is **git-ignored**
+(`ops_dashboard/.gitignore:9`) and is the mechanism the app already provides for exactly
+this. ⚠️ `totp_disabled: true` is set explicitly because AB-910 §1.3 makes an empty TOTP
+secret **refuse** rather than pass — ⛔ the flag is a deliberate dev-only opt-out, not a
+weakened default. `git status` stays clean.
+
+**Rendered verification — the actual HTML, ⛔ not the templates and ⛔ not the API:**
+
+| Screen | URL | System Score | Score Threshold | "Signal Score" |
+|---|---|---|---|---|
+| 04 Signals | `/signals` | 2 | 2 | **0** |
+| 05 Orders | `/orders` | 1 | 1 | **0** |
+| 06 Positions | `/positions` | 2 | 2 | **0** |
+
+**Export verified as a real generated file**, ⛔ not by reading the column list in source:
+`/api/export/positions` was downloaded and parsed with `openpyxl` — 32 columns, header
+carries **`System Score`** and **`Score Threshold`**, and `"Signal Score" in header` is
+**False**.
+
+🔴 **THE LIMIT OF THIS CHECK, STATED PLAINLY: the PC database is EMPTY.**
+`D:/Projects/trading-system/data_store/trading_system.db` has **0 trades, 0 signals,
+0 orders, 0 screener_results** (measured; and it is the only PC DB — `analytics.db` has
+none of these tables). ⇒ ⭐ **the LABELS and the export are verified in the rendered UI;
+⛔ the VALUES are NOT — no row exists to show an achieved score beside its threshold.**
+⛔ **No data was seeded to make the screens look populated.** The value-level proof is the
+suite instead: `test_system_score_and_threshold_are_two_different_real_columns` (88 vs 82)
+and `test_score_threshold_falls_back_to_config_but_system_score_never_does` (71 vs 60).
+
 ---
 
 ## ⚠️ Carried forward for tomorrow's deployment review
