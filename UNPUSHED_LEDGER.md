@@ -924,7 +924,91 @@ bites.
 | **Deployed** | **NO** |
 | **Reason** | Special no-deployment window |
 
-**Change summary** — records Entry 12 (`10ac0f4`).
+**Change summary** — records Entry 12 (`10ac0f4`). **Its own SHA is `c12fe9c`,
+recorded by Entry 14 below** per Entry 3's rule.
+
+---
+
+### Entry 14 — ✅ SCREEN-07 TRADE EXPLORER: **APPROVED BY RAMA**, COMPLETE, ⛔ UNPUSHED
+
+| Field | Value |
+|---|---|
+| **Date/time** | 2026-08-13 23:59 IST |
+| **Approved by** | **Rama**, on the rendered real-data screen |
+| **Screen** | **Screen-07 Trade Explorer** — `http://127.0.0.1:8500/trades` |
+| **Code commits** | `fb44522fbd59197eaf160a3d6fc9244216792985` (build) · `10ac0f4f1da9b1e741bf84c21d7c9ef20494aa95` (review corrections) |
+| **Ledger commits** | `fb84c105e3dafdc542ad7324792978097f22518c` (Entry 10/11) · `c12fe9c` (Entry 12/13) |
+| **Branch tip at approval** | `c12fe9c` — this entry's own SHA is the new tip, one `git rev-parse` away |
+| **Pushed** | **NO — INTENTIONALLY UNPUSHED** |
+| **Deployed** | **NO** |
+| **Reason** | ⛔ The project's standing **deployment/push hold**. The branch is ALSO based on `2bfe9e2` and needs a refit onto `1c8c710` with its own gate and a NEW EXACT SHA before it can ever deploy. |
+
+**Scope, as approved**
+
+Screen-07 Trade Explorer, built on a read-only snapshot of production data:
+27-column forensic table over a date range, six KPI cards, four summary panels,
+a result chip strip, a four-tab detail drawer, a full-details popup and a
+filtered XLSX export.
+
+**The approved semantics, restated so a later reader cannot re-derive them wrongly**
+
+| | |
+|---|---|
+| **System Score** | the **achieved** score (`screener_results.score`) |
+| **Score Threshold** | the **eligibility** threshold (`eligible_score` → `min_pass_score`) |
+| **ROI** | return on **committed / reserved** capital (`net_pnl ÷ margin_reserved`) — ⛔ never the leveraged notional |
+| **R-multiple** | `net_pnl ÷ risk_amount` — **achieved**, and a **separate metric from ROI and from R:R** |
+| **R:R** | the ratio **planned**, frozen at placement (`tgt_risk_reward_applied`) |
+| **Broker** | the value **standing** broker-side |
+| **Filled** | an **actual execution price only** — SL only on `SL_HIT`, TGT only on `TGT_HIT`; ⛔ never the broker standing value, ⛔ never invented |
+| **Scanner** | **removed** — measured identical to Strategy on 603 trades AND 127,246 signals |
+| **Currency** | ⛔ no rupee sign in amount **cells**; headings carry it |
+
+**✅ FINAL PRE-COMMIT VERIFICATION — taken at 23:5x, read-only, ⛔ nothing changed
+to make it pass**
+
+- **⛔ NO FABRICATED ROWS.** All **271** rendered `trade_id`s exist in the source
+  `trades` table — **0 ghosts, 0 duplicates** — and an INDEPENDENT DB count over
+  the same range returns **271**, matching the API exactly.
+- **⛔ NO HARD-CODED SUMMARY COUNTS.** All ELEVEN headline figures recomputed from
+  the returned rows and compared: total, closed, wins, losses, win rate, net P&L,
+  avg ROI, avg R-multiple, profit factor, pie total and the chip sum — **0
+  mismatches**.
+- **Filter consistency re-confirmed on two further filters** (`strategy=gap_go_long`
+  → 39; `Delivery + LONG` → 18): table rows, KPI total, pie total and the
+  strategy bars **all agree** in each case.
+- **Filled semantics held under scan of every row**: **0** rows carry a Filled
+  value on a leg their `exit_reason` does not name; **0** rows carry a Filled
+  value copied from the broker standing value; **52/52** `SL_HIT` rows have
+  `sl_filled == exit_price`.
+- **🔒 THE DB CONNECTION IS READ-ONLY AT THE SQLITE LAYER, ⛔ not by convention** —
+  a planted `UPDATE` and a planted `DELETE` both raise *"attempt to write a
+  readonly database"*. ⭐ Proven by attempting the write, ⛔ not by reading the
+  connection string.
+- **🔐 PRODUCTION AUTHENTICATION IS NOT WEAKENED, AND THE CHECK COULD GO RED.**
+  The discriminator was run with the overlay flag **still `auto_login: true`** and
+  the ONLY variable changed being the environment:
+
+  | | `/trades` | `/api/trades/screen` | `/api/export/trades` |
+  |---|---|---|---|
+  | **without** `OPS_DASHBOARD_LOCAL_DEV` | **302 → /login** | **401** | **401** |
+  | **with** `OPS_DASHBOARD_LOCAL_DEV=1` | **200** | **200** | 200 |
+
+  ⭐ That env var exists in **no file**, so it cannot ride a push, a merge or the
+  post-receive `checkout -f`. The tracked `gui_config.yaml` ships
+  `auto_login: false` (pinned by a test). ⛔ **No production auth bypass exists.**
+- **🔒 SECRETS**: all **1,299** tracked files scanned for the local password hash
+  and TOTP secret — **0 hits**. The overlay and the DB snapshot remain git-ignored.
+- **🖥️ VM RE-MEASURED AT CLOSE AND UNCHANGED**: `trading-system.service`
+  **inactive**, production db md5 **`f2ca4616d0b9aec5d2cab515aee66978`** and mtime
+  `19:30:01` — both identical to the pre-transfer reading — and `origin/main`
+  still **`1c8c710`**.
+- Suite **561 passed / 1 failed**; the failure is the known environmental
+  `test_c_venv_has_no_kiteconnect`.
+
+⛔ **NOT DONE, and ⛔ not to be inferred**: no push · no deploy · no refit onto
+`1c8c710` · no VM action of any kind · no cosmetic redesign · ⛔ no re-opening of
+already-approved semantics.
 
 ---
 
