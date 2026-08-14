@@ -1316,6 +1316,61 @@ not rendered the page in a browser engine and have **not seen** the centring.
 
 ---
 
+### Entry 18 — ⚠️ CORRECTION to Entry 17: centre NUMERIC cells only, ⛔ UNPUSHED
+
+**Date/time:** 14-Aug-2026, committed `16:17 IST`
+**Commit:** `cd63b9f46f54eff478be21e873d87146774ab53b` (`cd63b9f`) — corrects `990fa27`
+**Branch:** `feat/screen06-positions` · **Scope:** GLOBAL, 2 files
+**Pushed: NO · Deployed: NO** — ⛔ still blocked, re-measured (below).
+
+**Files:** `frontend/static/style.css` · `frontend/templates/capital_risk.html`
+
+🔴 **WHAT WAS WRONG IN `990fa27`:** `table td { text-align:center !important }`
+centred **every** body cell — including the ROW LABELS (*"Real Capital
+Allocation"*, *"Segment Capacity"*, *"Limit Type"*, strategy names). ⭐ Rama's rule
+is narrower: **only the numeric/data values** sit centred under their column
+heading; **descriptive row and side labels stay LEFT.**
+
+✅ **THE FIX USES THE CODEBASE'S OWN MARKER, ⛔ NOT A POSITIONAL GUESS.** Numeric
+cells already carry `.cap-num` / `.dt-num` / `.rt`; label cells are plain `<td>`:
+`table td.cap-num, table td.dt-num, table td.rt, table td.ctr`
+⇒ centres **exactly** the data columns and ⛔ cannot touch a label.
+📌 **`td.rt`, ⛔ NOT `.rt`** — `.rt` is also used on `th`, and column HEADINGS keep
+their existing position.
+📌 **`ctr` added to the Limits Monitor STATUS cell** — a data column carrying no
+number, so ⛔ no numeric class would have caught it.
+
+✅ **MEASURED ON THE RENDERED PAGE, ⛔ not on the source:** **35** `cap-num` cells +
+**1** `ctr` cell centred · **25** plain `<td>` row labels left and untouched.
+⭐ Every unmarked cell was checked against the template and is genuinely a LABEL
+(*Limit Type · Real Capital Allocation · Segment Capacity · Existing Order Value ·
+Real Capital Reserved · Remaining Real Capital · Remaining Segment Capacity ·
+"Current (engine truth)" · "Before/After pay-in" · strategy names*)
+⇒ ⛔ **no numeric value left uncentred, ⛔ no label centred.**
+
+✅ **SCREEN-08 UNCHANGED.** Pinned simulation still exact — `before 10,000 / 3,200 /
+6,800 / 38,000 / 30,000`, `after 15,000 / 3,200 / 11,800 / 57,000 / 49,000` —
+and `LIVE / ENGINE TRUTH`, `PINNED SIMULATION`, the G-1 *"Pending Broker Source"*
+panel all present. ⛔ No calculation, ⛔ no layout, ⛔ no live/simulation separation
+touched.
+✅ Full GUI suite **583 passed / 1 failed** (`test_c_venv_has_no_kiteconnect` — runs
+`pip show` against `sys.executable`, **reads no repo file**). ✅ `/capital-risk` →
+**HTTP 200**, 53,818 bytes, zero template errors, direct-open cookie-less.
+⚠️ **A stale-server trap was caught here and is worth recording:** the first
+verification showed `ctr` count **0** because Flask was still serving the
+pre-edit template. ⇒ 📌 **After any template/CSS edit the dev server MUST be
+restarted before the page is measured** — otherwise the check reads the OLD
+render and reports a false pass.
+⚠️ **HONEST LIMIT — cascade proof, ⛔ NOT a pixel proof.** ⛔ No browser engine was
+used; Rama's visual check is the confirming step.
+
+🔴 **PUSH STILL BLOCKED — re-measured:** `git push --dry-run origin
+HEAD:refs/heads/main` → **rejected, non-fast-forward**; `origin/main` = `1c8c710…`,
+this branch **4 BEHIND**. ⛔ No force-push, ⛔ no `--force-with-lease`, ⛔ no gate
+bypass. 🔑 Rebase onto `1c8c710` → NEW SHA → own verification run, then push.
+
+---
+
 ## ⚠️ Carried forward for tomorrow's deployment review
 
 0. 🔴 **`order_execution_log` cannot be joined by `order_id`, and Screen-05 is
