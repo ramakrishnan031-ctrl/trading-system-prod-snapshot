@@ -81,6 +81,22 @@ def get_trade_story(trade_id: str):
 @analytics2_api.route("/api/analytics/pnl", methods=["GET"])
 @login_required
 def get_analytics_pnl():
+    """Screen 09. Read-only; every filter is optional and narrows ONE population
+    that all panels share. ⛔ No scanner filter — strategy IS the scanner identity
+    in this system (Rama, 14-Aug), so exposing both duplicated the same fact."""
     cfg = current_app.config["GUI_CONFIG"]
     p, frm, to = _period_args()
-    return jsonify(analytics_period.build_pnl_analytics(cfg, p, frm, to))
+
+    def _arg(name, upper=False):
+        v = (request.args.get(name) or "").strip()
+        return (v.upper() if upper else v) or None
+
+    return jsonify(analytics_period.build_pnl_analytics(
+        cfg, p, frm, to,
+        strategy=_arg("strategy"),
+        symbol=_arg("symbol", upper=True),
+        trade_type=_arg("trade_type", upper=True),
+        direction=_arg("direction", upper=True),
+        attribution_dim=(_arg("attr") or "strategy"),
+        compare=_arg("compare"),
+    ))

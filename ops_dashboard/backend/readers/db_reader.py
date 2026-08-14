@@ -1549,24 +1549,59 @@ def slippage_trend_today(cfg: dict, today: str) -> list:
 # The existing today-scoped readers are UNTOUCHED — these are new functions.
 # ─────────────────────────────────────────────────────────────────────────────
 
-def closed_trades_range(cfg: dict, from_date: str, to_date: str, limit: int = 2000) -> list:
+def closed_trades_range(cfg: dict, from_date: str, to_date: str,
+                        limit: Optional[int] = None) -> list:
     """Closed trades whose EXIT DAY falls in [from_date, to_date] — the spine for
     Strategy Ranking + P&L Analytics. Scanner is joined in the service via
-    scanner_for_trades (signal→scanner)."""
+    scanner_for_trades (signal→scanner).
+
+    ⛔ NO DEFAULT ROW CAP (Screen-09 §12, Rama). The previous `limit=2000` was a
+    SILENT truncation: a period that exceeded it would have made the KPI row, the
+    summary table, the equity curve and the drawdown describe DIFFERENT
+    populations, with nothing on screen saying so. `limit=None` means no LIMIT
+    clause at all; a caller may still pass an explicit int, and the service
+    reports whether a cap was in force rather than hiding it.
+
+    TRADE TYPE (`product`) is read through the AUTHORITATIVE order relationship,
+    ⛔ never invented: there is NO `trades.product` column — product lives on
+    `orders`, keyed by the ENTRY leg. A CORRELATED SUBQUERY is used rather than a
+    LEFT JOIN on purpose: a trade with more than one ENTRY order row would make a
+    join FAN OUT and double-count its P&L. The subquery returns exactly one value
+    per trade, so `trades` stays the grain.
+
+    ⚠️ `product` is NULL when the trade has no ENTRY order row. That is a REAL
+    state (it is how a trade whose entry was never recorded presents) and is
+    surfaced as NULL, ⛔ not defaulted to MIS/CNC. The service maps it to an
+    explicit 'UNKNOWN' bucket so such trades stay VISIBLE under a product filter
+    instead of silently vanishing.
+
+    `charges_derived` is 1 when the persisted `charges` column was NULL and the
+    value shown is the gross−net difference. Arithmetically that IS charges, but
+    it is a DERIVATION rather than a broker-originated figure, so the flag travels
+    with the row and the screen can label it (Screen-09 §8).
+    """
     states = _CLOSED_STATES
+    sql = (
+        "SELECT t.trade_id, t.signal_id, t.strategy, t.direction, t.symbol, "
+        "t.qty_filled, t.entry_actual_price, t.entry_target_price, t.exit_price, "
+        "t.entry_time, t.exit_time, t.created_at, t.exit_reason, "
+        "COALESCE(t.gross_pnl,0) AS gross_pnl, COALESCE(t.net_pnl,0) AS net_pnl, "
+        "COALESCE(t.charges, COALESCE(t.gross_pnl,0)-COALESCE(t.net_pnl,0)) AS charges, "
+        "CASE WHEN t.charges IS NULL THEN 1 ELSE 0 END AS charges_derived, "
+        "COALESCE(t.margin_reserved,0) AS margin_reserved, "
+        "COALESCE(t.risk_amount,0) AS risk_amount, "
+        "(SELECT o.product FROM orders o WHERE o.trade_id = t.trade_id "
+        " AND o.leg='ENTRY' ORDER BY o.placed_at LIMIT 1) AS product "
+        "FROM trades t WHERE t.status IN (" + _in_clause(states) + ") "
+        "AND substr(t.exit_time,1,10) BETWEEN ? AND ? "
+        "ORDER BY t.exit_time DESC"
+    )
+    params: list = [*states, from_date, to_date]
+    if limit is not None:
+        sql += " LIMIT ?"
+        params.append(int(limit))
     with _ro(cfg) as conn:
-        rows = conn.execute(
-            "SELECT trade_id, signal_id, strategy, direction, symbol, "
-            "qty_filled, entry_actual_price, entry_target_price, exit_price, "
-            "entry_time, exit_time, created_at, exit_reason, "
-            "COALESCE(gross_pnl,0) AS gross_pnl, COALESCE(net_pnl,0) AS net_pnl, "
-            "COALESCE(charges, COALESCE(gross_pnl,0)-COALESCE(net_pnl,0)) AS charges, "
-            "COALESCE(margin_reserved,0) AS margin_reserved, COALESCE(risk_amount,0) AS risk_amount "
-            "FROM trades WHERE status IN (" + _in_clause(states) + ") "
-            "AND substr(exit_time,1,10) BETWEEN ? AND ? "
-            "ORDER BY exit_time DESC LIMIT ?",
-            (*states, from_date, to_date, int(limit)),
-        ).fetchall()
+        rows = conn.execute(sql, tuple(params)).fetchall()
     return [dict(r) for r in rows]
 
 

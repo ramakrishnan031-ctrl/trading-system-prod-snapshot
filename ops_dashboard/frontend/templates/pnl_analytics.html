@@ -1,88 +1,566 @@
 {% extends "base.html" %}
-{% from "components.html" import kpi_row, kpi_card, period_selector, export_button, two_state_panel %}
+{% from "components.html" import kpi_row, kpi_card, export_button %}
 {% block title %}AlgoCore Systems — P&L Analytics{% endblock %}
 {% block nav_pnl_analytics %}active{% endblock %}
 {% block content %}
-{# G5c: multi-period P&L. Breakdowns strategy/scanner/direction; realized equity
-   curve; Profit Factor / Win Rate / Expectancy (documented in analytics_period.py).
-   Realized only — unrealized/MTM = G-1 → two_state_panel "Pending Broker Source
-   (G4)". Distinct from the today-scoped /api/pnl (UNTOUCHED). #}
-<div x-data="pnlAnalyticsPage()" x-init="load(); $watch('pPeriod', () => load()); $watch('pFrom', () => load()); $watch('pTo', () => load())" @ops-refresh.window="load()">
-  <h2 class="panel-title">P&amp;L Analytics
-    <span class="panel-sub" x-text="data.from ? (data.from + ' → ' + data.to) : ''"></span></h2>
+{# ═══════════════════════════════════════════════════════════════════════════
+   SCREEN 09 — P&L ANALYTICS.  Built to gui/09. PnL_Analytics.png with the three
+   approved overrides (Rama, 14-Aug):
 
-  {% call kpi_row() %}
-    {{ kpi_card("Gross P&L", "money(t('gross'))", tone="info") }}
-    {{ kpi_card("Charges", "money(t('charges'))", tone="warn") }}
-    {{ kpi_card("Net P&L", "money(t('net'))", tone="pos") }}
-    {{ kpi_card("Win Rate", "dash(t('win_rate'))", tone="info") }}
-    {{ kpi_card("Profit Factor", "dash(t('profit_factor'))", tone="info") }}
-    {{ kpi_card("Expectancy", "money(t('expectancy'))", tone="info") }}
-  {% endcall %}
+   1. SCANNER IS GONE — column, filter, ranking panel and best/worst entry.
+      "Strategy and Scanner represent the same source identity in this system."
+      ⛔ Do not reintroduce any of the four as a duplicate of Strategy.
+   2. TIME is a column of its own, immediately after Trading Date.
+   3. Alignment follows Screen-08 BY COLUMN ROLE: row/side labels LEFT, data
+      columns CENTER under their headings. ⛔ Never a blanket center.
 
-  {{ period_selector() }}
-  <div class="filters">{{ export_button("Export P&L") }}</div>
+   Every panel reads ONE filtered population (§11): the endpoint applies the
+   filters server-side and returns totals, rows, rankings, curve, drawdown,
+   heatmaps and attribution already derived from it — so no panel can silently
+   describe a different set.
 
-  <!-- realized equity curve + honest MTM two-state -->
-  <div class="two-col">
-    <section class="panel">
-      <h3 class="panel-title">Equity Curve <span class="panel-sub" x-text="data.curve_note || ''"></span></h3>
-      <div class="curve-wrap">
-        <svg class="curve-svg" viewBox="0 0 600 160" preserveAspectRatio="none" aria-hidden="true">
-          <polyline :points="curvePoints()" fill="none" class="curve-line"/></svg>
+   Equity curve is REALIZED ONLY (G4). ⛔ No live broker MTM anywhere on this
+   screen; `curve_note` from the service states that on the panel itself.
+   ═══════════════════════════════════════════════════════════════════════════ #}
+<div class="dash-page pnl-page" x-data="pnlAnalyticsPage()" x-init="boot()"
+     @ops-refresh.window="load()">
+
+  <div class="pnl-head">
+    <div>
+      <h2 class="panel-title pnl-h1">P&amp;L Analytics</h2>
+      <div class="pnl-sub">Comprehensive profitability and performance analytics</div>
+    </div>
+    <label class="pnl-cmp">
+      <span class="pnl-cmp-lbl">Compare With</span>
+      <select class="flt" x-model="cmp" @change="load()">
+        <option value="">None</option>
+        <option value="previous">Previous period (same length)</option>
+      </select>
+    </label>
+  </div>
+
+  <!-- PERIOD. "Yesterday" has no server period of its own; it is expressed as a
+       custom range of one day so it goes through the SAME IST resolver rather
+       than a second date path. -->
+  <div class="period-sel" role="tablist" aria-label="Period">
+    <template x-for="p in PERIODS" :key="p.k">
+      <button class="ps-btn" type="button" :class="isPeriod(p.k) ? 'ps-active' : ''"
+              @click="setPeriod(p.k)" x-text="p.l"></button>
+    </template>
+    <span class="ps-range" x-show="pPeriod==='custom'" x-cloak>
+      <input class="flt" type="date" x-model="pFrom" @change="load()" aria-label="From">
+      <span class="ps-arrow">→</span>
+      <input class="flt" type="date" x-model="pTo" @change="load()" aria-label="To">
+    </span>
+    <span class="pnl-range" x-text="data.from ? (data.from + ' → ' + data.to) : ''"></span>
+  </div>
+
+  <div class="pnl-grid">
+  <div class="pnl-main">
+
+    {% call kpi_row() %}
+      {{ kpi_card("Gross P&L",     "money(t('gross'))",           tone="info") }}
+      {{ kpi_card("Charges",       "money(t('charges'))",         tone="warn") }}
+      {{ kpi_card("Net P&L",       "money(t('net'))",             tone="pos")  }}
+      {{ kpi_card("ROI %",         "pct(t('roi_pct'))",           tone="info") }}
+      {{ kpi_card("Win Rate",      "pct(t('win_rate'))",          tone="info") }}
+      {{ kpi_card("Profit Factor", "dash(t('profit_factor'))",    tone="info") }}
+    {% endcall %}
+    <div class="pnl-kpi-note">
+      <span x-text="winSub()"></span>
+      <span class="pnl-dot">·</span><span>ROI on margin reserved</span>
+      <span class="pnl-dot">·</span><span x-text="data.charges_note || ''"></span>
+    </div>
+
+    <!-- COMPARE: only rendered when the service actually returned a comparison. -->
+    <div class="pnl-cmp-strip" x-show="data.compare" x-cloak>
+      <template x-if="data.compare && data.compare.available">
+        <div>
+          <span class="pnl-cmp-k">vs <b x-text="data.compare.from + ' → ' + data.compare.to"></b></span>
+          <template x-for="k in CMP_KEYS" :key="k.k">
+            <span class="pnl-cmp-i">
+              <span x-text="k.l"></span>
+              <b :class="toneCls(data.compare.delta[k.k])" x-text="delta(k.k)"></b>
+            </span>
+          </template>
+        </div>
+      </template>
+      <template x-if="data.compare && !data.compare.available">
+        <div class="pnl-cmp-na">Comparison unavailable — <span x-text="data.compare.reason"></span></div>
+      </template>
+    </div>
+
+    <!-- FILTERS. Scanner is deliberately absent (override 1). -->
+    <section class="panel pnl-filter-panel">
+      <div class="filters pnl-filters">
+        <label class="pnl-f"><span>Date Range</span>
+          <span class="pnl-dates">
+            <input class="flt" type="date" x-model="pFrom" aria-label="From">
+            <span class="ps-arrow">–</span>
+            <input class="flt" type="date" x-model="pTo" aria-label="To">
+          </span>
+        </label>
+        <label class="pnl-f"><span>Strategy</span>
+          <select class="flt" x-model="f.strategy">
+            <option value="">All Strategies</option>
+            <template x-for="o in opt('strategy')" :key="o"><option :value="o" x-text="o"></option></template>
+          </select></label>
+        <label class="pnl-f"><span>Symbol</span>
+          <select class="flt" x-model="f.symbol">
+            <option value="">All Symbols</option>
+            <template x-for="o in opt('symbol')" :key="o"><option :value="o" x-text="o"></option></template>
+          </select></label>
+        <label class="pnl-f"><span>Trade Type</span>
+          <select class="flt" x-model="f.trade_type">
+            <option value="">All Types</option>
+            <template x-for="o in opt('trade_type')" :key="o"><option :value="o" x-text="o"></option></template>
+          </select></label>
+        <label class="pnl-f"><span>Direction</span>
+          <select class="flt" x-model="f.direction">
+            <option value="">All Directions</option>
+            <template x-for="o in opt('direction')" :key="o"><option :value="o" x-text="o"></option></template>
+          </select></label>
+        <span class="pnl-fbtns">
+          <button class="rt-btn" type="button" @click="resetFilters()">Reset Filters</button>
+          <button class="rt-btn rt-active" type="button" @click="applyFilters()">Apply Filters</button>
+        </span>
+      </div>
+      <div class="pnl-filter-state" x-show="isFiltered()" x-cloak>
+        Filtered — <b x-text="data.trade_count"></b> of
+        <b x-text="data.trade_count_unfiltered"></b> closed trades in range.
+        Every panel below reflects this filtered set.
       </div>
     </section>
+
+    <!-- MAIN TABLE. Column order is the approved one: Trading Date, Time, then
+         Strategy … ⛔ no Scanner. Row labels LEFT; data columns CENTER (.ctr). -->
     <section class="panel">
-      <h3 class="panel-title">Unrealized / MTM</h3>
-      {% call two_state_panel("false", reason="Unrealized / MTM — Pending Broker Source (G4)") %}<span></span>{% endcall %}
+      <div class="pnl-panel-head">
+        <h3 class="panel-title">P&amp;L Summary Table</h3>
+        {{ export_button("Export XLSX") }}
+      </div>
+      <div class="pnl-tbl-wrap">
+        <table class="cap-table pnl-tbl">
+          <thead><tr>
+            <th class="lbl">Trading Date</th>
+            <th :title="data.time_note || ''">Time</th>
+            <th class="lbl">Strategy</th><th>Symbol</th><th>Trade Type</th><th>Direction</th>
+            <th>Trades</th><th>Wins</th><th>Losses</th>
+            <th>Gross P&amp;L</th><th>Charges</th><th>Net P&amp;L</th>
+            <th>ROI %</th><th>Profit Factor</th>
+          </tr></thead>
+          <tbody>
+            <template x-for="r in paged()" :key="rowKey(r)">
+              <tr>
+                <td x-text="r.date"></td>
+                <td class="ctr" x-text="r.time || '—'"></td>
+                <td x-text="r.strategy"></td>
+                <td class="ctr" x-text="r.symbol"></td>
+                <td class="ctr" x-text="r.trade_type"></td>
+                <td class="ctr" :class="dirCls(r.direction)" x-text="r.direction"></td>
+                <td class="ctr" x-text="r.trades"></td>
+                <td class="ctr" x-text="r.wins"></td>
+                <td class="ctr" x-text="r.losses"></td>
+                <td class="ctr" :class="toneCls(r.gross)" x-text="money(r.gross)"></td>
+                <td class="ctr" x-text="money(r.charges)"></td>
+                <td class="ctr" :class="toneCls(r.net)" x-text="money(r.net)"></td>
+                <td class="ctr" :class="toneCls(r.roi_pct)" x-text="pct(r.roi_pct)"></td>
+                <td class="ctr" x-text="dash(r.profit_factor)"></td>
+              </tr>
+            </template>
+            <tr x-show="!rows().length" x-cloak>
+              <td colspan="14" class="pnl-empty">No closed trades for the current filters.</td>
+            </tr>
+          </tbody>
+          <tfoot x-show="rows().length" x-cloak><tr class="pnl-total">
+            <td>TOTAL</td><td class="ctr">—</td><td></td><td class="ctr">—</td>
+            <td class="ctr">—</td><td class="ctr">—</td>
+            <td class="ctr" x-text="t('trades')"></td>
+            <td class="ctr" x-text="t('wins')"></td>
+            <td class="ctr" x-text="t('losses')"></td>
+            <td class="ctr" :class="toneCls(t('gross'))" x-text="money(t('gross'))"></td>
+            <td class="ctr" x-text="money(t('charges'))"></td>
+            <td class="ctr" :class="toneCls(t('net'))" x-text="money(t('net'))"></td>
+            <td class="ctr" :class="toneCls(t('roi_pct'))" x-text="pct(t('roi_pct'))"></td>
+            <td class="ctr" x-text="dash(t('profit_factor'))"></td>
+          </tr></tfoot>
+        </table>
+      </div>
+      <div class="pnl-pager" x-show="rows().length" x-cloak>
+        <span class="pnl-pg-lbl">Rows per page:</span>
+        <template x-for="n in [50,100,200,500]" :key="n">
+          <button class="rt-btn" type="button" :class="size===n?'rt-active':''"
+                  @click="size=n; page=1" x-text="n"></button>
+        </template>
+        <span class="pnl-pg-of" x-text="pageLabel()"></span>
+        <button class="rt-btn" type="button" @click="page=Math.max(1,page-1)" :disabled="page<=1">‹</button>
+        <button class="rt-btn" type="button" @click="page=Math.min(pages(),page+1)" :disabled="page>=pages()">›</button>
+      </div>
     </section>
-  </div>
 
-  <div class="two-col">
-    <section class="panel"><h3 class="panel-title">By strategy</h3>
-      <table class="cap-table"><thead><tr><th>Strategy</th><th>Trades</th><th>Win %</th><th>Net</th><th>PF</th><th>ROI %</th></tr></thead><tbody>
-        <template x-for="r in data.per_strategy || []" :key="r.strategy">
-          <tr><td x-text="r.strategy"></td><td class="cap-num" x-text="r.trades"></td>
-            <td class="cap-num" x-text="dash(r.win_rate)"></td>
-            <td class="cap-num" :class="r.net>0?'num-pos':(r.net<0?'num-neg':'')" x-text="money(r.net)"></td>
-            <td class="cap-num" x-text="dash(r.profit_factor)"></td><td class="cap-num" x-text="dash(r.roi_pct)"></td></tr>
+    <!-- EQUITY CURVE · DRAWDOWN · BEST/WORST -->
+    <div class="pnl-row3">
+      <section class="panel">
+        <div class="pnl-panel-head">
+          <h3 class="panel-title">Equity Curve</h3>
+          <span class="pnl-toggle">
+            <button class="rt-btn" type="button" :class="curveKey==='gross'?'rt-active':''"
+                    @click="curveKey='gross'">Gross P&amp;L</button>
+            <button class="rt-btn" type="button" :class="curveKey==='net'?'rt-active':''"
+                    @click="curveKey='net'">Net P&amp;L</button>
+          </span>
+        </div>
+        <div class="curve-wrap">
+          <svg class="curve-svg pnl-curve" viewBox="0 0 600 170" preserveAspectRatio="none" aria-hidden="true">
+            <line class="pnl-zero" x1="0" :y1="zeroY()" x2="600" :y2="zeroY()"></line>
+            <polyline :points="curvePoints()" fill="none" class="curve-line"
+                      :class="curveKey==='gross'?'pnl-line-gross':'pnl-line-net'"/>
+          </svg>
+        </div>
+        <div class="pnl-curve-foot">
+          <span class="pnl-cur-val" :class="toneCls(curveEnd())"
+                x-text="money(curveEnd())"></span>
+          <span class="pnl-note" x-text="data.curve_note || ''"></span>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h3 class="panel-title">Drawdown Analytics</h3>
+        <template x-if="dd() && dd().available">
+          <div class="pnl-dd">
+            <div class="pnl-dd-c"><span class="pnl-dd-l">Max Drawdown</span>
+              <b class="num-neg" x-text="money(dd().max_drawdown)"></b></div>
+            <div class="pnl-dd-c"><span class="pnl-dd-l">Current Drawdown</span>
+              <b :class="toneCls(dd().current_drawdown)" x-text="money(dd().current_drawdown)"></b></div>
+            <div class="pnl-dd-c"><span class="pnl-dd-l">Recovery %</span>
+              <b x-text="pct(dd().recovery_pct)"></b></div>
+            <div class="pnl-dd-c"><span class="pnl-dd-l">Drawdown Duration</span>
+              <b x-text="dd().duration || '—'"></b>
+              <span class="pnl-dd-sub" x-show="dd().from" x-cloak
+                    x-text="'(from ' + hhmm(dd().from) + ' to ' + hhmm(dd().to) + ')'"></span></div>
+          </div>
+        </template>
+        <template x-if="dd() && !dd().available">
+          <div class="pnl-na">
+            <b>Not applicable for this selection</b>
+            <span x-text="dd().reason"></span>
+            <em>⛔ Reported as unavailable rather than as ₹0.00 — zero would read
+                as a measurement.</em>
+          </div>
+        </template>
+      </section>
+
+      <section class="panel">
+        <h3 class="panel-title">Best / Worst Performance</h3>
+        <table class="cap-table pnl-bw"><tbody>
+          <tr><td class="pnl-bw-k pnl-good">Best Trade</td>
+            <td class="ctr" :class="toneCls(bw('best_trade','net'))" x-text="money(bw('best_trade','net'))"></td>
+            <td class="ctr" x-text="bw('best_trade','symbol') || '—'"></td>
+            <td class="ctr" x-text="bw('best_trade','exit_reason') || '—'"></td></tr>
+          <tr><td class="pnl-bw-k pnl-bad">Worst Trade</td>
+            <td class="ctr" :class="toneCls(bw('worst_trade','net'))" x-text="money(bw('worst_trade','net'))"></td>
+            <td class="ctr" x-text="bw('worst_trade','symbol') || '—'"></td>
+            <td class="ctr" x-text="bw('worst_trade','exit_reason') || '—'"></td></tr>
+          <tr><td class="pnl-bw-k pnl-good">Best Strategy</td>
+            <td class="ctr" colspan="3" x-text="bwName('best_strategy')"></td></tr>
+          <tr><td class="pnl-bw-k pnl-bad">Worst Strategy</td>
+            <td class="ctr" colspan="3" x-text="bwName('worst_strategy')"></td></tr>
+        </tbody></table>
+        <div class="pnl-note pnl-bw-note">Scanner rows omitted — strategy is the
+          scanner identity on this system.</div>
+      </section>
+    </div>
+
+    <!-- HEATMAPS · ATTRIBUTION (pie last, as approved) -->
+    <div class="pnl-row3">
+      <section class="panel">
+        <h3 class="panel-title">Day of Week vs Profitability</h3>
+        <div class="pnl-heat">
+          <template x-for="c in (data.heatmap_dow || [])" :key="c.bucket">
+            <div class="pnl-heat-c" :style="heatStyle(c, data.heatmap_dow)"
+                 :title="c.observed ? (c.trades + ' trades') : 'no trades in this bucket'">
+              <span class="pnl-heat-b" x-text="c.bucket"></span>
+              <span class="pnl-heat-v" :class="c.observed ? '' : 'pnl-heat-none'"
+                    x-text="c.observed ? money(c.net) : '—'"></span>
+            </div>
+          </template>
+        </div>
+        <div class="pnl-scale"><span>−ve</span><i class="pnl-scale-bar"></i><span>+ve</span></div>
+      </section>
+
+      <section class="panel">
+        <h3 class="panel-title">Time of Day vs Profitability</h3>
+        <div class="pnl-heat pnl-heat-tod">
+          <template x-for="c in (data.heatmap_tod || [])" :key="c.bucket">
+            <div class="pnl-heat-c" :style="heatStyle(c, data.heatmap_tod)"
+                 :title="c.observed ? (c.trades + ' trades') : 'no trades in this bucket'">
+              <span class="pnl-heat-b" x-text="c.bucket"></span>
+              <span class="pnl-heat-v" :class="c.observed ? '' : 'pnl-heat-none'"
+                    x-text="c.observed ? money(c.net) : '—'"></span>
+            </div>
+          </template>
+        </div>
+        <div class="pnl-scale"><span>−ve</span><i class="pnl-scale-bar"></i><span>+ve</span></div>
+      </section>
+
+      <!-- P&L ATTRIBUTION — last panel, per the approved layout. -->
+      <section class="panel">
+        <div class="pnl-panel-head">
+          <h3 class="panel-title">P&amp;L Attribution</h3>
+          <select class="flt pnl-attr-sel" x-model="attr" @change="load()">
+            <option value="strategy">By Strategy</option>
+            <option value="symbol">By Symbol</option>
+            <option value="trade_type">By Trade Type</option>
+            <option value="direction">By Direction</option>
+          </select>
+        </div>
+        <div class="pos-donut-wrap">
+          <svg class="pos-donut pnl-pie" viewBox="0 0 42 42" aria-hidden="true">
+            <circle class="pd-track" cx="21" cy="21" r="15.9155"></circle>
+            <g x-html="pieMarkup()"></g>
+          </svg>
+          <div class="ord-legend pos-legend pnl-legend">
+            <div class="pnl-pie-total">Total Net P&amp;L
+              <b :class="toneCls(attrTotal())" x-text="money(attrTotal())"></b></div>
+            <template x-for="s in pieSegs()" :key="s.label">
+              <div><span class="dot" :class="s.dot"></span><span x-text="s.label"></span>
+                <b :class="toneCls(s.net)" x-text="money(s.net) + ' (' + (s.pct==null?'—':s.pct.toFixed(2)+'%') + ')'"></b></div>
+            </template>
+            <div x-show="!pieSegs().length" x-cloak class="pnl-empty">No trades in range.</div>
+          </div>
+        </div>
+        <div class="pnl-note" x-text="data.attribution ? data.attribution.pct_basis : ''"></div>
+      </section>
+    </div>
+
+    <div class="pnl-foot">
+      <span>ℹ</span> Realized P&amp;L only. Auto-refreshes with the page.
+      <span x-show="data.row_cap_applied" x-cloak class="pnl-cap-warn">
+        ⚠ Row cap in force — totals may be truncated.</span>
+    </div>
+  </div><!-- /pnl-main -->
+
+  <!-- RIGHT RAIL. Scanner ranking removed (override 1). -->
+  <aside class="pnl-rail">
+    <section class="panel">
+      <div class="pnl-panel-head"><h3 class="panel-title">Strategy P&amp;L Ranking</h3>
+        {{ export_button("Export XLSX") }}</div>
+      <table class="cap-table"><thead><tr>
+        <th class="lbl">Strategy</th><th>Net P&amp;L</th><th>ROI %</th><th>Win %</th><th>PF</th>
+      </tr></thead><tbody>
+        <template x-for="r in (data.per_strategy || [])" :key="r.strategy">
+          <tr><td x-text="r.strategy"></td>
+            <td class="ctr" :class="toneCls(r.net)" x-text="money(r.net)"></td>
+            <td class="ctr" :class="toneCls(r.roi_pct)" x-text="pct(r.roi_pct)"></td>
+            <td class="ctr" x-text="pct(r.win_rate)"></td>
+            <td class="ctr" x-text="dash(r.profit_factor)"></td></tr>
+        </template>
+        <tr x-show="!(data.per_strategy||[]).length" x-cloak>
+          <td colspan="5" class="pnl-empty">No trades.</td></tr>
+      </tbody></table>
+    </section>
+
+    <section class="panel">
+      <div class="pnl-panel-head"><h3 class="panel-title">Symbol Ranking</h3>
+        {{ export_button("Export XLSX") }}</div>
+      <table class="cap-table"><thead><tr>
+        <th class="lbl">Symbol</th><th>Trades</th><th>Net P&amp;L</th><th>ROI %</th>
+      </tr></thead><tbody>
+        <template x-for="r in (data.per_symbol || [])" :key="r.symbol">
+          <tr><td x-text="r.symbol"></td>
+            <td class="ctr" x-text="r.trades"></td>
+            <td class="ctr" :class="toneCls(r.net)" x-text="money(r.net)"></td>
+            <td class="ctr" :class="toneCls(r.roi_pct)" x-text="pct(r.roi_pct)"></td></tr>
+        </template>
+        <tr x-show="!(data.per_symbol||[]).length" x-cloak>
+          <td colspan="4" class="pnl-empty">No trades.</td></tr>
+      </tbody></table>
+    </section>
+
+    <section class="panel">
+      <h3 class="panel-title">Trade Type &amp; Direction</h3>
+      <table class="cap-table"><thead><tr>
+        <th class="lbl">Split</th><th>Trades</th><th>Net P&amp;L</th><th>Win %</th>
+      </tr></thead><tbody>
+        <template x-for="r in (data.per_trade_type || [])" :key="'tt'+r.trade_type">
+          <tr><td x-text="r.trade_type"></td>
+            <td class="ctr" x-text="r.trades"></td>
+            <td class="ctr" :class="toneCls(r.net)" x-text="money(r.net)"></td>
+            <td class="ctr" x-text="pct(r.win_rate)"></td></tr>
+        </template>
+        <template x-for="r in (data.per_direction || [])" :key="'d'+r.direction">
+          <tr><td :class="dirCls(r.direction)" x-text="r.direction"></td>
+            <td class="ctr" x-text="r.trades"></td>
+            <td class="ctr" :class="toneCls(r.net)" x-text="money(r.net)"></td>
+            <td class="ctr" x-text="pct(r.win_rate)"></td></tr>
         </template>
       </tbody></table>
     </section>
-    <section class="panel"><h3 class="panel-title">By scanner</h3>
-      <table class="cap-table"><thead><tr><th>Scanner</th><th>Trades</th><th>Win %</th><th>Net</th><th>PF</th></tr></thead><tbody>
-        <template x-for="r in data.per_scanner || []" :key="r.scanner">
-          <tr><td x-text="r.scanner"></td><td class="cap-num" x-text="r.trades"></td>
-            <td class="cap-num" x-text="dash(r.win_rate)"></td>
-            <td class="cap-num" :class="r.net>0?'num-pos':(r.net<0?'num-neg':'')" x-text="money(r.net)"></td>
-            <td class="cap-num" x-text="dash(r.profit_factor)"></td></tr>
-        </template>
-      </tbody></table>
-    </section>
-  </div>
-
-  <section class="panel"><h3 class="panel-title">By direction</h3>
-    <table class="cap-table" style="max-width:520px"><thead><tr><th>Direction</th><th>Trades</th><th>Win %</th><th>Net</th><th>Expectancy</th></tr></thead><tbody>
-      <template x-for="r in data.per_direction || []" :key="r.direction">
-        <tr><td x-text="r.direction"></td><td class="cap-num" x-text="r.trades"></td>
-          <td class="cap-num" x-text="dash(r.win_rate)"></td>
-          <td class="cap-num" :class="r.net>0?'num-pos':(r.net<0?'num-neg':'')" x-text="money(r.net)"></td>
-          <td class="cap-num" x-text="dash(r.expectancy)"></td></tr>
-      </template>
-    </tbody></table>
-  </section>
+  </aside>
+  </div><!-- /pnl-grid -->
 </div>
+
 <script>
 function pnlAnalyticsPage() {
-  return Object.assign(pageBase("/api/analytics/pnl"), periodMixin("today"), {
-    qs() { return this.pQuery(); },
+  return Object.assign(pageBase("/api/analytics/pnl"), {
+    /* period state — 'yesterday' is a one-day CUSTOM range so it uses the same
+       IST resolver as everything else rather than a second date path. */
+    PERIODS: [{k:"today",l:"Today"},{k:"yesterday",l:"Yesterday"},
+              {k:"week",l:"This Week"},{k:"month",l:"This Month"},
+              {k:"custom",l:"Custom Range"}],
+    CMP_KEYS: [{k:"gross",l:"Gross"},{k:"charges",l:"Charges"},{k:"net",l:"Net"},
+               {k:"roi_pct",l:"ROI %"},{k:"win_rate",l:"Win %"},{k:"profit_factor",l:"PF"}],
+    PIE: ["sg-blue","sg-green","sg-orange","sg-purple","sg-cyan","sg-violet",
+          "sg-red","sg-gray","sg-slate","sg-dim"],
+    DOT: ["dot-blue","dot-green","dot-orange","dot-purple","dot-cyan","dot-violet",
+          "dot-red","dot-gray","dot-slate","dot-dim"],
+
+    pPeriod: "today", pFrom: "", pTo: "", pick: "today",
+    f: { strategy:"", symbol:"", trade_type:"", direction:"" },
+    applied: { strategy:"", symbol:"", trade_type:"", direction:"" },
+    attr: "strategy", cmp: "", curveKey: "net",
+    size: 100, page: 1,
+
+    boot() { this.load(); },
+
+    isPeriod(k) { return this.pick === k; },
+    setPeriod(k) {
+      this.pick = k;
+      if (k === "yesterday") {
+        const d = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+        this.pPeriod = "custom"; this.pFrom = d; this.pTo = d;
+      } else if (k === "custom") {
+        this.pPeriod = "custom";
+      } else {
+        this.pPeriod = k; this.pFrom = ""; this.pTo = "";
+      }
+      this.page = 1; this.load();
+    },
+
+    qs() {
+      const p = new URLSearchParams();
+      p.set("period", this.pPeriod);
+      if (this.pPeriod === "custom") {
+        if (this.pFrom) p.set("from", this.pFrom);
+        if (this.pTo) p.set("to", this.pTo);
+      }
+      Object.keys(this.applied).forEach(k => {
+        if (this.applied[k]) p.set(k, this.applied[k]);
+      });
+      p.set("attr", this.attr);
+      if (this.cmp) p.set("compare", this.cmp);
+      return "?" + p.toString();
+    },
+
+    applyFilters() { this.applied = Object.assign({}, this.f); this.page = 1; this.load(); },
+    resetFilters() {
+      this.f = { strategy:"", symbol:"", trade_type:"", direction:"" };
+      this.applied = Object.assign({}, this.f); this.page = 1; this.load();
+    },
+    isFiltered() { return Object.keys(this.applied).some(k => this.applied[k]); },
+    opt(k) { return (this.data.filters && this.data.filters.options
+                     && this.data.filters.options[k]) || []; },
+
     t(k) { return this.data.totals ? this.data.totals[k] : null; },
+    pct(v) { return (v === null || v === undefined) ? "—" : Number(v).toFixed(2) + "%"; },
+    dash(v) { return (v === null || v === undefined) ? "—" : v; },
+    toneCls(v) { const n = Number(v); return (v===null||v===undefined||isNaN(n)) ? ""
+                        : (n > 0 ? "num-pos" : (n < 0 ? "num-neg" : "")); },
+    dirCls(d) { return d === "LONG" ? "num-pos" : (d === "SHORT" ? "num-neg" : ""); },
+    hhmm(ts) { return String(ts || "").slice(11, 16) || "—"; },
+    winSub() {
+      const w = this.t("wins"), l = this.t("losses");
+      return (w === null || w === undefined) ? "" : (w + " / " + (w + l) + " decided");
+    },
+
+    rows() { return this.data.rows || []; },
+    pages() { return Math.max(1, Math.ceil(this.rows().length / this.size)); },
+    paged() {
+      if (this.page > this.pages()) this.page = this.pages();
+      const s = (this.page - 1) * this.size;
+      return this.rows().slice(s, s + this.size);
+    },
+    pageLabel() {
+      const n = this.rows().length; if (!n) return "0 of 0";
+      const s = (this.page - 1) * this.size + 1;
+      return s + "–" + Math.min(n, s + this.size - 1) + " of " + n;
+    },
+    rowKey(r) { return [r.date,r.strategy,r.symbol,r.trade_type,r.direction].join("|"); },
+
+    /* ── equity curve: the two series are the SAME trades under two measures ── */
+    series() {
+      const c = this.data.equity_curve || {};
+      return c[this.curveKey] || [];
+    },
+    bounds() {
+      const v = this.series().map(p => p.cum);
+      let min = Math.min(0, ...v), max = Math.max(0, ...v);
+      if (!v.length) { min = -1; max = 1; }
+      if (min === max) { min -= 1; max += 1; }
+      return { min: min, max: max };
+    },
+    yFor(v) { const b = this.bounds(); return (160 - 150 * (v - b.min) / (b.max - b.min) + 5); },
+    zeroY() { return this.yFor(0).toFixed(1); },
     curvePoints() {
-      const pts = (this.data.equity_curve || []).map(p => p.cum_pnl);
-      if (pts.length < 2) return "";
-      let min = Math.min(0, ...pts), max = Math.max(0, ...pts); if (min === max) { min -= 1; max += 1; }
-      const step = 600 / (pts.length - 1);
-      return pts.map((v, i) => (i*step).toFixed(1) + "," + (150 - 140*(v-min)/(max-min) + 5).toFixed(1)).join(" ");
+      const s = this.series(); if (s.length < 2) return "";
+      const step = 600 / (s.length - 1);
+      return s.map((p, i) => (i * step).toFixed(1) + "," + this.yFor(p.cum).toFixed(1)).join(" ");
+    },
+    curveEnd() { const s = this.series(); return s.length ? s[s.length - 1].cum : 0; },
+
+    dd() { return this.curveKey === "gross" ? this.data.drawdown_gross : this.data.drawdown; },
+    bw(which, key) {
+      const b = this.data.best_worst && this.data.best_worst[which];
+      return b ? b[key] : null;
+    },
+    bwName(which) {
+      const v = this.data.best_worst && this.data.best_worst[which];
+      return v || "—";
+    },
+
+    /* ── heatmap: colour scales to the LARGEST ABSOLUTE net in the same map, so
+         one cell cannot look extreme against a different map's range. A bucket
+         with no trades gets no fill at all — ⛔ never a green/red zero. ── */
+    heatStyle(c, all) {
+      if (!c.observed) return "background:transparent;";
+      const mx = Math.max(1, ...(all || []).map(x => Math.abs(x.net || 0)));
+      const a = Math.min(0.85, 0.12 + 0.73 * Math.abs(c.net) / mx);
+      return "background:" + (c.net >= 0 ? "rgba(63,185,80," : "rgba(248,81,73,") + a.toFixed(3) + ");";
+    },
+
+    /* ── attribution pie: same geometry as Screen-06/07 (r=15.9155 ⇒ circumference
+         100). Shares are of ABSOLUTE contribution because signed nets cannot sum
+         to 100%. ── */
+    attrTotal() { return this.data.attribution ? this.data.attribution.net_total : 0; },
+    pieSegs() {
+      const a = this.data.attribution;
+      if (!a || !a.slices || !a.slices.length) return [];
+      const out = []; let acc = 0;
+      a.slices.forEach((s, i) => {
+        const pct = (s.pct === null || s.pct === undefined) ? 0 : Number(s.pct);
+        out.push({
+          label: s.label, net: s.net, pct: s.pct,
+          cls: this.PIE[i % this.PIE.length], dot: this.DOT[i % this.DOT.length],
+          dash: pct.toFixed(3) + " " + (100 - pct).toFixed(3),
+          offset: (-acc).toFixed(3),
+        });
+        acc += pct;
+      });
+      return out;
+    },
+    pieMarkup() {
+      return this.pieSegs().map(s =>
+        '<circle class="pd-arc ' + s.cls + '" cx="21" cy="21" r="15.9155" ' +
+        'stroke-dasharray="' + s.dash + '" stroke-dashoffset="' + s.offset + '"></circle>'
+      ).join("");
+    },
+    delta(k) {
+      const d = this.data.compare && this.data.compare.delta;
+      const v = d ? d[k] : null;
+      if (v === null || v === undefined) return "—";
+      const s = Number(v) > 0 ? "+" : "";
+      return (k === "roi_pct" || k === "win_rate") ? s + Number(v).toFixed(2) + "%"
+                                                   : s + Number(v).toFixed(2);
     },
   });
 }
