@@ -1501,6 +1501,78 @@ verification run.
 
 ---
 
+### Entry 20 — ✅ REBASE + RE-GATE COMPLETE. Screen-08 LOCKED. ⛔ NOT PUSHED, ⛔ NOT DEPLOYED (Rama's instruction)
+
+**Date/time:** 14-Aug-2026, `16:43 IST`
+**NEW EXACT SHA:** `c90aa00489b6074e270e5502af6837511caa6c29` (`c90aa00`)
+**Old tip, PRESERVED as tag `screen08-prerebase-14aug`:** `3683224`
+**Branch:** `feat/screen06-positions` · **0 BEHIND / 32 AHEAD** `origin/main`
+**Pushed: NO · Deployed: NO**
+
+📜 **RAMA, VERBATIM — and this is the authority for stopping here:**
+*"Do the needful till local pc commit - screen approved & finalized, but don't
+deploy to vm"*
+🔑 **In this project a PUSH *is* the deploy** — `origin` is the VM bare repo and its
+`post-receive` hook runs `checkout -f` into the live tree. ⇒ ⛔ *"don't deploy to
+vm"* means **⛔ do not push**. The release checklist's push/deploy steps are
+therefore **deliberately not performed**, ⛔ not forgotten.
+
+### The rebase — pre-checked, then proven, ⛔ neither assumed
+🔬 **CONFLICT PRE-CHECK BEFORE TOUCHING ANYTHING (read-only):**
+`git merge-tree --write-tree origin/main HEAD` → exit **0**, tree
+`056b112cee4f177a774c90ff08ea0e85b241bf5e`, **CONFLICT count 0**.
+⭐ **And the reason it was safe is structural:** the four commits this branch
+lacked are **exactly Fix 2's** (`b04c376` · `4581865` · `e45f6b2` · `1c8c710`) and
+they touch **ZERO files under `ops_dashboard/`** — only `config/preflight.yaml`,
+`scripts/preflight/checks/{broker,engine}.py`, their two tests and one doc.
+🛟 **Safety tag written BEFORE the rebase:** `screen08-prerebase-14aug` → `3683224`.
+
+✅ **Rebase 32/32 replayed cleanly onto the MEASURED `origin/main` `1c8c710`** —
+⛔ not onto a SHA copied from a card. Working tree clean afterwards.
+
+✅ **CONTENT PROVEN UNCHANGED, THREE WAYS:**
+① `git diff screen08-prerebase-14aug HEAD -- ops_dashboard/` = **0 lines** ⇒ every
+  byte of the GUI work survived identical.
+② Whole-tree diff old-tip → new-tip is **exactly Fix 2's six files, 542 insertions
+  / 7 deletions** ⇒ the ONLY difference is that the tip now *contains* Fix 2.
+③ `git range-diff screen08-prerebase-14aug...HEAD` → **32 of 32 rows `=`**.
+📌 **SHA MAP:** alignment commit `51f31d9` → **`b1f7bbd`** · tip `3683224` →
+**`c90aa00`**. ⛔ **`51f31d9` is now HISTORICAL and must NEVER be pushed** — the
+deployable object is `c90aa00`, exactly as `da49ccd`→`1c8c710` went for Fix 2.
+
+### Re-gate ON THE NEW SHA (⛔ never gate the old and ship the new)
+✅ **Full GUI suite on `c90aa00`: 583 passed / 1 failed.** The single failure is
+`test_isolation.py::test_c_venv_has_no_kiteconnect`, which runs `pip show` against
+`sys.executable` and **reads no repo file** ⇒ ⛔ it cannot be caused by this change;
+it is an artefact of running system Python instead of `ops_dashboard/.venv`, which
+does not exist on this machine. ⭐ Identical result to the pre-rebase run — **no
+new failure, none disappeared.**
+
+✅ **SCREEN-08 RE-VERIFIED AFTER THE REBASE, server restarted first:**
+`BEFORE (10,000 · 3,200 · 6,800 · 38,000 · 30,000)` → **MATCH**
+`AFTER  (15,000 · 3,200 · 11,800 · 57,000 · 49,000)` → **MATCH**
+✅ **LIVE / PINNED separation intact:** live `total_live = 5,588.60`,
+`payin_today.available = false` ⇒ ⛔ the pinned `10k/15k` has NOT leaked into live.
+✅ `/capital-risk` → **HTTP 200**, 53,836 B, **zero** template errors; `cap-page`
+scope, `LIVE / ENGINE TRUTH`, `PINNED SIMULATION` and the G-1 *"Pending Broker
+Source"* panel all present; direct-open cookie-less.
+⭐ **Approved alignment unchanged** — headings centred over their data, row labels
+left, Simulation Input values right.
+
+### Status
+✅ **DESIGN LOCKED** (Rama's approval). ✅ Rebase done. ✅ Re-gated. ✅ Ledger current.
+⛔ **PUSH: NOT PERFORMED — by instruction, ⛔ not by blocker.** 🔑 The
+non-fast-forward that blocked every earlier attempt is now **RESOLVED** (0 behind);
+`git push --dry-run origin c90aa00:refs/heads/main` would now fast-forward. ⛔ It
+was NOT run as a real push and ⛔ nothing was sent.
+⛔ **DEPLOY: NOT PERFORMED** — same instruction; ⛔ the VM is untouched, ⛔ no service
+restarted, ⛔ `origin/main` still `1c8c710`.
+📌 **WHEN THE PUSH IS AUTHORISED:** re-measure `origin/main` at that moment
+(⛔ never from this entry — it moves on GUI days too), re-run `--dry-run`, then push
+the **explicit refspec `c90aa00:refs/heads/main`**, ⛔ never `git push origin main`.
+
+---
+
 ## ⚠️ Carried forward for tomorrow's deployment review
 
 0. 🔴 **`order_execution_log` cannot be joined by `order_id`, and Screen-05 is
