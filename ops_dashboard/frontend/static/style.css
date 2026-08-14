@@ -1599,3 +1599,25 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
   color: var(--muted); }
 .tex-page .tex-scope.is-filtered { color: var(--text);
   border-left: 2px solid var(--blue); padding-left: 9px; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   GLOBAL RULE — 14-Aug-2026 (Rama): ALL TABLE DATA CELLS ARE CENTER-ALIGNED.
+   Applies to every table on every screen, current and future.
+
+   ⚠️ PLACED LAST AND MARKED !important DELIBERATELY, not lazily. About a dozen
+   earlier rules right-align specific BODY cells and would otherwise win on
+   specificity or order:
+     .cap-num · .dt-num · .hbar-val · .dash-page .cap-tbl .rt ·
+     .dash-page .svc-tbl td.rt · .strat-page .st-tbl .rt ·
+     .sig-page .st-tbl .rt · .ord-page .st-tbl td.rt · .pos-page … td.rt
+   A plain declaration here would leave the RENDERED result right-aligned while
+   the source looked correct — which is exactly what this rule must prevent.
+   ⛔ There is no other !important on text-align in this file, so nothing
+   competes with it.
+
+   SCOPE IS DELIBERATELY NARROW: text-align ONLY, body cells ONLY. Column
+   HEADERS keep their existing left alignment per the instruction, and no other
+   property (padding, weight, tabular-nums, colour) is touched. ⛔ Do not widen
+   this rule to `th` or to other properties without a new decision.
+   ═══════════════════════════════════════════════════════════════════════════ */
+table td { text-align: center !important; }
