@@ -1212,6 +1212,110 @@ layout/colour has been performed by me.
 
 ---
 
+### Entry 17 — GLOBAL UI RULE: all table DATA cells centre-aligned, ⛔ UNPUSHED
+
+**Date/time:** 14-Aug-2026, committed `16:05 IST`
+**Commit:** `990fa271201ae48d7c41e52fbb04c80872a48130` (`990fa27`)
+**Branch:** `feat/screen06-positions` · **Scope:** GLOBAL (every screen), 1 file
+**Pushed: NO · Deployed: NO** — ⛔ **re-measured, ⛔ still blocked** (see below).
+
+**File:** `ops_dashboard/frontend/static/style.css` — **one appended rule**,
+⛔ zero existing declarations edited:
+`table td { text-align: center !important; }`
+
+📜 **Rama's rule, verbatim in effect:** every table's DATA cells are centre-aligned
+— numeric, text, percentage, status — on **all** screens, current and future.
+⭐ Column **headers keep** their existing left alignment, as instructed.
+
+⚠️⚠️ **`!important` AND LAST — DELIBERATE, ⛔ not lazy.** About a dozen earlier
+rules right-align specific BODY cells and would otherwise win on specificity or
+source order: `.cap-num` · `.dt-num` · `.hbar-val` · `.dash-page .cap-tbl .rt` ·
+`.dash-page .svc-tbl td.rt` · `.strat-page .st-tbl .rt` · `.sig-page .st-tbl .rt` ·
+`.ord-page .st-tbl td.rt` · `.pos-page … td.rt`.
+🔑 **A plain declaration would have left the RENDERED result right-aligned while
+the source read correct** — ⭐ exactly the failure Rama's instruction named.
+✅ **VERIFIED nothing can beat it — ⛔ width stated:** ZERO other `!important` on
+`text-align` in the stylesheet · ZERO inline `text-align` on any `td` in any
+template · ZERO inline `!important` anywhere in the templates.
+📌 **SCOPE NARROW ON PURPOSE:** `text-align` only, body cells only; ⛔ no padding,
+weight, `tabular-nums` or colour touched ⇒ no screen's layout can shift beyond the
+alignment. ⛔ Do not widen to `th` without a new decision.
+
+**Verification.** ✅ Full GUI suite **583 passed / 1 failed** — the failure is
+`test_c_venv_has_no_kiteconnect`, which runs `pip show` against `sys.executable`
+and **reads no repo file**. ✅ **Screen-08 re-verified UNCHANGED**: the approved
+pinned simulation still reproduces **exactly** — `before 10,000 / 3,200 / 6,800 /
+38,000 / 30,000`, `after 15,000 / 3,200 / 11,800 / 57,000 / 49,000` — and
+`LIVE / ENGINE TRUTH`, `PINNED SIMULATION` and the G-1 *"Pending Broker Source"*
+panel are all present. ✅ `/capital-risk` → **HTTP 200**, 53,791 bytes, **zero**
+template errors; direct-open still works cookie-less. ✅ The rule is served in
+`/static/style.css`.
+⚠️⚠️ **HONEST LIMIT — this is a CASCADE proof, ⛔ NOT a pixel proof.** The rule is
+last, `!important` and uncontested, so it **must** win by the cascade; ⛔ but I have
+not rendered the page in a browser engine and have **not seen** the centring.
+⭐ Rama's visual check is the confirming step.
+
+🔴 **PUSH STILL BLOCKED — RE-MEASURED at `16:05`, ⛔ not carried from Entry 16:**
+`git push --dry-run origin HEAD:refs/heads/main` → **`! [rejected] HEAD -> main
+(non-fast-forward)`**. (P) `origin/main` = `1c8c710…`; this branch is **4 BEHIND /
+26 AHEAD**. ⇒ 🔑 **A rebase onto `1c8c710` is owed, producing a NEW EXACT SHA that
+needs its own verification run — ⛔ never push the pre-rebase hash.**
+⛔ **NO force-push, ⛔ no `--force-with-lease`, ⛔ no gate bypass.**
+
+---
+
+### Entry 17 — GLOBAL UI RULE: all table DATA cells centre-aligned, ⛔ UNPUSHED
+
+**Date/time:** 14-Aug-2026, committed `16:05 IST`
+**Commit:** `990fa271201ae48d7c41e52fbb04c80872a48130` (`990fa27`)
+**Branch:** `feat/screen06-positions` · **Scope:** GLOBAL (every screen), 1 file
+**Pushed: NO · Deployed: NO** — ⛔ **re-measured, ⛔ still blocked** (see below).
+
+**File:** `ops_dashboard/frontend/static/style.css` — **one appended rule**,
+⛔ zero existing declarations edited:
+`table td { text-align: center !important; }`
+
+📜 **Rama's rule, in effect:** every table's DATA cells are centre-aligned —
+numeric, text, percentage, status — on **all** screens, current and future.
+⭐ Column **headers keep** their existing left alignment, as instructed.
+
+⚠️⚠️ **`!important` AND LAST — DELIBERATE, ⛔ not lazy.** About a dozen earlier
+rules right-align specific BODY cells and would otherwise win on specificity or
+source order: `.cap-num` · `.dt-num` · `.hbar-val` · `.dash-page .cap-tbl .rt` ·
+`.dash-page .svc-tbl td.rt` · `.strat-page .st-tbl .rt` · `.sig-page .st-tbl .rt` ·
+`.ord-page .st-tbl td.rt` · `.pos-page … td.rt`.
+🔑 **A plain declaration would have left the RENDERED result right-aligned while
+the source read correct** — ⭐ exactly the failure Rama's instruction named.
+✅ **VERIFIED nothing can beat it — ⛔ width stated:** ZERO other `!important` on
+`text-align` in the stylesheet · ZERO inline `text-align` on any `td` in any
+template · ZERO inline `!important` anywhere in the templates.
+📌 **SCOPE NARROW ON PURPOSE:** `text-align` only, body cells only; ⛔ no padding,
+weight, `tabular-nums` or colour touched ⇒ no screen's layout can shift beyond the
+alignment. ⛔ Do not widen to `th` without a new decision.
+
+**Verification.** ✅ Full GUI suite **583 passed / 1 failed** — the failure is
+`test_c_venv_has_no_kiteconnect`, which runs `pip show` against `sys.executable`
+and **reads no repo file**. ✅ **Screen-08 re-verified UNCHANGED**: the approved
+pinned simulation still reproduces **exactly** — `before 10,000 / 3,200 / 6,800 /
+38,000 / 30,000`, `after 15,000 / 3,200 / 11,800 / 57,000 / 49,000` — and
+`LIVE / ENGINE TRUTH`, `PINNED SIMULATION` and the G-1 *"Pending Broker Source"*
+panel are all present. ✅ `/capital-risk` → **HTTP 200**, 53,791 bytes, **zero**
+template errors; direct-open still works cookie-less. ✅ The rule is served in
+`/static/style.css`.
+⚠️⚠️ **HONEST LIMIT — this is a CASCADE proof, ⛔ NOT a pixel proof.** The rule is
+last, `!important` and uncontested, so it **must** win by the cascade; ⛔ but I have
+not rendered the page in a browser engine and have **not seen** the centring.
+⭐ Rama's visual check is the confirming step.
+
+🔴 **PUSH STILL BLOCKED — RE-MEASURED, ⛔ not carried from Entry 16:**
+`git push --dry-run origin HEAD:refs/heads/main` → **rejected, non-fast-forward**.
+(P) `origin/main` = `1c8c710…`; this branch is **4 BEHIND**. ⇒ 🔑 **A rebase onto
+`1c8c710` is owed, producing a NEW EXACT SHA that needs its own verification run —
+⛔ never push the pre-rebase hash.**
+⛔ **NO force-push, ⛔ no `--force-with-lease`, ⛔ no gate bypass.**
+
+---
+
 ## ⚠️ Carried forward for tomorrow's deployment review
 
 0. 🔴 **`order_execution_log` cannot be joined by `order_id`, and Screen-05 is
