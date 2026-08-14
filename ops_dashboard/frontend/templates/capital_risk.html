@@ -130,7 +130,9 @@
               <td class="cap-num" x-text="fmtCap(row.used, row.unit)"></td>
               <td class="cap-num" x-text="row.remaining !== null ? fmtCap(row.remaining, row.unit) : '—'"></td>
               <td class="cap-num" :class="usageClass(row.pct)" x-text="pctText(row.pct)"></td>
-              <td><span class="cap-status" x-text="row.status"></span></td>
+              {# `ctr` marks a DATA column that carries no number — Status is data,
+                 so it centres with the rest; the Limit Type label does not. #}
+              <td class="ctr"><span class="cap-status" x-text="row.status"></span></td>
             </tr>
           </template>
           <tr x-show="!(capacity.rows || []).length" x-cloak><td colspan="6" class="ev-empty">No limits reported.</td></tr>

@@ -1615,9 +1615,24 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
    ⛔ There is no other !important on text-align in this file, so nothing
    competes with it.
 
-   SCOPE IS DELIBERATELY NARROW: text-align ONLY, body cells ONLY. Column
-   HEADERS keep their existing left alignment per the instruction, and no other
-   property (padding, weight, tabular-nums, colour) is touched. ⛔ Do not widen
-   this rule to `th` or to other properties without a new decision.
+   ⚠️ CORRECTED 14-Aug-2026 (Rama, same day): the first version was
+   `table td { … }`, which centred EVERY body cell — including the row LABELS
+   ("Real Capital Allocation", "Segment Capacity", "Limit Type", strategy names).
+   That was wrong. ⭐ ONLY the NUMERIC / DATA values are centred; descriptive row
+   and side labels stay LEFT where they are.
+
+   THE SELECTOR IS THE CODEBASE'S OWN MARKER, not a positional guess: numeric
+   cells already carry `.cap-num` / `.dt-num` / `.rt`, and label cells are plain
+   `<td>`. Targeting those classes centres exactly the data columns and cannot
+   touch a label. ⛔ `td.rt` NOT `.rt` — `.rt` is also used on `th`, and column
+   HEADINGS must keep their existing position.
+
+   SCOPE IS DELIBERATELY NARROW: text-align ONLY, body cells ONLY, and only cells
+   already marked as data. No other property (padding, weight, tabular-nums,
+   colour) is touched. ⛔ Do not widen this rule to `th`, to bare `td`, or to
+   other properties without a new decision.
    ═══════════════════════════════════════════════════════════════════════════ */
-table td { text-align: center !important; }
+table td.cap-num,
+table td.dt-num,
+table td.rt,
+table td.ctr { text-align: center !important; }
