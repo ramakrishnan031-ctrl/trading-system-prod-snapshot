@@ -7,3 +7,8 @@ Waitress==3.0.2
 pyotp==2.9.0
 PyYAML==6.0.3
 pytest==8.3.4
+# Screen-06/07 xlsx export (/api/export/positions, /api/export/trades).
+# Pinned to the SAME version the main system already runs (requirements.txt:13,
+# "DR5: daily_review .xlsx output") so the two venvs cannot drift apart.
+# NOT a broker package -- I4 isolation is unaffected.
+openpyxl==3.1.5
