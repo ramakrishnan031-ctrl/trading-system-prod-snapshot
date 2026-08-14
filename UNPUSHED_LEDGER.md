@@ -1371,6 +1371,136 @@ bypass. 🔑 Rebase onto `1c8c710` → NEW SHA → own verification run, then pu
 
 ---
 
+### Entry 19 — Screen-08 alignment BY COLUMN ROLE (final spec), ⛔ UNPUSHED
+
+**Date/time:** 14-Aug-2026, committed `16:32 IST`
+**Commit:** `51f31d9b683682f4011868d0047e0e6ece57bae4` (`51f31d9`)
+**Branch:** `feat/screen06-positions` · **Files:** `static/style.css` ·
+`templates/capital_risk.html` · **ALIGNMENT ONLY**
+**Pushed: NO · Deployed: NO** — ⛔ still blocked, re-measured (below).
+
+📜 **Rama's final spec — alignment is decided PER ROLE, and each role is targeted
+SEPARATELY, ⛔ never by one `text-align` on every cell:**
+
+| role | alignment | how |
+|---|---|---|
+| row / side labels | **LEFT** | plain `<td>` — ⛔ untouched, no rule needed |
+| data column **HEADINGS** | **CENTER** | 🆕 `.cap-page .cap-table th` |
+| data cells | **CENTER** | `td.cap-num/.dt-num/.rt/.ctr` (from `cd63b9f`) |
+| **5b Simulation Input values** | **RIGHT** | 🆕 `.cap-page .sim-input td.cap-num` |
+
+🔑 **SCOPED TO A NEW `.cap-page` CLASS ON PURPOSE.** `.cap-table` is **shared with
+other screens**, so an unscoped heading rule would have silently re-aligned tables
+nobody asked about. ⭐ **The scope is the difference between an alignment fix and an
+unintended change to Screens 04-07.** ⛔ Do not remove it.
+
+✅ **`th:first-child` STAYS LEFT — and this was VERIFIED, ⛔ not assumed.** Every
+Screen-08 `<thead>` was enumerated; the first heading is the **row-label column in
+all seven** cases, and every other `th` sits over numeric data:
+
+| table | first th (LEFT) | remaining th (CENTER) |
+|---|---|---|
+| §4 Limits Monitor | `Limit Type` | Configured · Used · Remaining · Usage % · Status |
+| §5 totals | `Totals` | the five capital columns |
+| §5b Before/After grid | *(empty spacer)* | Intraday / MIS · Delivery / GTT |
+| §5b totals | `Totals` | the five capital columns |
+| §6 Strategy Allocation | `Strategy` | MIS (Real) · GTT (Real) · Total (Real) · % of Consumed |
+| §7 Top Consumers | `Strategy` | Capital Used (Real) · % of Total |
+| §9 Utilization Range | `Utilization Range` | Status |
+
+📌 **The Simulation Input EXCEPTION needs `!important` AND higher specificity**
+(`.cap-page .sim-input td.cap-num`) to beat the data-cell centring rule. ⭐ That
+table has **no `<thead>`** — which is precisely why it is a label→value list rather
+than a data grid, and why its values read better RIGHT-aligned.
+
+✅ **ALIGNMENT ONLY.** ⛔ No layout, ⛔ no calculation, ⛔ no colour, ⛔ no label,
+⛔ no content, ⛔ no route changed. **Screen-08 re-verified:** pinned simulation
+still exact (`before 10,000 / 3,200 / 6,800 / 38,000 / 30,000`; `after 15,000 /
+3,200 / 11,800 / 57,000 / 49,000`), `LIVE / ENGINE TRUTH` vs `PINNED SIMULATION`
+separation intact, MIS 70%/5x and GTT 30%/1x unchanged.
+✅ Full GUI suite **583 passed / 1 failed** (`test_c_venv_has_no_kiteconnect` — runs
+`pip show` against `sys.executable`, **reads no repo file**).
+✅ `/capital-risk` → **HTTP 200**, 53,836 B, zero template errors, `cap-page` scope
+present, both CSS rules served, direct-open cookie-less.
+⚠️ **HONEST LIMIT — cascade proof, ⛔ NOT a pixel proof.** Rules verified present,
+scoped and served; ⛔ no browser engine was used to look at the result. ⭐ Rama's
+visual pass on the five areas is the confirming step.
+
+🔴 **PUSH STILL BLOCKED — re-measured:** `origin/main` = `1c8c710…`, branch **4
+BEHIND**, `git push --dry-run origin HEAD:refs/heads/main` → **rejected,
+non-fast-forward**. ⛔ No force-push, ⛔ no `--force-with-lease`, ⛔ no bypass.
+✅ **NOTE: the P7 half of the gate is now CLOSED** — P7 scored ✅ CONFIRMED at
+`16:25` (drift EMPTY at `16:21:56` → officer ran `16:22:01` → ` M` at `16:25:13`).
+⇒ ⭐ **the only remaining blocker is the rebase**, which owes a NEW SHA and its own
+verification run.
+
+---
+
+### Entry 19 — Screen-08 alignment BY COLUMN ROLE (final spec), ⛔ UNPUSHED
+
+**Date/time:** 14-Aug-2026, committed `16:32 IST`
+**Commit:** `51f31d9b683682f4011868d0047e0e6ece57bae4` (`51f31d9`)
+**Branch:** `feat/screen06-positions` · **Files:** `static/style.css` ·
+`templates/capital_risk.html` · **ALIGNMENT ONLY**
+**Pushed: NO · Deployed: NO** — ⛔ still blocked, re-measured (below).
+
+📜 **Rama's final spec — alignment is decided PER ROLE, and each role is targeted
+SEPARATELY, ⛔ never by one `text-align` on every cell:**
+
+| role | alignment | how |
+|---|---|---|
+| row / side labels | **LEFT** | plain `<td>` — ⛔ untouched, no rule needed |
+| data column **HEADINGS** | **CENTER** | 🆕 `.cap-page .cap-table th` |
+| data cells | **CENTER** | `td.cap-num/.dt-num/.rt/.ctr` (from `cd63b9f`) |
+| **5b Simulation Input values** | **RIGHT** | 🆕 `.cap-page .sim-input td.cap-num` |
+
+🔑 **SCOPED TO A NEW `.cap-page` CLASS ON PURPOSE.** `.cap-table` is **shared with
+other screens**, so an unscoped heading rule would have silently re-aligned tables
+nobody asked about. ⭐ **The scope is the difference between an alignment fix and an
+unintended change to Screens 04-07.** ⛔ Do not remove it.
+
+✅ **`th:first-child` STAYS LEFT — and this was VERIFIED, ⛔ not assumed.** Every
+Screen-08 `<thead>` was enumerated; the first heading is the **row-label column in
+all seven** cases, and every other `th` sits over numeric data:
+
+| table | first th (LEFT) | remaining th (CENTER) |
+|---|---|---|
+| §4 Limits Monitor | `Limit Type` | Configured · Used · Remaining · Usage % · Status |
+| §5 totals | `Totals` | the five capital columns |
+| §5b Before/After grid | *(empty spacer)* | Intraday / MIS · Delivery / GTT |
+| §5b totals | `Totals` | the five capital columns |
+| §6 Strategy Allocation | `Strategy` | MIS (Real) · GTT (Real) · Total (Real) · % of Consumed |
+| §7 Top Consumers | `Strategy` | Capital Used (Real) · % of Total |
+| §9 Utilization Range | `Utilization Range` | Status |
+
+📌 **The Simulation Input EXCEPTION needs `!important` AND higher specificity**
+(`.cap-page .sim-input td.cap-num`) to beat the data-cell centring rule. ⭐ That
+table has **no `<thead>`** — which is precisely why it is a label→value list rather
+than a data grid, and why its values read better RIGHT-aligned.
+
+✅ **ALIGNMENT ONLY.** ⛔ No layout, ⛔ no calculation, ⛔ no colour, ⛔ no label,
+⛔ no content, ⛔ no route changed. **Screen-08 re-verified:** pinned simulation
+still exact (`before 10,000 / 3,200 / 6,800 / 38,000 / 30,000`; `after 15,000 /
+3,200 / 11,800 / 57,000 / 49,000`), `LIVE / ENGINE TRUTH` vs `PINNED SIMULATION`
+separation intact, MIS 70%/5x and GTT 30%/1x unchanged.
+✅ Full GUI suite **583 passed / 1 failed** (`test_c_venv_has_no_kiteconnect` — runs
+`pip show` against `sys.executable`, **reads no repo file**).
+✅ `/capital-risk` → **HTTP 200**, 53,836 B, zero template errors, `cap-page` scope
+present, both CSS rules served, direct-open cookie-less.
+⚠️ **HONEST LIMIT — cascade proof, ⛔ NOT a pixel proof.** Rules verified present,
+scoped and served; ⛔ no browser engine was used to look at the result. ⭐ Rama's
+visual pass on the five areas is the confirming step.
+
+🔴 **PUSH STILL BLOCKED — re-measured:** `origin/main` = `1c8c710…`, branch **4
+BEHIND**, `git push --dry-run origin HEAD:refs/heads/main` → **rejected,
+non-fast-forward**. ⛔ No force-push, ⛔ no `--force-with-lease`, ⛔ no bypass.
+✅ **NOTE: the P7 half of the gate is now CLOSED** — P7 scored ✅ CONFIRMED at
+`16:25` (drift EMPTY at `16:21:56` → officer ran `16:22:01` → ` M` at `16:25:13`).
+⇒ ⭐ **the only remaining blocker is the rebase**, which owes a NEW SHA and its own
+verification run.
+
+---
+
 ## ⚠️ Carried forward for tomorrow's deployment review
 
 0. 🔴 **`order_execution_log` cannot be joined by `order_id`, and Screen-05 is
