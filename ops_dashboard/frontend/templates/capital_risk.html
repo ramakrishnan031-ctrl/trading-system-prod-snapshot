@@ -1,31 +1,52 @@
 {% extends "base.html" %}
 {% from "components.html" import kpi_row, kpi_card, two_state_panel, export_button, events_alerts_panel %}
-{% block title %}AlgoCore Systems — Capital & Risk{% endblock %}
+{% block title %}AlgoCore Systems — Capital &amp; Risk{% endblock %}
 {% block nav_capital_risk %}active{% endblock %}
 {% block content %}
 {#
-  G5b (L5): ONE consolidated screen composing the PRESERVED endpoints
-  /api/risk + /api/capital + /api/exposure + /api/capacity. The old /risk /capital
-  /exposure /capacity routes stay reachable by direct URL (endpoints not deleted).
-  Live MTM = broker-authoritative → honest two-state (G-1), never fabricated.
+  SCREEN-08 (14-Aug-2026). Composes the PRESERVED endpoints /api/risk,
+  /api/capital, /api/exposure, /api/capacity, /api/pnl and adds ONE new read-only
+  endpoint /api/capital/segments. Every figure is engine truth from the DB.
+
+  FOUR QUANTITIES ARE KEPT VISUALLY APART — conflating them is why this screen
+  exists:
+    Real cash         broker cash the engine believes it holds (fm_ledger)
+    Real allocation   real cash x bucket pct (MIS 70 / GTT 30, from config)
+    Segment capacity  real allocation x leverage (5x / 1x) — BUYING POWER, not cash
+    Real committed    trades.margin_reserved — cash actually committed
+  Order notional is DERIVED as committed x leverage, never the reverse.
+
+  The mockup's BEFORE/AFTER pay-in panels are a PINNED SIMULATION and are NOT
+  reproduced here: no simulation mode exists, so the screen shows the actual
+  current state only. Pay-in / pay-out have no GUI-readable source (the engine
+  does not persist them and isolation rule I4 forbids a broker call), so they
+  render as an explicit not-observed state rather than an invented number.
 #}
 <div x-data="capitalRiskPage()" x-init="load()" @ops-refresh.window="load()">
   <h2 class="panel-title">Capital &amp; Risk
-    <span class="panel-sub" x-text="risk.today || ''"></span></h2>
+    <span class="panel-sub" x-text="seg.today || ''"></span></h2>
 
-  <!-- ZONE 1 · CAPITAL -->
-  {% call kpi_row() %}
-    {{ kpi_card("Total Capital", "money(capital.opening_capital)", tone="info") }}
-    {{ kpi_card("Intraday Allocated", "money(capital.buckets ? capital.buckets.intraday_allocated : null)", tone="info") }}
-    {{ kpi_card("Used", "money(capital.used)", tone="warn") }}
-    {{ kpi_card("Available", "money(capital.remaining)", tone="pos") }}
-    {{ kpi_card("Utilization", "pctText(capital.deployed_pct)", tone="info") }}
-  {% endcall %}
+  <!-- ZONE 1 · CAPITAL OVERVIEW (TOTAL REAL CASH) -->
+  <section class="panel">
+    <h3 class="panel-title">1 · Capital Overview
+      <span class="panel-sub">total real cash — <span x-text="seg.real_cash ? seg.real_cash.formula : ''"></span></span></h3>
+    {% call kpi_row() %}
+      {{ kpi_card("Opening Cash", "money(rc('opening'))", tone="info") }}
+      {{ kpi_card("Pay-in (Today)", "movementText('payin_today')", tone="info") }}
+      {{ kpi_card("Pay-out (Today)", "movementText('payout_today')", tone="info") }}
+      {{ kpi_card("Total Real Cash", "money(rc('total_live'))", tone="info") }}
+      {{ kpi_card("Real Cash Consumed", "money(rc('consumed'))", tone="warn") }}
+      {{ kpi_card("Real Cash Available", "money(rc('available'))", tone="pos") }}
+    {% endcall %}
+    <p class="panel-sub" x-show="!movementObserved()" x-cloak
+       x-text="movementReason()"></p>
+  </section>
 
   <div class="two-col">
-    <!-- ZONE 2 · RISK -->
+    <!-- ZONE 2 · RISK SUMMARY -->
     <section class="panel">
-      <h3 class="panel-title">Risk</h3>
+      <h3 class="panel-title">2 · Risk Summary
+        <span class="panel-sub" x-text="lossLimitSub()"></span></h3>
       <div class="big-grid">
         <div class="bignum"><span class="bn-label">Daily Loss Limit</span>
           <span class="bn-val num" x-text="money(risk.daily_loss ? risk.daily_loss.limit : null)"></span></div>
@@ -33,106 +54,294 @@
           <span class="bn-val num" x-text="money(risk.daily_loss ? risk.daily_loss.used : null)"></span></div>
         <div class="bignum"><span class="bn-label">Remaining Risk</span>
           <span class="bn-val num" x-text="money(riskRemaining())"></span></div>
+        <div class="bignum"><span class="bn-label">Risk Utilization</span>
+          <span class="bn-val num" :class="usageClass(riskUtilPct())"
+                x-text="pctText(riskUtilPct())"></span></div>
+        <div class="bignum"><span class="bn-label">Open Positions</span>
+          <span class="bn-val num" x-text="risk.open_positions ? (risk.open_positions.used + ' / ' + risk.open_positions.limit) : '—'"></span></div>
         <div class="bignum"><span class="bn-label">Consecutive Losses</span>
           <span class="bn-val num" x-text="risk.consecutive_losses ? (risk.consecutive_losses.used + ' / ' + risk.consecutive_losses.limit) : '—'"></span></div>
       </div>
     </section>
 
-    <!-- ZONE 3 · EXPOSURE (+ long/short/net additive) -->
+    <!-- ZONE 3 · EXPOSURE SUMMARY -->
     <section class="panel">
-      <h3 class="panel-title">Exposure</h3>
+      <h3 class="panel-title">3 · Exposure Summary
+        <span class="panel-sub">notional at entry price — not live MTM</span></h3>
       <div class="big-grid">
         <div class="bignum bn-green"><span class="bn-label">Long Exposure</span>
-          <span class="bn-val num" x-text="money(exposure.by_direction ? exposure.by_direction.long_value : null)"></span></div>
+          <span class="bn-val num" x-text="money(dir('long_value'))"></span></div>
         <div class="bignum bn-red"><span class="bn-label">Short Exposure</span>
-          <span class="bn-val num" x-text="money(exposure.by_direction ? exposure.by_direction.short_value : null)"></span></div>
+          <span class="bn-val num" x-text="money(dir('short_value'))"></span></div>
         <div class="bignum"><span class="bn-label">Net Exposure</span>
-          <span class="bn-val num" x-text="money(exposure.by_direction ? exposure.by_direction.net_value : null)"></span></div>
+          <span class="bn-val num" x-text="money(dir('net_value'))"></span></div>
+        <div class="bignum"><span class="bn-label">Gross Exposure</span>
+          <span class="bn-val num" x-text="money(grossExposure())"></span></div>
         <div class="bignum"><span class="bn-label">Open Positions</span>
-          <span class="bn-val num" x-text="exposure.by_direction ? (exposure.by_direction.long_positions + exposure.by_direction.short_positions) : 0"></span></div>
+          <span class="bn-val num" x-text="openPositions()"></span></div>
+        <div class="bignum"><span class="bn-label">Exposure %</span>
+          <span class="bn-val num" x-text="pctText(exposure.margin_vs_capital_pct)"></span></div>
       </div>
+      {# G-1 honest gap, PRESERVED: unrealized MTM is broker-authoritative and the
+         GUI cannot read it (isolation I4). Exposure above is notional at ENTRY
+         price. ⛔ Never fabricate a live MTM figure to fill this panel. #}
       <div style="margin-top:10px">
         {% call two_state_panel("false", reason="Live MTM / unrealized — Pending Broker Source (G4)") %}<span></span>{% endcall %}
       </div>
     </section>
   </div>
 
+  <!-- ZONE 4 · LIMITS MONITOR (authoritative /api/capacity — no limit logic here) -->
+  <section class="panel">
+    <h3 class="panel-title">4 · Limits Monitor
+      <span class="panel-sub"><a class="panel-link" href="/capacity">all limits →</a></span></h3>
+    <div class="tbl-scroll">
+      <table class="cap-table">
+        <thead><tr><th>Limit Type</th><th>Configured</th><th>Used</th><th>Remaining</th><th>Usage %</th><th>Status</th></tr></thead>
+        <tbody>
+          <template x-for="row in (capacity.rows || [])" :key="row.key">
+            <tr :class="'st-' + (row.status || 'OK')">
+              <td x-text="row.label"></td>
+              <td class="cap-num" x-text="fmtCap(row.limit, row.unit)"></td>
+              <td class="cap-num" x-text="fmtCap(row.used, row.unit)"></td>
+              <td class="cap-num" x-text="row.remaining !== null ? fmtCap(row.remaining, row.unit) : '—'"></td>
+              <td class="cap-num" :class="usageClass(row.pct)" x-text="pctText(row.pct)"></td>
+              <td><span class="cap-status" x-text="row.status"></span></td>
+            </tr>
+          </template>
+          <tr x-show="!(capacity.rows || []).length" x-cloak><td colspan="6" class="ev-empty">No limits reported.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    {{ export_button("Export Limits") }}
+  </section>
+
+  <!-- ZONE 5 · CAPITAL FLOW & SEGMENT SUMMARY -->
+  <section class="panel">
+    <h3 class="panel-title">5 · Capital Flow &amp; Segment Summary
+      <span class="panel-sub" x-text="configSub()"></span></h3>
+
+    <div class="two-col">
+      <template x-for="k in ['intraday','delivery']" :key="k">
+        <div class="panel seg-panel">
+          <h4 class="panel-title" x-text="segTitle(k)"></h4>
+          <table class="cap-table">
+            <tbody>
+              <tr><td>Real Capital Allocation</td>
+                  <td class="cap-num" x-text="money(sv(k,'real_allocation'))"></td></tr>
+              <tr><td><span x-text="'Segment Capacity (' + levText(k) + ')'"></span></td>
+                  <td class="cap-num" x-text="money(sv(k,'segment_capacity'))"></td></tr>
+              <tr><td>Existing Order Value <span class="panel-sub">(notional)</span></td>
+                  <td class="cap-num" x-text="money(sv(k,'order_value_notional'))"></td></tr>
+              <tr><td>Real Capital Reserved / Used</td>
+                  <td class="cap-num" x-text="money(sv(k,'real_committed'))"></td></tr>
+              <tr><td>Remaining Real Capital</td>
+                  <td class="cap-num" x-text="money(sv(k,'remaining_real'))"></td></tr>
+              <tr class="seg-total"><td>Remaining Segment Capacity</td>
+                  <td class="cap-num num-pos" x-text="money(sv(k,'remaining_segment_capacity'))"></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </template>
+    </div>
+
+    <table class="cap-table" style="margin-top:10px">
+      <thead><tr><th>Totals</th><th>Total Real Cash</th><th>Real Cash Consumed</th>
+                 <th>Remaining Real Cash</th><th>Total Segment Capacity</th>
+                 <th>Total Remaining Capacity</th></tr></thead>
+      <tbody>
+        <tr><td>Current (engine truth)</td>
+          <td class="cap-num" x-text="money(rc('total_live'))"></td>
+          <td class="cap-num" x-text="money(rc('consumed'))"></td>
+          <td class="cap-num num-pos" x-text="money(rc('available'))"></td>
+          <td class="cap-num" x-text="money(totalCapacity())"></td>
+          <td class="cap-num num-pos" x-text="money(totalRemainingCapacity())"></td></tr>
+      </tbody>
+    </table>
+    <p class="panel-sub" x-text="seg.source_note || ''"></p>
+  </section>
+
   <div class="two-col">
-    <!-- ZONE 4 · LIMITS MONITOR (capacity 8 primary rows + usage% color 0-60/60-80/80-100) -->
+    <!-- ZONE 6 · STRATEGY CAPITAL ALLOCATION BY SEGMENT -->
     <section class="panel">
-      <h3 class="panel-title">Limits Monitor
-        <span class="panel-sub"><a class="panel-link" href="/capacity">all 30 limits →</a></span></h3>
+      <h3 class="panel-title">6 · Strategy Capital Allocation
+        <span class="panel-sub">real capital committed, by segment</span></h3>
       <div class="tbl-scroll">
         <table class="cap-table">
-          <thead><tr><th>Limit</th><th>Used</th><th>Cap</th><th>Left</th><th>Usage %</th><th>Status</th></tr></thead>
+          <thead><tr><th>Strategy</th><th>MIS (Real)</th><th>GTT (Real)</th><th>Total (Real)</th><th>% of Consumed</th></tr></thead>
           <tbody>
-            <template x-for="row in (capacity.rows || [])" :key="row.key">
-              <tr :class="'st-' + (row.status || 'OK')">
-                <td x-text="row.label"></td>
-                <td class="cap-num" x-text="fmtCap(row.used, row.unit)"></td>
-                <td class="cap-num" x-text="fmtCap(row.limit, row.unit)"></td>
-                <td class="cap-num" x-text="row.remaining !== null ? fmtCap(row.remaining, row.unit) : '—'"></td>
-                <td class="cap-num" :class="usageClass(row.pct)" x-text="row.pct !== null ? row.pct + '%' : '—'"></td>
-                <td><span class="cap-status" x-text="row.status"></span></td>
-              </tr>
+            <template x-for="s in (seg.strategies || [])" :key="s.strategy">
+              <tr><td x-text="s.strategy"></td>
+                <td class="cap-num" x-text="money(s.mis_real)"></td>
+                <td class="cap-num" x-text="money(s.gtt_real)"></td>
+                <td class="cap-num" x-text="money(s.total_real)"></td>
+                <td class="cap-num" x-text="pctText(sharePct(s.total_real))"></td></tr>
             </template>
+            <tr x-show="!(seg.strategies || []).length" x-cloak><td colspan="5" class="ev-empty">No capital committed.</td></tr>
           </tbody>
         </table>
       </div>
-      {{ export_button("Export Limits") }}
     </section>
 
-    <!-- Top capital consumers (per-strategy exposure) -->
+    <!-- ZONE 7 · TOP CAPITAL CONSUMERS -->
     <section class="panel">
-      <h3 class="panel-title">Top Capital Consumers</h3>
+      <h3 class="panel-title">7 · Top Capital Consumers
+        <span class="panel-sub">all segments, real capital</span></h3>
       <div class="tbl-scroll">
         <table class="cap-table">
-          <thead><tr><th>Strategy</th><th>Value</th><th>Margin</th><th>Positions</th></tr></thead>
+          <thead><tr><th>Strategy</th><th>Capital Used (Real)</th><th>% of Total</th></tr></thead>
           <tbody>
-            <template x-for="s in (exposure.per_strategy || [])" :key="s.strategy">
+            <template x-for="s in topConsumers()" :key="s.strategy">
               <tr><td x-text="s.strategy"></td>
-                <td class="cap-num" x-text="money(s.value)"></td>
-                <td class="cap-num" x-text="money(s.margin)"></td>
-                <td class="cap-num" x-text="s.positions"></td></tr>
+                <td class="cap-num" x-text="money(s.total_real)"></td>
+                <td class="cap-num" x-text="pctText(sharePct(s.total_real))"></td></tr>
             </template>
-            <tr x-show="!(exposure.per_strategy || []).length" x-cloak><td colspan="4" class="ev-empty">No open positions.</td></tr>
+            <tr x-show="!topConsumers().length" x-cloak><td colspan="3" class="ev-empty">No capital committed.</td></tr>
           </tbody>
         </table>
       </div>
     </section>
   </div>
 
-  <!-- Capital through day — realized-only equity curve; intraday MTM excluded (honest) -->
-  <section class="panel">
-    <h3 class="panel-title">Capital Through Day
-      <span class="panel-sub">realized only (fm_ledger RELEASE_USED) — intraday unrealized MTM not included (G4)</span></h3>
-    <div class="curve-wrap">
-      <svg class="curve-svg" viewBox="0 0 600 160" preserveAspectRatio="none" aria-hidden="true">
-        <polyline :points="curvePoints()" fill="none" class="curve-line"/>
-      </svg>
-      <div class="curve-meta"><span x-text="(pnl.equity_curve || []).length + ' realized points'"></span></div>
-    </div>
-  </section>
+  <div class="two-col">
+    <!-- ZONE 8 · CAPITAL USAGE THROUGH DAY -->
+    <section class="panel">
+      <h3 class="panel-title">8 · Capital Usage Through Day
+        <span class="panel-sub">realized only (fm_ledger RELEASE_USED) — intraday unrealized MTM excluded (G4)</span></h3>
+      <div class="curve-wrap">
+        <svg class="curve-svg" viewBox="0 0 600 160" preserveAspectRatio="none" aria-hidden="true">
+          <polyline :points="curvePoints()" fill="none" class="curve-line"/>
+        </svg>
+        <div class="curve-meta"><span x-text="(pnl.equity_curve || []).length + ' realized points'"></span></div>
+      </div>
+    </section>
 
-  <!-- Recent Risk Events + Alerts merged (L10) -->
-  {{ events_alerts_panel(events_expr="events", alerts_expr="alerts", title="Recent Risk Events & Alerts") }}
+    <!-- ZONE 9 · CAPITAL UTILIZATION GAUGE -->
+    <section class="panel">
+      <h3 class="panel-title">9 · Capital Utilization
+        <span class="panel-sub">real cash consumed / total real cash</span></h3>
+      <div class="big-grid">
+        <div class="bignum"><span class="bn-label">Utilization</span>
+          <span class="bn-val num" :class="usageClass(utilPct())" x-text="pctText(utilPct())"></span></div>
+        <div class="bignum"><span class="bn-label">Consumed</span>
+          <span class="bn-val num" x-text="money(rc('consumed'))"></span></div>
+        <div class="bignum"><span class="bn-label">Available</span>
+          <span class="bn-val num num-pos" x-text="money(rc('available'))"></span></div>
+      </div>
+      <table class="cap-table" style="margin-top:8px">
+        <thead><tr><th>Utilization Range</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td>0 – 60 %</td><td><span class="cap-status num-pos">Normal</span></td></tr>
+          <tr><td>60 – 80 %</td><td><span class="cap-status num-warn">Caution</span></td></tr>
+          <tr><td>80 – 100 %</td><td><span class="cap-status num-neg">Critical</span></td></tr>
+        </tbody>
+      </table>
+    </section>
+  </div>
+
+  <!-- ZONE 10 · RECENT RISK EVENTS -->
+  {{ events_alerts_panel(events_expr="events", alerts_expr="alerts", title="10 · Recent Risk Events & Alerts") }}
 </div>
 
 <script>
 function capitalRiskPage() {
   return Object.assign(pageBase("/api/risk"), {
-    risk: {}, capital: {}, exposure: {}, capacity: { rows: [] }, alerts: [], events: [], pnl: {},
+    risk: {}, capital: {}, exposure: {}, capacity: { rows: [] },
+    alerts: [], events: [], pnl: {}, seg: {},
     async load() {
       const j = u => fetch(u, {credentials:"same-origin"}).then(r => r.status===401 ? (window.location="/login",{}) : r.json());
-      const [rk, cap, ex, cp, al, pn] = await Promise.all([
+      const [rk, cap, ex, cp, al, pn, sg] = await Promise.all([
         j("/api/risk"), j("/api/capital"), j("/api/exposure"),
         j("/api/capacity"), j("/api/alerts"), j("/api/pnl"),
+        j("/api/capital/segments"),
       ]);
       this.risk = rk || {}; this.capital = cap || {}; this.exposure = ex || {};
-      this.capacity = cp || { rows: [] }; this.alerts = (al && al.alerts) || []; this.pnl = pn || {};
+      this.capacity = cp || { rows: [] }; this.alerts = (al && al.alerts) || [];
+      this.pnl = pn || {}; this.seg = sg || {};
     },
-    pctText(v) { return (v === null || v === undefined) ? "—" : v + "%"; },
+    // ── real-cash accessors ──────────────────────────────────────────────
+    rc(k) { return (this.seg.real_cash || {})[k]; },
+    sv(k, f) { return ((this.seg.segments || {})[k] || {})[f]; },
+    movement(k) { return (this.seg.real_cash || {})[k] || {}; },
+    movementObserved() {
+      const a = this.movement("payin_today"), b = this.movement("payout_today");
+      return !!(a.available && b.available);
+    },
+    // An unobserved movement is NEVER rendered as 0 — that would be a fabricated
+    // value. It renders as "n/a" with the reason shown beneath the row.
+    movementText(k) {
+      const m = this.movement(k);
+      return m.available ? this.money(m.value) : "n/a";
+    },
+    movementReason() {
+      const m = this.movement("payin_today");
+      return m.reason ? ("Pay-in / pay-out: " + m.reason) : "";
+    },
+    // ── config context ───────────────────────────────────────────────────
+    cfgv(k) { return (this.seg.config || {})[k]; },
+    pctLabel(v) { return (v === null || v === undefined) ? "—" : Math.round(v * 100) + "%"; },
+    levText(k) {
+      const v = this.cfgv(k === "intraday" ? "intraday_leverage" : "delivery_leverage");
+      return (v === null || v === undefined) ? "—" : v + "x";
+    },
+    segTitle(k) {
+      const pct = this.cfgv(k === "intraday" ? "intraday_pct" : "delivery_pct");
+      return (k === "intraday" ? "Intraday / MIS" : "Delivery / GTT")
+             + " (" + this.pctLabel(pct) + " | " + this.levText(k) + ")";
+    },
+    configSub() {
+      if (!this.seg.config) return "";
+      return "allocation MIS " + this.pctLabel(this.cfgv("intraday_pct"))
+           + " / GTT " + this.pctLabel(this.cfgv("delivery_pct"))
+           + " · leverage MIS " + this.levText("intraday")
+           + " / GTT " + this.levText("delivery") + " — from config";
+    },
+    // ── totals ───────────────────────────────────────────────────────────
+    sumSeg(f) {
+      const s = this.seg.segments || {}; let t = null;
+      ["intraday", "delivery"].forEach(k => {
+        const v = (s[k] || {})[f];
+        if (v !== null && v !== undefined) t = (t || 0) + Number(v);
+      });
+      return t === null ? null : Math.round(t * 100) / 100;
+    },
+    totalCapacity() { return this.sumSeg("segment_capacity"); },
+    totalRemainingCapacity() { return this.sumSeg("remaining_segment_capacity"); },
+    // ── derived percentages ──────────────────────────────────────────────
+    utilPct() {
+      const t = this.rc("total_live"), c = this.rc("consumed");
+      if (t === null || t === undefined || !t) return null;
+      return Math.round(1000 * c / t) / 10;
+    },
+    sharePct(v) {
+      const c = this.rc("consumed");
+      if (!c || v === null || v === undefined) return null;
+      return Math.round(1000 * v / c) / 10;
+    },
     riskRemaining() { const d = this.risk.daily_loss; return (d && d.limit != null) ? Math.max(0, d.limit - (d.used || 0)) : null; },
+    riskUtilPct() {
+      const d = this.risk.daily_loss;
+      if (!d || d.limit == null || !d.limit) return null;
+      return Math.round(1000 * (d.used || 0) / d.limit) / 10;
+    },
+    lossLimitSub() {
+      const p = this.risk.daily_loss ? this.risk.daily_loss.limit_pct : null;
+      return (p === null || p === undefined) ? "" : ("limit = " + (p * 100) + "% of total real capital");
+    },
+    // ── exposure ─────────────────────────────────────────────────────────
+    dir(f) { return (this.exposure.by_direction || {})[f]; },
+    grossExposure() {
+      const l = this.dir("long_value"), s = this.dir("short_value");
+      if (l === null || l === undefined || s === null || s === undefined) return null;
+      return Math.round((Math.abs(l) + Math.abs(s)) * 100) / 100;
+    },
+    openPositions() {
+      const d = this.exposure.by_direction;
+      return d ? ((d.long_positions || 0) + (d.short_positions || 0)) : 0;
+    },
+    topConsumers() { return (this.seg.strategies || []).filter(s => s.total_real > 0).slice(0, 8); },
+    // ── shared formatting (house conventions) ────────────────────────────
+    pctText(v) { return (v === null || v === undefined) ? "—" : v + "%"; },
     usageClass(p) { if (p === null || p === undefined) return ""; if (p >= 80) return "num-neg"; if (p >= 60) return "num-warn"; return "num-pos"; },
     fmtCap(v, unit) { if (v === null || v === undefined) return "—"; if (unit === "rs") return (Number(v) < 0 ? "-₹" : "₹") + Math.abs(Number(v)).toFixed(2); return String(v); },
     curvePoints() {

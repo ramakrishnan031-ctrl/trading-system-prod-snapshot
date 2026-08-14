@@ -93,6 +93,111 @@ def get_capital():
     })
 
 
+#: Fields the engine does not persist anywhere the GUI can reach. Isolation rule
+#: I4 forbids kiteconnect in this service, so a broker read is not an option —
+#: these render as an explicit not-observed state rather than an invented number.
+_UNOBSERVED = {
+    "available": False,
+    "value": None,
+    "reason": ("not recorded in any GUI-readable source: the engine does not "
+               "persist broker pay-in/pay-out, and isolation rule I4 forbids a "
+               "broker call from the dashboard service"),
+}
+
+
+@risk_capital_api.route("/api/capital/segments", methods=["GET"])
+@login_required
+def get_capital_segments():
+    """Screen-08 capital flow: real cash, and the MIS/GTT real-vs-segment split.
+
+    EVERY number here is engine truth read from the DB. Nothing is derived from
+    the mockup's pinned simulation, and no value is invented when a source is
+    missing — see _UNOBSERVED.
+
+    THE FOUR QUANTITIES ARE KEPT APART, because conflating them is the whole
+    reason this screen exists:
+      real cash          broker cash the engine believes it has (fm_ledger)
+      real capital       cash allocated to a segment (real cash x bucket pct)
+      segment capacity   real capital x leverage — BUYING POWER, not cash
+      real committed     trades.margin_reserved — cash actually committed
+    Order notional is DERIVED as committed x leverage, never the reverse: the
+    engine stores margin, so margin is the authority (capital/fund_manager.py
+    required_margin — "NOT notional").
+    """
+    cfg, today = _ctx()
+    sc = config_reader.get_system_config(cfg, today)
+    cap_cfg = (sc.get("capital") or {}) if isinstance(sc, dict) else {}
+    lev_map = (cap_cfg.get("leverage_map") or {}) if isinstance(cap_cfg, dict) else {}
+
+    opening = db_reader.opening_capital(cfg, today)          # day's FIRST INIT
+    total_live = db_reader.current_total_capital(cfg, today)  # latest INIT/SYNC
+    seg = db_reader.capital_by_segment(cfg, today)
+
+    pcts = {"intraday": cap_cfg.get("intraday_bucket_pct"),
+            "delivery": cap_cfg.get("positional_bucket_pct")}
+    levs = {"intraday": lev_map.get("INTRADAY"), "delivery": lev_map.get("DELIVERY")}
+
+    segments = {}
+    for key in ("intraday", "delivery"):
+        pct, lev = pcts[key], levs[key]
+        committed = seg[key]["real_committed"]
+        real_alloc = (round(float(pct) * total_live, 2)
+                      if (pct is not None and total_live is not None) else None)
+        capacity = (round(real_alloc * float(lev), 2)
+                    if (real_alloc is not None and lev is not None) else None)
+        remaining_real = (round(real_alloc - committed, 2)
+                          if real_alloc is not None else None)
+        segments[key] = {
+            "allocation_pct": pct,
+            "leverage": lev,
+            "real_allocation": real_alloc,
+            "segment_capacity": capacity,
+            "real_used": seg[key]["real_used"],
+            "real_reserved": seg[key]["real_reserved"],
+            "real_committed": committed,
+            # DERIVED from margin, never the source of it.
+            "order_value_notional": (round(committed * float(lev), 2)
+                                     if lev is not None else None),
+            "remaining_real": remaining_real,
+            "remaining_segment_capacity": (
+                round(remaining_real * float(lev), 2)
+                if (remaining_real is not None and lev is not None) else None),
+        }
+
+    consumed = round(seg["intraday"]["real_committed"]
+                     + seg["delivery"]["real_committed"], 2)
+    return jsonify({
+        "today": today,
+        "real_cash": {
+            "opening": round(opening, 2) if opening is not None else None,
+            "payin_today": _UNOBSERVED,
+            "payout_today": _UNOBSERVED,
+            "total_live": round(total_live, 2) if total_live is not None else None,
+            "consumed": consumed,
+            "available": (round(total_live - consumed, 2)
+                          if total_live is not None else None),
+            # Stated so the screen can show WHY total may equal opening.
+            "moved_since_open": (
+                round(total_live - opening, 2)
+                if (total_live is not None and opening is not None) else None),
+            "formula": "real cash = opening + pay-in - pay-out",
+        },
+        "config": {
+            "intraday_pct": pcts["intraday"], "delivery_pct": pcts["delivery"],
+            "intraday_leverage": levs["intraday"],
+            "delivery_leverage": levs["delivery"],
+            "slm_margin_buffer_pct": cap_cfg.get("slm_margin_buffer_pct"),
+        },
+        "segments": segments,
+        "strategies": db_reader.strategy_capital_by_segment(cfg, today),
+        "source_note": (
+            "engine truth from fm_ledger + trades.margin_reserved; "
+            "margin is qty*price/leverage (NOT notional); the 5% SL-M buffer is "
+            "held in fm_ledger bucket availability and is not in these figures"
+        ),
+    })
+
+
 @risk_capital_api.route("/api/exposure", methods=["GET"])
 @login_required
 def get_exposure():

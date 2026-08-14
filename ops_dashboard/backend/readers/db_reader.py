@@ -394,6 +394,102 @@ def capital_usage(cfg: dict, today: str) -> dict:
     }
 
 
+# ── Screen-08 (Capital & Risk) — segment split ────────────────────────────────
+# Product lives on `orders` (leg='ENTRY'), NEVER on trades: there is no
+# trades.product column. This mirrors capital/state_store.py's own
+# _NOT_DELIVERY_SQL so the GUI partitions trades exactly as the engine does.
+_DELIVERY_ENTRY_SQL = (
+    "EXISTS (SELECT 1 FROM orders o WHERE o.trade_id = t.trade_id "
+    "AND o.leg = 'ENTRY' AND o.product = 'CNC')"
+)
+_NOT_DELIVERY_ENTRY_SQL = (
+    "NOT EXISTS (SELECT 1 FROM orders o WHERE o.trade_id = t.trade_id "
+    "AND o.leg = 'ENTRY' AND o.product = 'CNC')"
+)
+
+
+def current_total_capital(cfg: dict, today: str) -> Optional[float]:
+    """Engine-truth TOTAL REAL capital as it stands now — the LATEST INIT or SYNC
+    row for bucket='both', not the day's first.
+
+    ⚠️ Deliberately different from opening_capital(), which is the day's FIRST INIT
+    and is the correct base for "Opening Cash". This one moves if the engine ever
+    re-syncs mid-day; measured 14-Aug-2026 the engine writes exactly ONE SYNC per
+    day (09:15), so on that day the two are equal and the screen says so.
+    """
+    with _ro(cfg) as conn:
+        row = conn.execute(
+            "SELECT balance_after FROM fm_ledger "
+            "WHERE date(ts) = ? AND entry_type IN ('INIT','SYNC') AND bucket = 'both' "
+            "ORDER BY ts DESC, ledger_id DESC LIMIT 1",
+            (today,),
+        ).fetchone()
+    return float(row["balance_after"]) if row else None
+
+
+def capital_by_segment(cfg: dict, today: str) -> dict:
+    """Real capital committed, split INTRADAY (MIS) vs DELIVERY (CNC).
+
+    Operand is trades.margin_reserved — IDENTICAL to capital_usage(). The engine
+    writes it as qty * price / leverage (capital/fund_manager.py required_margin:
+    "Compute required margin = qty * price / leverage. NOT notional"). VERIFIED
+    14-Aug-2026 against a live row to 6 dp: CAMLINFINE qty 2 @ 103.48338 / 5x
+    = 41.393352, stored 41.393352.
+
+    ⇒ This adds ONLY the bucket split. It does NOT re-derive the number from
+    notional, so no second reservation formula is introduced.
+
+    NOTE the 5% SL-M buffer (capital/fund_manager.py:561-563,
+    slm_margin_buffer_pct 0.05) is held in fm_ledger's BUCKET availability and
+    released once the SL-M is accepted. It is NOT part of trades.margin_reserved,
+    so the figures here are the settled, un-buffered real-capital commitment.
+    """
+    out = {}
+    with _ro(cfg) as conn:
+        for key, pred in (("intraday", _NOT_DELIVERY_ENTRY_SQL),
+                          ("delivery", _DELIVERY_ENTRY_SQL)):
+            used = float(_scalar(
+                conn,
+                "SELECT COALESCE(SUM(t.margin_reserved),0.0) FROM trades t "
+                "WHERE t.status IN (" + _in_clause(_OPEN_POSITION_STATES) + ") "
+                "AND " + pred,
+                _OPEN_POSITION_STATES) or 0.0)
+            pending = float(_scalar(
+                conn,
+                "SELECT COALESCE(SUM(t.margin_reserved),0.0) FROM trades t "
+                "WHERE t.status IN (" + _in_clause(_PENDING_STATES) + ") "
+                "AND " + pred,
+                _PENDING_STATES) or 0.0)
+            out[key] = {"real_used": round(used, 2),
+                        "real_reserved": round(pending, 2),
+                        "real_committed": round(used + pending, 2)}
+    return out
+
+
+def strategy_capital_by_segment(cfg: dict, today: str) -> list:
+    """Per-strategy real capital committed, split by segment. Same operand as
+    capital_by_segment(); ordered by total committed, descending.
+    """
+    with _ro(cfg) as conn:
+        rows = conn.execute(
+            "SELECT t.strategy AS strategy, "
+            f"COALESCE(SUM(CASE WHEN {_NOT_DELIVERY_ENTRY_SQL} "
+            "  THEN t.margin_reserved ELSE 0 END),0.0) AS mis_real, "
+            f"COALESCE(SUM(CASE WHEN {_DELIVERY_ENTRY_SQL} "
+            "  THEN t.margin_reserved ELSE 0 END),0.0) AS gtt_real "
+            "FROM trades t "
+            "WHERE t.status IN (" + _in_clause(
+                _OPEN_POSITION_STATES + _PENDING_STATES) + ") "
+            "GROUP BY t.strategy ORDER BY (mis_real + gtt_real) DESC",
+            _OPEN_POSITION_STATES + _PENDING_STATES,
+        ).fetchall()
+    return [{"strategy": r["strategy"],
+             "mis_real": round(float(r["mis_real"]), 2),
+             "gtt_real": round(float(r["gtt_real"]), 2),
+             "total_real": round(float(r["mis_real"]) + float(r["gtt_real"]), 2)}
+            for r in rows]
+
+
 def consecutive_loss_streak(cfg: dict) -> int:
     """Trailing run of net_pnl<0 over closed trades (exit_time DESC).
 
