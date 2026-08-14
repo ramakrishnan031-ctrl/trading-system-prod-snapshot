@@ -1012,6 +1012,111 @@ already-approved semantics.
 
 ---
 
+### Entry 15 — SCREEN-08 CAPITAL & RISK: implemented, verified locally, ⛔ UNPUSHED
+
+**Date/time:** 14-Aug-2026, committed `14:52 IST`
+**Commit:** `fc849b302ef005b1c1d101b2648ac2fd69ea69a9` (`fc849b3`)
+**Branch:** `feat/screen06-positions` (name is Screen-06; content now carries
+Screens 06, 07 and 08 — ⛔ **check content, never the name**)
+**Screen:** 08 — Capital & Risk
+**Pushed: NO · Deployed: NO** — reason: evening deployment window; ⛔ nothing is
+pushed while Fix 2's `P7` prediction is still open (it scores at the 16:22 officer
+run), per the standing *one observation window, one variable* rule.
+
+**Files (4, +767 / −61):**
+`ops_dashboard/backend/readers/db_reader.py` (+96) ·
+`ops_dashboard/backend/api/risk_capital.py` (+105) ·
+`ops_dashboard/frontend/templates/capital_risk.html` (rewritten, +331/−61) ·
+`ops_dashboard/tests/test_screen08_capital_risk.py` (new, +296)
+
+**What it does.** Composes the PRESERVED endpoints `/api/risk`, `/api/capital`,
+`/api/exposure`, `/api/capacity`, `/api/pnl` and adds **one** new read-only
+endpoint `/api/capital/segments`. Ten zones per the approved 14-Aug mockup.
+
+🔑 **THE ONE IDEA: four quantities that are routinely conflated, kept apart.**
+`real cash` (fm_ledger) · `real allocation` (real cash × bucket pct) ·
+`segment capacity` (real allocation × leverage — **buying power, not cash**) ·
+`real committed` (`trades.margin_reserved`).
+
+⛔ **NO SECOND RESERVATION FORMULA.** The new reader reuses `capital_usage()`'s
+exact operand — `trades.margin_reserved` — and adds ONLY the MIS/CNC split.
+Notional is **derived** as committed × leverage, ⛔ never the reverse, because the
+engine stores margin: `capital/fund_manager.py required_margin` is documented
+*"Compute required margin = qty * price / leverage. NOT notional"*.
+✅ **Verified against a live row to 6 dp:** CAMLINFINE qty 2 @ `103.48338` ÷ 5x =
+`41.393352`; stored `margin_reserved` = `41.393352`.
+
+🔴 **PAY-IN / PAY-OUT RENDER "n/a" WITH A REASON — ⛔ NEVER 0.00.** The engine
+persists neither, and **isolation rule I4** forbids `kiteconnect` in this service,
+so no GUI-readable source exists. ⭐ A `0.00` would read as *"no money moved
+today"*, and on 14-Aug that would have been **false**: a **₹5,000 pay-in landed at
+`09:16:25.847`** and the engine never learned of it — its only `SYNC` ran at
+`09:15:00.044`, **85 seconds earlier**.
+
+⛔ **THE MOCKUP'S BEFORE/AFTER PAY-IN PANELS ARE NOT REPRODUCED.** They are a
+*pinned simulation*; no simulation mode exists, so the screen shows the **actual
+current state only**. Engine truth is displayed even where it disagrees with the
+workbook's intent — ⭐ the discrepancy IS the finding, ⛔ not something to smooth
+over.
+
+⭐ Bucket split uses `orders(leg='ENTRY').product` — ⛔ there is no
+`trades.product` column — mirroring `state_store`'s own `_NOT_DELIVERY_SQL`, so
+the GUI partitions trades **exactly as the engine does**.
+⭐ Allocation (70/30) and leverage (5x/1x) are read from **config**, ⛔ not
+hard-coded — asserted by a test.
+
+**Verification.**
+- ✅ **17/17** new tests pass, including the pinned simulation **to the rupee**:
+  `10,000 + 5,000` → MIS real `10,500` / segment `52,500` / remaining `46,500`;
+  GTT real `4,500` / segment `4,500` / remaining `2,500`; consumed `3,200`;
+  remaining real `11,800`; totals segment `57,000` / remaining `49,000`.
+  ⭐ **And the engine-truth case where the pay-in has NOT propagated** (total
+  `10,000` → MIS `35,000`/`29,000`, GTT `3,000`/`1,000`, available `6,800`).
+  ⭐ The fixture uses **different** leverages (5x vs 1x) and **different**
+  committed amounts (1,200 vs 2,000), so a reader that applied one leverage to
+  both, or swapped notional for margin, **goes red**.
+- ✅ **Full GUI suite: 578 passed / 1 failed.** The single failure is
+  `test_isolation.py::test_c_venv_has_no_kiteconnect`, which runs `pip show
+  kiteconnect` against `sys.executable` and **reads no repo file** ⇒ ⛔ it cannot
+  be caused by this change; it is an artefact of running system Python instead of
+  `ops_dashboard/.venv` (which does not exist on this machine).
+  ⚠️ **Before this commit the same suite was 574 passed / 5 failed** — the four
+  extra failures were **mine**: the first template draft dropped the G-1
+  honest-gap panel. ⭐ Fixed by **restoring the disclosure**, ⛔ not by weakening
+  the test. `"Pending Broker Source"` is present and asserted.
+- ✅ **Live render** against a fresh VM snapshot (`sqlite3 .backup`, md5 identical
+  both ends, remote temp removed, `data_store/` is gitignored): `/capital-risk`
+  → **HTTP 200**, 46,024 bytes, zero template errors, all ten zones present.
+  `/api/capital/segments` returns **opening `5,588.60` · MIS real `3,912.02` /
+  segment `19,560.10` · GTT real `1,676.58` / segment `1,676.58`** — matching
+  `fm_ledger`'s own bucket figures exactly, with `payin/payout available:false`.
+- ⚠️ **Browser verification is a RENDER check, ⛔ not a visual one.** The page was
+  fetched and parsed; ⛔ no human-eye pass on layout, spacing or colour has been
+  done. Direct-open dev mode was used (`OPS_DASHBOARD_LOCAL_DEV=1` + gitignored
+  `gui_config.local.yaml`); ⛔ production auth untouched.
+
+**Limitations carried (⛔ none fixed here):**
+1. 🔴 **Pay-in/pay-out cannot be shown until the engine persists them.** The
+   broker exposes `available.intraday_payin` and `utilised.payout`
+   (value-verified 14-Aug 13:03:26: `intraday_payin = 5000`), but the trading
+   system reads neither — `broker/zerodha_adapter.py:1451` projects the whole
+   margins response into a 4-field `MarginInfo`. ⛔ Fixing that is a
+   **trading-system** change, ⛔ not a GUI one.
+2. ⚠️ **Payout semantics remain UNVERIFIED** — `utilised.payout` has never been
+   observed non-zero, so cumulative-vs-current-day is unknown. Same for multiple
+   pay-ins in one day.
+3. ⚠️ The **5 % SL-M buffer** (`fund_manager.py:561-563`) is held in `fm_ledger`
+   bucket availability and released on SL-M acceptance; it is **not** in
+   `trades.margin_reserved`, so this screen shows the **settled** figure. Stated
+   in the endpoint's `source_note`.
+4. ⚠️ Pre-existing base mismatch in the **old** `/api/capital` (`remaining` is
+   intraday-based while `deployed_pct` uses total opening). ⛔ **Left untouched** —
+   other screens consume it; the new endpoint is additive and correctly based.
+5. ⚠️ The **Daily Trades 9/10** dashboard figure vs the engine's **3/10** is a
+   *different* screen's defect and is ⛔ not touched here.
+
+---
+
 ## ⚠️ Carried forward for tomorrow's deployment review
 
 0. 🔴 **`order_execution_log` cannot be joined by `order_id`, and Screen-05 is
