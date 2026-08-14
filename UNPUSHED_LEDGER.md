@@ -1117,6 +1117,101 @@ hard-coded — asserted by a test.
 
 ---
 
+### Entry 16 — SCREEN-08 **LOCKED** by Rama: simulation restored, two live-data corrections, ⛔ UNPUSHED
+
+**Date/time:** 14-Aug-2026, committed `15:52 IST`
+**Commit:** `f21af2c6b2aa4baf742e5bd8e48ca694455c1697` (`f21af2c`) — on top of `fc849b3`
+**Branch:** `feat/screen06-positions` · **Screen:** 08 — Capital & Risk
+**Pushed: NO · Deployed: NO** — and here the reason is **MEASURED, ⛔ not a choice**:
+
+🔴 **THE PUSH IS REJECTED. `git push --dry-run origin HEAD:refs/heads/main` →
+`! [rejected] HEAD -> main (non-fast-forward)`.** (P) `origin/main` =
+`1c8c710bf4df60fcca8b09375d6cd723590d3820`, measured at `15:51`; this branch is
+**4 BEHIND / 24 AHEAD** — the four it lacks are **Fix 2's**, installed last night.
+⇒ ⛔ **It cannot be pushed as-is. It needs a rebase onto `1c8c710`, which produces
+a NEW EXACT SHA requiring its own verification run** — ⛔ never push the pre-refit
+hash. 📌 Same shape as `N12-*`: *a branch that is behind cannot fast-forward, and
+the dry-run is the check, ⛔ not the assumption.*
+⏱️ **AND `P7` HAD NOT CLOSED** at commit time (it scores at the **16:22** officer
+run). ⭐ Rama's own standing rule — *"no GUI push until P7 closes — one
+observation window, one variable"* — was still binding. ⇒ **two independent
+blockers, either alone sufficient.**
+
+**Files (4, this commit):** `backend/api/risk_capital.py` ·
+`backend/readers/db_reader.py` · `frontend/templates/capital_risk.html` ·
+`tests/test_screen08_capital_risk.py`
+
+**① PINNED SIMULATION RESTORED** (zone 5b) — the approved design requires it and
+the first draft had dropped it under the earlier *"do not fabricate a before/after
+state"* instruction. ⭐ Computed by a **PURE** backend function from the scenario's
+**own** constants — ⛔ no DB, ⛔ no config, ⛔ no live value reaches it — so it is
+deterministic and reproducible even if config drifts. ⛔ **Not one figure is
+hard-coded as an OUTPUT.** All 22 verified from the running endpoint:
+`before` MIS `7,000 / 35,000 / 1,200 / 29,000` · GTT `3,000 / 3,000 / 2,000 / 1,000` ·
+totals `10,000 · 3,200 · 6,800 · 38,000 · 30,000`;
+`after` MIS `10,500 / 52,500 / 1,200 / 46,500` · GTT `4,500 / 4,500 / 2,000 / 2,500` ·
+totals `15,000 · 3,200 · 11,800 · 57,000 · 49,000`.
+⭐ LIVE and SIMULATION carry distinct badges and the sim block is visually set
+apart ⇒ ⛔ the pinned `10k/15k` can never be read as the broker balance.
+
+**② THE LIVE BASIS NO LONGER PRESENTS ITSELF AS THE BROKER'S BALANCE.** `₹5,588.60`
+was rendered as unqualified *"Total Real Cash (Live)"*. It now carries the engine's
+last broker sync **on screen**, read from `fm_ledger`: *"Engine truth, not the
+broker's live balance … Last broker sync: `09:15:00` (SYNC), 1 sync(s) today."*
+✅ **VERIFIED that NO allowed channel can supply pay-in/pay-out — ⛔ width stated,
+⛔ not assumed:** isolation rule **I4** forbids `kiteconnect` in this service ·
+`/metrics` exposes only the engine's own `total_capital` (`5588.6`), ⛔ not broker
+cash · `capital_snapshot` has **0 rows** · `fm_ledger` holds only `INIT`/`SYNC`.
+⭐ The broker **does** hold it (`intraday_payin = 5000`, value-verified `13:03:26`)
+— ⛔ the engine simply never learns of it. 📌 **Persisting it is a TRADING-SYSTEM
+change, ⛔ not a GUI one** — deferred to Monday with the capital-recomputation unit.
+
+**③ 🔴 `DAILY TRADES 17/10 BREACH` WAS A READER DEFECT, ⛔ NOT A BREACH.**
+`daily_trades_used` counted `status NOT GLOB 'REJECTED*'` ⇒ it excluded REJECTED
+but **counted all 15 FAILED** rows — orders placed, never filled, self-cancelled at
+the 60 s timeout. **(P) today: 20 rows = `CLOSED 3 · FAILED 15 · REJECTED 2`;** the
+old expression returned **18** against a cap of 10 and rendered **`170% BREACH`**,
+while the engine's own gate returned **3**.
+✅ **Fixed at the SOURCE**, mirroring `capital/state_store.py`
+`_EXECUTED_TRADE_STATUSES` **verbatim** (duplicated BY VALUE per isolation rule
+I1), whose docstring states it outright: *"FIX-181: only statuses in
+`_EXECUTED_TRADE_STATUSES` are counted; FAILED, CANCELLED and REJECTED rows (which
+never opened a position) are excluded."* **Now `3 / 10 · OK`.**
+⛔ **NO LIMIT HAD BEEN BREACHED** — the August peak is **8**, measured across every
+trading day. ⭐ The reader is **shared with the summary bar**, so this also corrects
+the Dashboard's **9/10** flagged this morning — ⭐ **ONE CLASSIFIER, ⛔ not two
+cosmetic edits.**
+⚠️⚠️ **AND THE EXISTING TEST STILL PASSES UNCHANGED** — `test_db_reader.py:47`
+asserts `== 8` and is green **both before and after**, because its fixture contains
+**no FAILED rows**. ⇒ 📌 **that test could NEVER have caught this defect** — the
+tautological-check class again, in a reader that gates a live risk limit.
+
+**Verification.** ✅ Screen-08 suite **22/22**. ✅ Full GUI suite **583 passed / 1
+failed** — the failure is `test_isolation.py::test_c_venv_has_no_kiteconnect`,
+which runs `pip show` against `sys.executable` and **reads no repo file** ⇒ ⛔ it
+cannot be caused by this change. ✅ `/capital-risk` → **HTTP 200**, 53,791 bytes,
+**zero** template errors; LIVE badge, PINNED SIMULATION badge, Simulation Input,
+Before, After, the engine-truth warning and the G-1 *"Pending Broker Source"* panel
+all present. ✅ Direct-open verified cookie-less (HTTP 200, no login redirect);
+⛔ production auth untouched.
+⚠️ **Browser check is a RENDER check, ⛔ not a visual one** — no human-eye pass on
+layout/colour has been performed by me.
+
+**Carried, ⛔ not fixed here:**
+1. ⚠️ `delivery_daily_used` counts CNC **entry orders PLACED** today regardless of
+   outcome — shows **2** where the engine counts **0**. ⭐ **Same defect class one
+   row down**; ⛔ left alone because the correction was scoped to Daily Trades.
+   📌 Two-line fix, awaiting Rama's word.
+2. 🔴 **Pay-in/pay-out cannot be shown until the ENGINE persists them** — a
+   trading-system change (`broker/zerodha_adapter.py:1451` projects the whole
+   margins response into a 4-field `MarginInfo`).
+3. ⚠️ **Payout semantics remain UNVERIFIED** — `utilised.payout` has never been
+   observed non-zero.
+4. 🔑 **THE REBASE IS OWED BEFORE ANY PUSH**: rebase onto the measured `origin/main`,
+   re-run the suite on the NEW SHA, and re-dry-run. ⛔ Never push `f21af2c` itself.
+
+---
+
 ## ⚠️ Carried forward for tomorrow's deployment review
 
 0. 🔴 **`order_execution_log` cannot be joined by `order_id`, and Screen-05 is
