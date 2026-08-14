@@ -1636,3 +1636,25 @@ table td.cap-num,
 table td.dt-num,
 table td.rt,
 table td.ctr { text-align: center !important; }
+
+/* ── SCREEN-08 alignment BY COLUMN ROLE (14-Aug-2026, Rama's final spec) ──────
+   ⛔ NOT a blanket rule. Each role is targeted separately, as instructed:
+       row / side labels ....... LEFT   (plain <td>, untouched — no rule needed)
+       data column HEADINGS .... CENTER (over their own data)
+       data cells .............. CENTER (via td.cap-num/.dt-num/.rt/.ctr above)
+       5b Simulation Input ..... RIGHT  (a label/value list, not a data grid)
+
+   SCOPED TO `.cap-page` ON PURPOSE: `.cap-table` is shared with other screens,
+   so an unscoped heading rule would silently re-align tables nobody asked about.
+   ⛔ Do not remove the scope.
+
+   `th:first-child` stays LEFT — it is the row-label heading in every Screen-08
+   table ("Limit Type", "Strategy", "Totals"), or an empty spacer above the label
+   column in the Before/After grids. Every OTHER th sits over numeric data. */
+.cap-page .cap-table th { text-align: center; }
+.cap-page .cap-table th:first-child { text-align: left; }
+
+/* EXCEPTION, and it is deliberate: Simulation Input is a label→value list, not a
+   column of data under a heading, so its values are RIGHT-aligned. Needs
+   !important + higher specificity to beat the centring rule above. */
+.cap-page .sim-input td.cap-num { text-align: right !important; }

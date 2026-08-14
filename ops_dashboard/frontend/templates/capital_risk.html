@@ -38,7 +38,9 @@
   .basis-warn { color:#d29922; }
   .seg-total td { border-top:1px solid rgba(240,246,252,.18); font-weight:600; }
 </style>
-<div x-data="capitalRiskPage()" x-init="load()" @ops-refresh.window="load()">
+{# `cap-page` scopes Screen-08's alignment rules. Without it the heading-centring
+   below would reach every .cap-table on every screen — an unintended change. #}
+<div class="cap-page" x-data="capitalRiskPage()" x-init="load()" @ops-refresh.window="load()">
   <h2 class="panel-title">Capital &amp; Risk
     <span class="panel-sub" x-text="seg.today || ''"></span></h2>
 
