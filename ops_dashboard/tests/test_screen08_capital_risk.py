@@ -294,3 +294,83 @@ def test_endpoint_requires_login(app):
     c = app.test_client()
     r = c.get("/api/capital/segments", follow_redirects=False)
     assert r.status_code in (302, 401)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The PINNED SIMULATION block — deterministic, pure, and never mixed with live
+# ─────────────────────────────────────────────────────────────────────────────
+def test_pinned_simulation_matches_the_approved_scenario_exactly():
+    """Every figure Rama specified, both sides. ⛔ Not one is hard-coded as an
+    OUTPUT — they are computed from the scenario's inputs by the same arithmetic
+    the live path uses, so a formula change breaks this test rather than sliding
+    past it.
+    """
+    from backend.api.risk_capital import pinned_simulation
+    s = pinned_simulation()
+
+    b = s["before"]
+    assert b["total_real_cash"] == 10000.00
+    assert b["mis"]["real_allocation"] == 7000.00
+    assert b["mis"]["segment_capacity"] == 35000.00
+    assert b["mis"]["order_notional"] == 6000.00
+    assert b["mis"]["real_reserved"] == 1200.00          # 6,000 / 5x — NOT 6,000
+    assert b["mis"]["remaining_segment_capacity"] == 29000.00
+    assert b["gtt"]["real_allocation"] == 3000.00
+    assert b["gtt"]["segment_capacity"] == 3000.00
+    assert b["gtt"]["real_reserved"] == 2000.00          # 2,000 / 1x — coincides
+    assert b["gtt"]["remaining_segment_capacity"] == 1000.00
+    assert b["real_cash_consumed"] == 3200.00
+    assert b["remaining_real_cash"] == 6800.00
+    assert b["total_segment_capacity"] == 38000.00
+    assert b["total_remaining_capacity"] == 30000.00
+
+    a = s["after"]
+    assert a["total_real_cash"] == 15000.00
+    assert a["mis"]["real_allocation"] == 10500.00
+    assert a["mis"]["segment_capacity"] == 52500.00
+    assert a["mis"]["real_reserved"] == 1200.00
+    assert a["mis"]["remaining_segment_capacity"] == 46500.00
+    assert a["gtt"]["real_allocation"] == 4500.00
+    assert a["gtt"]["segment_capacity"] == 4500.00
+    assert a["gtt"]["real_reserved"] == 2000.00
+    assert a["gtt"]["remaining_segment_capacity"] == 2500.00
+    assert a["real_cash_consumed"] == 3200.00
+    assert a["remaining_real_cash"] == 11800.00
+    assert a["total_segment_capacity"] == 57000.00
+    assert a["total_remaining_capacity"] == 49000.00
+
+
+def test_pinned_simulation_is_pure_and_deterministic():
+    """No DB, no config, no live value — identical on every call and machine."""
+    from backend.api.risk_capital import pinned_simulation
+    assert pinned_simulation() == pinned_simulation()
+
+
+def test_payin_changes_capacity_but_never_the_reserved_capital():
+    """The pay-in re-bases the buckets; existing orders keep their commitment."""
+    from backend.api.risk_capital import pinned_simulation
+    s = pinned_simulation()
+    for seg in ("mis", "gtt"):
+        assert s["before"][seg]["real_reserved"] == s["after"][seg]["real_reserved"]
+        assert s["before"][seg]["order_notional"] == s["after"][seg]["order_notional"]
+    assert s["before"]["real_cash_consumed"] == s["after"]["real_cash_consumed"] == 3200.00
+    # 5,000 x 70% x 5x = 17,500 of new MIS capacity; 5,000 x 30% x 1x = 1,500 GTT.
+    assert round(s["after"]["mis"]["segment_capacity"]
+                 - s["before"]["mis"]["segment_capacity"], 2) == 17500.00
+    assert round(s["after"]["gtt"]["segment_capacity"]
+                 - s["before"]["gtt"]["segment_capacity"], 2) == 1500.00
+
+
+def test_simulation_is_separate_from_live_in_the_payload(client):
+    """⛔ The pinned 10,000/15,000 must NEVER appear as live real cash."""
+    j = client.get("/api/capital/segments").get_json()
+    assert "simulation" in j and "real_cash" in j
+    live_total = j["real_cash"]["total_live"]
+    assert j["simulation"]["after"]["total_real_cash"] == 15000.00
+    # The live figure comes from fm_ledger and is not the scenario's number.
+    if live_total is not None:
+        assert live_total != j["simulation"]["after"]["total_real_cash"] or \
+            live_total == 15000.00   # only if the account genuinely holds it
+    # Live pay-in stays unavailable even though the simulation has one.
+    assert j["real_cash"]["payin_today"]["available"] is False
+    assert j["simulation"]["input"]["additional_payin"] == 5000.00

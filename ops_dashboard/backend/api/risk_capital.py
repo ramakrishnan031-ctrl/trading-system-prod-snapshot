@@ -105,6 +105,72 @@ _UNOBSERVED = {
 }
 
 
+#: THE PINNED SIMULATION — Rama's agreed scenario, 14-Aug-2026. These are the
+#: scenario's OWN constants and are deliberately NOT read from live config: a
+#: pinned case must stay reproducible even if config drifts. They currently match
+#: the deployed config (0.70/0.30, 5x/1x), and the screen says so.
+#: ⛔ These values NEVER touch the live figures — they are computed by a pure
+#: function below and returned under their own key.
+_PINNED = {
+    "opening_real_cash": 10000.0,
+    "additional_payin": 5000.0,
+    "payout": 0.0,
+    "mis_order_notional": 6000.0,
+    "gtt_order_notional": 2000.0,
+    "mis_pct": 0.70, "gtt_pct": 0.30,
+    "mis_leverage": 5.0, "gtt_leverage": 1.0,
+}
+
+
+def _pinned_side(real_cash: float) -> dict:
+    """One side (BEFORE or AFTER) of the pinned simulation.
+
+    Uses the SAME arithmetic as the live path, so the simulation demonstrates the
+    engine's own semantics rather than a separate model:
+        real allocation  = real cash x bucket pct
+        segment capacity = real allocation x leverage
+        real reserved    = order notional / leverage      <- NOT the notional
+        remaining        = (allocation - reserved) x leverage
+    """
+    p = _PINNED
+    out = {"total_real_cash": round(real_cash, 2)}
+    for key, pct, lev, notional in (
+            ("mis", p["mis_pct"], p["mis_leverage"], p["mis_order_notional"]),
+            ("gtt", p["gtt_pct"], p["gtt_leverage"], p["gtt_order_notional"])):
+        alloc = round(real_cash * pct, 2)
+        reserved = round(notional / lev, 2)     # 6,000 @5x -> 1,200 · 2,000 @1x -> 2,000
+        remaining_real = round(alloc - reserved, 2)
+        out[key] = {
+            "real_allocation": alloc,
+            "segment_capacity": round(alloc * lev, 2),
+            "order_notional": notional,
+            "real_reserved": reserved,
+            "remaining_real": remaining_real,
+            "remaining_segment_capacity": round(remaining_real * lev, 2),
+        }
+    consumed = round(out["mis"]["real_reserved"] + out["gtt"]["real_reserved"], 2)
+    out["real_cash_consumed"] = consumed
+    out["remaining_real_cash"] = round(real_cash - consumed, 2)
+    out["total_segment_capacity"] = round(
+        out["mis"]["segment_capacity"] + out["gtt"]["segment_capacity"], 2)
+    out["total_remaining_capacity"] = round(
+        out["mis"]["remaining_segment_capacity"]
+        + out["gtt"]["remaining_segment_capacity"], 2)
+    return out
+
+
+def pinned_simulation() -> dict:
+    """Deterministic BEFORE/AFTER pay-in comparison. Pure — no DB, no config, no
+    live value reaches it, so it renders identically on any machine and any day.
+    """
+    p = _PINNED
+    before_cash = p["opening_real_cash"]
+    after_cash = before_cash + p["additional_payin"] - p["payout"]
+    return {"input": dict(p),
+            "before": _pinned_side(before_cash),
+            "after": _pinned_side(after_cash)}
+
+
 @risk_capital_api.route("/api/capital/segments", methods=["GET"])
 @login_required
 def get_capital_segments():
@@ -181,6 +247,16 @@ def get_capital_segments():
                 round(total_live - opening, 2)
                 if (total_live is not None and opening is not None) else None),
             "formula": "real cash = opening + pay-in - pay-out",
+            # ⭐ What makes `total_live` honest: it is the ENGINE'S BELIEF as of
+            # its last broker sync, ⛔ not the broker's current balance. The engine
+            # syncs once per day, so a later movement is not reflected — the screen
+            # prints this so a stale basis is visible rather than silent.
+            "last_sync": db_reader.last_capital_sync(cfg, today),
+            "basis_note": (
+                "engine truth, not the broker's live balance: the engine re-reads "
+                "broker cash once per day, so any pay-in or pay-out after that "
+                "sync is NOT reflected above"
+            ),
         },
         "config": {
             "intraday_pct": pcts["intraday"], "delivery_pct": pcts["delivery"],
@@ -189,6 +265,10 @@ def get_capital_segments():
             "slm_margin_buffer_pct": cap_cfg.get("slm_margin_buffer_pct"),
         },
         "segments": segments,
+        # ⛔ SEPARATE KEY, SEPARATE ARITHMETIC, NO LIVE INPUT. The screen renders
+        # this under its own "(Pinned Simulation)" heading and never merges it
+        # with the live figures above.
+        "simulation": pinned_simulation(),
         "strategies": db_reader.strategy_capital_by_segment(cfg, today),
         "source_note": (
             "engine truth from fm_ledger + trades.margin_reserved; "

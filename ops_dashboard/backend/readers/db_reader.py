@@ -28,6 +28,13 @@ _CLOSED_STATES = ("CLOSED", "CLOSED_MANUAL")
 _OPEN_POSITION_STATES = ("OPEN", "PARTIAL", "EXITING")
 _PENDING_STATES = ("PENDING_FILL",)
 
+# 14-Aug-2026: the engine's ONE definition of "a trade actually happened",
+# duplicated BY VALUE from capital/state_store.py `_EXECUTED_TRADE_STATUSES`
+# (isolation rule I1 — the GUI never imports a production package). FAILED,
+# CANCELLED and REJECTED are deliberately absent: they never opened a position.
+_EXECUTED_TRADE_STATES = ("PENDING_FILL", "OPEN", "PARTIAL", "EXITING",
+                          "CLOSED", "CLOSED_MANUAL")
+
 # Reject-status families (signals.status == f"REJECTED_{check}"), from
 # capital/risk_engine.py check codes + signals/signal_processor reject codes.
 _RISK_REJECT_STATUSES = (
@@ -255,12 +262,36 @@ def trades_closed_counts(cfg: dict, today: str) -> dict:
 # Capacity counters (services/capacity.py)
 # ─────────────────────────────────────────────────────────────────────────────
 def daily_trades_used(cfg: dict, today: str) -> int:
+    """Today's trades against the DAILY-TRADES cap — counted exactly as the engine
+    counts them.
+
+    ⚠️ 14-Aug-2026 CORRECTION. This previously read `status NOT GLOB 'REJECTED*'`,
+    which excluded REJECTED but still counted **FAILED** rows — orders that were
+    placed, never filled, and self-cancelled at the 60 s fill timeout. Those never
+    opened a position and the engine does not charge them against the cap.
+
+    MEASURED on 14-Aug production: 20 trade rows (CLOSED 3 · FAILED 15 ·
+    REJECTED 2). The old expression returned **18** against a cap of 10 and the
+    Limits Monitor rendered `170% BREACH`; the engine's own gate returned **3**.
+    ⛔ No limit had been breached — the cap has never been reached (August peak 8).
+
+    THE AUTHORITY is capital/state_store.py `count_trades_today`
+    (`_EXECUTED_TRADE_STATUSES`), whose docstring states it outright: *"FIX-181:
+    only statuses in _EXECUTED_TRADE_STATUSES are counted; FAILED, CANCELLED and
+    REJECTED rows (which never opened a position) are excluded."* This mirrors
+    that set verbatim so the dashboard and the risk engine cannot disagree.
+
+    ⭐ Fixes the Limits Monitor row AND the summary bar's `trades_today` in one
+    place — they share this reader, so the fix is a single classifier rather than
+    two cosmetic edits.
+    """
+    states = _EXECUTED_TRADE_STATES
     with _ro(cfg) as conn:
         return _count(
             conn,
             "SELECT COUNT(*) FROM trades WHERE created_at LIKE ? "
-            "AND status NOT GLOB 'REJECTED*'",
-            (today + "%",),
+            f"AND status IN ({_in_clause(states)})",
+            (today + "%", *states),
         )
 
 
@@ -425,6 +456,33 @@ def current_total_capital(cfg: dict, today: str) -> Optional[float]:
             (today,),
         ).fetchone()
     return float(row["balance_after"]) if row else None
+
+
+def last_capital_sync(cfg: dict, today: str) -> Optional[dict]:
+    """When the engine last re-read broker cash, and what it wrote.
+
+    ⭐ This is what makes the LIVE figure honest: the engine syncs from the broker
+    ONCE per day (measured 14-Aug: a single SYNC at 09:15:00.044739), so any
+    broker movement AFTER that timestamp is not in `total_live`. The screen prints
+    the time so a stale basis is visible rather than silent.
+    """
+    with _ro(cfg) as conn:
+        row = conn.execute(
+            "SELECT ts, entry_type, balance_after FROM fm_ledger "
+            "WHERE date(ts) = ? AND entry_type IN ('INIT','SYNC') AND bucket = 'both' "
+            "ORDER BY ts DESC, ledger_id DESC LIMIT 1",
+            (today,),
+        ).fetchone()
+        n_sync = _scalar(
+            conn,
+            "SELECT COUNT(*) FROM fm_ledger WHERE date(ts) = ? AND entry_type = 'SYNC' "
+            "AND bucket = 'both'",
+            (today,)) or 0
+    if not row:
+        return None
+    return {"at": row["ts"], "entry_type": row["entry_type"],
+            "balance_after": float(row["balance_after"]),
+            "sync_count_today": int(n_sync)}
 
 
 def capital_by_segment(cfg: dict, today: str) -> dict:

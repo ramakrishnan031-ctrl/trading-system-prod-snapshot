@@ -22,6 +22,22 @@
   does not persist them and isolation rule I4 forbids a broker call), so they
   render as an explicit not-observed state rather than an invented number.
 #}
+<style>
+  /* Screen-08 only. Scoped to classes this template introduces, so no other
+     screen's rendering can change. */
+  .badge-live, .badge-sim { font-size:11px; font-weight:700; letter-spacing:.04em;
+    padding:2px 8px; border-radius:10px; margin-left:8px; vertical-align:middle; }
+  .badge-live { background:rgba(46,160,67,.18); color:#3fb950; border:1px solid rgba(63,185,80,.45); }
+  .badge-sim  { background:rgba(210,153,34,.18); color:#d29922; border:1px solid rgba(210,153,34,.45); }
+  /* The simulation block is visually set apart so it can never be mistaken for
+     live data at a glance. */
+  .sim-panel { border:1px dashed rgba(210,153,34,.55); }
+  .three-col { display:grid; grid-template-columns:minmax(220px,1fr) minmax(260px,1.2fr) minmax(260px,1.2fr);
+    gap:12px; align-items:start; }
+  @media (max-width:1200px) { .three-col { grid-template-columns:1fr; } }
+  .basis-warn { color:#d29922; }
+  .seg-total td { border-top:1px solid rgba(240,246,252,.18); font-weight:600; }
+</style>
 <div x-data="capitalRiskPage()" x-init="load()" @ops-refresh.window="load()">
   <h2 class="panel-title">Capital &amp; Risk
     <span class="panel-sub" x-text="seg.today || ''"></span></h2>
@@ -38,6 +54,14 @@
       {{ kpi_card("Real Cash Consumed", "money(rc('consumed'))", tone="warn") }}
       {{ kpi_card("Real Cash Available", "money(rc('available'))", tone="pos") }}
     {% endcall %}
+    {# ⛔ The limitation is stated ON the screen, not just in a comment: without
+       it, ₹5,588.60 reads as "the account holds this now", which is not what the
+       figure means when the engine has not re-synced. #}
+    <p class="panel-sub basis-warn" x-show="!movementObserved()" x-cloak>
+      <strong>⚠ Engine truth, not the broker's live balance.</strong>
+      <span x-text="basisNote()"></span>
+      <span x-text="syncNote()"></span>
+    </p>
     <p class="panel-sub" x-show="!movementObserved()" x-cloak
        x-text="movementReason()"></p>
   </section>
@@ -119,6 +143,7 @@
   <!-- ZONE 5 · CAPITAL FLOW & SEGMENT SUMMARY -->
   <section class="panel">
     <h3 class="panel-title">5 · Capital Flow &amp; Segment Summary
+      <span class="badge-live">LIVE / ENGINE TRUTH</span>
       <span class="panel-sub" x-text="configSub()"></span></h3>
 
     <div class="two-col">
@@ -159,6 +184,85 @@
       </tbody>
     </table>
     <p class="panel-sub" x-text="seg.source_note || ''"></p>
+  </section>
+
+  <!-- ZONE 5b · PINNED SIMULATION — approved design's before/after comparison.
+       ⛔ NOT live. Computed by a pure backend function from the scenario's OWN
+       constants; no live value reaches it and it never merges with zone 5. -->
+  <section class="panel sim-panel">
+    <h3 class="panel-title">5b · Capital Flow &amp; Segment Summary
+      <span class="badge-sim">PINNED SIMULATION</span>
+      <span class="panel-sub">⛔ hypothetical — NOT the current broker balance</span></h3>
+
+    <div class="three-col">
+      <!-- SIMULATION INPUT -->
+      <div class="panel sim-input">
+        <h4 class="panel-title">Simulation Input</h4>
+        <table class="cap-table">
+          <tbody>
+            <tr><td>Opening Real Cash</td><td class="cap-num" x-text="money(si('opening_real_cash'))"></td></tr>
+            <tr><td>Additional Pay-in (Today)</td><td class="cap-num num-pos" x-text="money(si('additional_payin'))"></td></tr>
+            <tr><td>Pay-out (Today)</td><td class="cap-num" x-text="money(si('payout'))"></td></tr>
+            <tr><td>Existing MIS Order Value</td><td class="cap-num" x-text="money(si('mis_order_notional'))"></td></tr>
+            <tr><td>Existing GTT Order Value</td><td class="cap-num" x-text="money(si('gtt_order_notional'))"></td></tr>
+            <tr><td>Allocation</td><td class="cap-num" x-text="simAlloc()"></td></tr>
+            <tr><td>Leverage</td><td class="cap-num" x-text="simLev()"></td></tr>
+          </tbody>
+        </table>
+        <p class="panel-sub">All values are real cash unless stated. Existing order
+          value is <em>notional</em>; its real-capital cost is notional ÷ leverage.</p>
+      </div>
+
+      <!-- BEFORE / AFTER -->
+      <template x-for="side in ['before','after']" :key="side">
+        <div class="panel">
+          <h4 class="panel-title" x-text="side === 'before'
+              ? 'Before Additional Pay-in' : 'After Additional Pay-in'"></h4>
+          <table class="cap-table">
+            <thead><tr><th></th><th>Intraday / MIS<br><span class="panel-sub">70% | 5x</span></th>
+                       <th>Delivery / GTT<br><span class="panel-sub">30% | 1x</span></th></tr></thead>
+            <tbody>
+              <tr><td>Real Capital Allocation</td>
+                  <td class="cap-num" x-text="money(sim(side,'mis','real_allocation'))"></td>
+                  <td class="cap-num" x-text="money(sim(side,'gtt','real_allocation'))"></td></tr>
+              <tr><td>Segment Capacity</td>
+                  <td class="cap-num" x-text="money(sim(side,'mis','segment_capacity'))"></td>
+                  <td class="cap-num" x-text="money(sim(side,'gtt','segment_capacity'))"></td></tr>
+              <tr><td>Existing Order Value <span class="panel-sub">(notional)</span></td>
+                  <td class="cap-num" x-text="money(sim(side,'mis','order_notional'))"></td>
+                  <td class="cap-num" x-text="money(sim(side,'gtt','order_notional'))"></td></tr>
+              <tr><td>Real Capital Reserved</td>
+                  <td class="cap-num" x-text="reservedText(side,'mis')"></td>
+                  <td class="cap-num" x-text="reservedText(side,'gtt')"></td></tr>
+              <tr class="seg-total"><td>Remaining Segment Capacity</td>
+                  <td class="cap-num num-pos" x-text="money(sim(side,'mis','remaining_segment_capacity'))"></td>
+                  <td class="cap-num num-pos" x-text="money(sim(side,'gtt','remaining_segment_capacity'))"></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </template>
+    </div>
+
+    <table class="cap-table" style="margin-top:10px">
+      <thead><tr><th>Totals</th><th>Total Real Cash</th><th>Real Cash Consumed</th>
+                 <th>Remaining Real Cash</th><th>Total Segment Capacity</th>
+                 <th>Total Remaining Capacity</th></tr></thead>
+      <tbody>
+        <template x-for="side in ['before','after']" :key="side">
+          <tr><td x-text="side === 'before' ? 'Before pay-in' : 'After pay-in'"></td>
+            <td class="cap-num" x-text="money(simT(side,'total_real_cash'))"></td>
+            <td class="cap-num" x-text="money(simT(side,'real_cash_consumed'))"></td>
+            <td class="cap-num num-pos" x-text="money(simT(side,'remaining_real_cash'))"></td>
+            <td class="cap-num" x-text="money(simT(side,'total_segment_capacity'))"></td>
+            <td class="cap-num num-pos" x-text="money(simT(side,'total_remaining_capacity'))"></td></tr>
+        </template>
+      </tbody>
+    </table>
+    <p class="panel-sub">⭐ <strong>Existing order value is NOT real cash consumed
+      for MIS:</strong> ₹6,000 notional at 5x costs ₹1,200 of real capital. At GTT's
+      1x the two coincide (₹2,000), which is exactly why MIS is the case that
+      discriminates. ⛔ This block is a fixed scenario and does not move with the
+      broker.</p>
   </section>
 
   <div class="two-col">
@@ -262,6 +366,28 @@ function capitalRiskPage() {
     // ── real-cash accessors ──────────────────────────────────────────────
     rc(k) { return (this.seg.real_cash || {})[k]; },
     sv(k, f) { return ((this.seg.segments || {})[k] || {})[f]; },
+    // ── pinned simulation (never mixed with live) ────────────────────────
+    si(f) { return ((this.seg.simulation || {}).input || {})[f]; },
+    sim(side, seg, f) { return ((((this.seg.simulation || {})[side]) || {})[seg] || {})[f]; },
+    simT(side, f) { return (((this.seg.simulation || {})[side]) || {})[f]; },
+    simAlloc() {
+      const a = this.si("mis_pct"), b = this.si("gtt_pct");
+      return (a === undefined || b === undefined) ? "—"
+        : "MIS " + Math.round(a * 100) + "% | GTT " + Math.round(b * 100) + "%";
+    },
+    simLev() {
+      const a = this.si("mis_leverage"), b = this.si("gtt_leverage");
+      return (a === undefined || b === undefined) ? "—" : "MIS " + a + "x | GTT " + b + "x";
+    },
+    // Shows the division that turns notional into real capital, so the two are
+    // never read as the same quantity.
+    reservedText(side, seg) {
+      const r = this.sim(side, seg, "real_reserved");
+      const n = this.sim(side, seg, "order_notional");
+      const lev = this.si(seg === "mis" ? "mis_leverage" : "gtt_leverage");
+      if (r === undefined) return "—";
+      return this.money(r) + "  (" + this.money(n) + " ÷ " + lev + "x)";
+    },
     movement(k) { return (this.seg.real_cash || {})[k] || {}; },
     movementObserved() {
       const a = this.movement("payin_today"), b = this.movement("payout_today");
@@ -276,6 +402,14 @@ function capitalRiskPage() {
     movementReason() {
       const m = this.movement("payin_today");
       return m.reason ? ("Pay-in / pay-out: " + m.reason) : "";
+    },
+    basisNote() { return (this.seg.real_cash || {}).basis_note || ""; },
+    syncNote() {
+      const s = (this.seg.real_cash || {}).last_sync;
+      if (!s) return "";
+      const t = String(s.at || "").slice(11, 19);
+      return " Last broker sync: " + t + " (" + s.entry_type + "), "
+           + s.sync_count_today + " sync(s) today.";
     },
     // ── config context ───────────────────────────────────────────────────
     cfgv(k) { return (this.seg.config || {})[k]; },
