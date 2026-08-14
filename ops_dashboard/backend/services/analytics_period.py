@@ -187,6 +187,32 @@ def _tod_bucket(ts) -> Optional[str]:
     return None
 
 
+def _dow_buckets(rows: list) -> tuple:
+    """Weekday buckets for the day-of-week heatmap.
+
+    ⛔ FIXED 15-Aug — the first version rendered `_DOW[:5]` (Mon–Fri) UNCONDITIONALLY,
+    which SILENTLY DROPPED any trade whose exit fell on a Saturday or Sunday: the
+    panel showed all dashes while `totals.trades` showed 4, i.e. one panel
+    describing a different population with nothing on screen saying so — exactly
+    the failure this screen is built to prevent.
+
+    ⭐ Mon–Fri is kept as the base because the market trades Mon–Fri and the
+    approved design shows five columns; a weekend bucket is appended ONLY when it
+    actually holds trades. So a normal week renders exactly as designed, and a
+    weekend close becomes VISIBLE rather than vanishing.
+
+    ⚠️ Found by rendering the page after midnight rolled the clock to a Saturday —
+    ⛔ not by the suite, which had been green all evening on a Friday. The four
+    tests that now guard it are CALENDAR-GATED and would have passed forever on a
+    weekday run."""
+    base = list(_DOW[:5])
+    seen = {_dow(r.get("exit_time")) for r in rows}
+    for wd in _DOW[5:]:                      # Sat, Sun — appended only if observed
+        if wd in seen:
+            base.append(wd)
+    return tuple(base)
+
+
 def _apply_pnl_filters(rows: list, f: dict) -> list:
     """THE single filter gate. Every panel on Screen 09 is derived from the list
     this returns, so KPIs / table / rankings / curve / drawdown / heatmaps /
@@ -426,7 +452,7 @@ def build_pnl_analytics(cfg, period="today", from_date=None, to_date=None, *,
             "best_strategy": per_strategy[0]["strategy"] if per_strategy else None,
             "worst_strategy": per_strategy[-1]["strategy"] if per_strategy else None,
         },
-        "heatmap_dow": _heatmap(rows, lambda r: _dow(r.get("exit_time")), _DOW[:5]),
+        "heatmap_dow": _heatmap(rows, lambda r: _dow(r.get("exit_time")), _dow_buckets(rows)),
         "heatmap_tod": _heatmap(rows, lambda r: _tod_bucket(r.get("exit_time")),
                                 tuple(b[0] for b in _TOD_BUCKETS)),
         "attribution": _attribution(rows, attribution_dim),

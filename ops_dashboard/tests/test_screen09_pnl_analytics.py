@@ -386,3 +386,26 @@ def test_page_renders(client):
     html = client.get("/pnl-analytics").get_data(as_text=True)
     assert "P&amp;L Analytics" in html or "P&L Analytics" in html
     assert "pnl-page" in html
+
+
+# ── Regression: the day-of-week panel must never drop trades ─────────────────
+def test_dow_buckets_never_drop_a_trade():
+    """⛔ Mon–Fri was rendered unconditionally, so a Saturday/Sunday close
+    vanished from the panel while staying in the totals. A weekend bucket is now
+    appended ONLY when observed, so a normal week still renders five columns.
+
+    ⚠️ CALENDAR-GATED: on a weekday this passes either way. It is written against
+    the FUNCTION so it fails on any day if the bug returns."""
+    weekday = [{"exit_time": "2026-08-14T10:00:00"}]          # Friday
+    assert ap._dow_buckets(weekday) == ("Mon", "Tue", "Wed", "Thu", "Fri")
+
+    saturday = [{"exit_time": "2026-08-15T10:00:00"}]         # Saturday
+    assert ap._dow_buckets(saturday) == ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat")
+
+    both = weekday + saturday + [{"exit_time": "2026-08-16T10:00:00"}]   # + Sunday
+    assert ap._dow_buckets(both) == ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
+    # and the population is fully represented whichever day it is
+    heat = ap._heatmap(saturday + weekday, lambda r: ap._dow(r.get("exit_time")),
+                       ap._dow_buckets(saturday + weekday))
+    assert sum(c["trades"] for c in heat) == 2
