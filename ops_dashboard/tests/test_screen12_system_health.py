@@ -294,6 +294,34 @@ def test_alert_TEXT_carries_the_colour_not_only_an_icon():
     assert 'class="sysh-sev"' in block
 
 
+def test_the_tall_readiness_card_is_packed_beside_a_stack_not_a_single_short_card():
+    """⚠️ REGRESSION PIN FOR THE LAYOUT FIX. Measured panel heights are
+    ~220·206·206·173·495px. Laid out 3-then-2, the 495px readiness card sat on
+    line 2 beside a 173px Auto-Recovery, so the grid row took the taller and left
+    **323px of dead background** — and pushed Health Trends that far down.
+
+    ⭐ The fix is PACKING, ⛔ not shrinking a card: readiness holds column 3 for
+    BOTH rows so the other four stack two-by-two beside it. Worst dead space
+    measured after: 85px at 1600, 94px at 1920."""
+    css = _css()
+    assert ".sysh-page .sysh-zone-a .sysh-ready { grid-column: 3; grid-row: 1 / span 2; }" in css
+    # ⛔ the 5-across template is gone: it made the readiness column ~390px wide
+    # at 1920, wrapping its text and making the WIDEST viewport the worst void.
+    assert ".85fr 1fr 1.15fr 1fr 1.05fr" not in css
+    assert ".sysh-page .sysh-zone-a { grid-template-columns: 1fr 1fr 1.25fr; }" in css
+    # ⛔ and the span must be undone where it cannot fit, or the page overflows
+    narrow = css[css.index("@media (max-width: 1100px)"):]
+    assert "grid-column: auto; grid-row: auto;" in narrow
+
+
+def test_cards_size_to_their_content_rather_than_stretching():
+    """⛔ `stretch` puts the slack INSIDE the short card, where it reads as
+    missing rows — the N15-10 trap in the opposite direction."""
+    css = _css()
+    assert ".sysh-page .sysh-zone-row { display: grid; gap: 16px; align-items: start; }" in css
+    assert "align-items: stretch" not in css[css.index(".sysh-page .sysh-zone"):]
+
+
 def test_the_css_does_not_repaint_alert_text_over_the_semantic_class():
     """⛔ A colour on `.sysh-al-t` would override the semantic class and make
     every alert one colour — which is the whole defect."""

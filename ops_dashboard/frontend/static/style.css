@@ -2527,24 +2527,36 @@ table td.ctr { text-align: center !important; }
 /* FIVE panels: dependencies moved out of the rail so the rail (VM only)
    is shorter than the service table — that is what closes the gap that
    otherwise opens UNDER THE WIDE TABLE rather than beside the narrow rail. */
-.sysh-page .sysh-zone-a { grid-template-columns: .85fr 1fr 1.15fr 1fr 1.05fr; }
+/* ⚠️⚠️ THE PACKING PROBLEM, MEASURED — ⛔ not eyeballed. The five panels are
+   ~220 · 206 · 206 · 173 · 495 px. Laid out as 3-then-2 lines, the 495 px
+   Trading Readiness sat on line 2 beside a 173 px Auto-Recovery and the grid
+   row took the taller: **323 px of dead background** under Auto-Recovery, and
+   the whole Health Trends row pushed that far down.
+
+   ⭐ THE FIX IS PACKING, ⛔ NOT SHRINKING: one tall card belongs BESIDE a STACK
+   of short ones, ⛔ not beside a single short one. Trading Readiness takes
+   column 3 for BOTH rows; the other four fill columns 1–2 two-by-two, so the
+   row is now `max(495, 220+206, 206+173)` instead of `220 + 495`.
+   ⛔ No card content changed and no wrapper element was added — explicitly
+   placed grid items are positioned before auto-flow items, so the remaining
+   four fill around it with the markup untouched.
+
+   ⚠️ The 5-across template was REMOVED: at 1920 it made the readiness column
+   ~390 px wide, which wrapped its text and made the card TALLER still — the
+   widest layout produced the worst void. 3 columns hold at every desktop width. */
+.sysh-page .sysh-zone-a { grid-template-columns: 1fr 1fr 1.25fr; }
+.sysh-page .sysh-zone-a .sysh-ready { grid-column: 3; grid-row: 1 / span 2; }
 .sysh-page .sysh-zone-b { grid-template-columns: 2fr 1fr; }
-/* ⚠️ 5 panels into 3 columns leaves the second line one cell SHORT — an empty
-   third of the row beside Trading Readiness. The readiness panel takes that
-   cell: it is the tallest and the most important, and the extra width lets its
-   text wrap less, which lowers the whole row. Same reasoning at 2 columns. */
-@media (max-width: 1700px) {
-  .sysh-page .sysh-zone-a { grid-template-columns: 1fr 1fr 1fr; }
-  .sysh-page .sysh-zone-a .sysh-ready { grid-column: span 2; }
-}
 @media (max-width: 1250px) {
+  /* Two columns: the stack is only 2 deep, so a full-height third column has
+     nothing to sit beside — readiness goes back to its own full-width line. */
   .sysh-page .sysh-zone-a { grid-template-columns: 1fr 1fr; }
-  .sysh-page .sysh-zone-a .sysh-ready { grid-column: span 2; }
+  .sysh-page .sysh-zone-a .sysh-ready { grid-column: span 2; grid-row: auto; }
 }
 @media (max-width: 1100px) {
   .sysh-page .sysh-zone-a, .sysh-page .sysh-zone-b { grid-template-columns: 1fr; }
   /* ⛔ A 2-column span in a 1-column grid overflows the page. */
-  .sysh-page .sysh-zone-a .sysh-ready { grid-column: auto; }
+  .sysh-page .sysh-zone-a .sysh-ready { grid-column: auto; grid-row: auto; }
 }
 
 /* -- events · alerts · recovery lists ------------------------------------ */
