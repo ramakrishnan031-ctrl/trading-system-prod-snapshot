@@ -179,6 +179,25 @@ def _val(value, status=HEALTHY, unit=None) -> dict:
             "status": status, "unit": unit}
 
 
+def _band(value, warn: float, fail: float) -> str:
+    """Threshold band for a live utilisation figure. ⛔ None ⇒ UNKNOWN, never a
+    green pass — an unread metric is not a healthy one."""
+    if value is None:
+        return UNKNOWN
+    return FAILED if value >= fail else (WARNING if value >= warn else HEALTHY)
+
+
+def _fmt_rate(bps: Optional[int]) -> Optional[str]:
+    """Bytes/sec → a human rate. ⛔ Always carries the /s, so a THROUGHPUT can
+    never be misread as a cumulative total."""
+    if bps is None:
+        return None
+    for unit, div in (("GB/s", 2**30), ("MB/s", 2**20), ("KB/s", 2**10)):
+        if bps >= div:
+            return "%.1f %s" % (bps / div, unit)
+    return "%d B/s" % bps
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Services
 # ─────────────────────────────────────────────────────────────────────────────
@@ -305,10 +324,22 @@ def _vm_health(cfg: dict) -> dict:
 
     return {
         "platform_supported": bool(vm.get("available")),
-        "cpu_pct": _gap("system_metrics.cpu_pct is a -1.0 sentinel — psutil is "
-                        "absent from the VM venv (capture_metrics_baseline.py:121-126)"),
-        "ram_pct": _gap("no RAM percentage exists: /proc/meminfo MemTotal is not "
-                        "read, so a denominator would have to be invented"),
+        # ⭐⭐ THE PRODUCTION PATH. CPU %, RAM % and Network are read LIVE from
+        # the kernel's own interfaces (/proc/stat · /proc/meminfo · /proc/net/dev)
+        # — stdlib only, ⛔ no psutil, ⛔ no agent, ⛔ no third-party plugin. On the
+        # real Linux VM these populate automatically on the first page load and
+        # need ⛔ NO GUI change; off Linux the source does not exist, so each
+        # falls back to the SAME honest gap it showed before.
+        "cpu_pct": (_val(vm["cpu_pct"], _band(vm["cpu_pct"], 80, 95), "%")
+                    if vm.get("cpu_pct") is not None
+                    else _nodata("CPU utilisation is read live from /proc/stat, "
+                                 "which exists only on Linux — unavailable on "
+                                 "this host")),
+        "ram_pct": (_val(vm["mem_used_pct"], _band(vm["mem_used_pct"], 85, 95), "%")
+                    if vm.get("mem_used_pct") is not None
+                    else _nodata("RAM % is computed live from /proc/meminfo "
+                                 "MemTotal/MemAvailable — Linux-only, "
+                                 "unavailable on this host")),
         # ⭐ RAM-available and load ARE instrumented — they are read straight from
         # /proc and getloadavg on the Linux VM this system runs on. Absent here
         # only because this host is Windows, so they are NO DATA, ⛔ never
@@ -320,8 +351,14 @@ def _vm_health(cfg: dict) -> dict:
         "disk_pct": (_val(disk_pct, disk_status, "%") if disk_pct is not None
                      else _nodata("disk usage could not be read on this host")),
         "disk_detail": disk,
-        "network": _gap("no network/bandwidth metric is collected anywhere in "
-                        "the system — there is nothing to read"),
+        # ⭐ Throughput across real interfaces (⛔ loopback excluded). It is a
+        # RATE differenced from /proc/net/dev's cumulative counters, ⛔ never a
+        # cumulative total presented as a speed.
+        "network": (_val(_fmt_rate(vm["net_bytes_per_sec"]), HEALTHY)
+                    if vm.get("net_bytes_per_sec") is not None
+                    else _nodata("network throughput is differenced live from "
+                                 "/proc/net/dev — Linux-only, unavailable on "
+                                 "this host")),
         "system_load": (_val(round(load, 2), HEALTHY) if load is not None
                         else _nodata("os.getloadavg() is Linux-only — read on the "
                                      "VM, unavailable on this host")),
@@ -715,31 +752,63 @@ def _trends(cfg: dict) -> dict:
     VM really collects would under-report the system, exactly as charting a
     `-1.0` sentinel would over-report it.
     """
-    disk = db_reader.system_metrics_disk_history(cfg, limit=60)
-    series = [{"ts": d.get("timestamp"), "value": d.get("disk_used_pct")}
-              for d in disk
-              if d.get("disk_used_pct") is not None and d.get("disk_used_pct") >= 0]
+    rows = db_reader.system_metrics_history(cfg, limit=60)
+
+    def _series(col, sentinel_reason, unit, note=None):
+        """Build one trend from the STORED column.
+
+        ⭐⭐ THE PRODUCTION BEHAVIOUR RAMA REQUIRED: this reads the real column
+        every time. The MOMENT the collector starts persisting real values on
+        the VM, `pts` is non-empty and the chart renders — ⛔ with no GUI change,
+        no redesign and no second monitoring system. The screen upgrades itself
+        because it asks the data, ⛔ rather than hard-coding a verdict about it.
+        """
+        pts = [{"ts": r.get("timestamp"), "value": r.get(col)}
+               for r in rows if r.get(col) is not None and r.get(col) >= 0]
+        if pts:
+            return {"measured": True, "instrumented": True, "series": pts,
+                    "unit": unit, "reason": None, "note": note}
+        # ⛔ No real point. Distinguish "the collector wrote sentinels" (proof of
+        # a real instrumentation gap) from "no rows at all" (nothing observed) —
+        # both currently render NOT INSTRUMENTED because the collector's source
+        # says it writes -1.0 without psutil, but the reasons differ.
+        seen_sentinel = any(r.get(col) is not None and r.get(col) < 0 for r in rows)
+        return {"measured": False, "instrumented": False, "series": [],
+                "unit": unit,
+                "reason": (sentinel_reason if seen_sentinel or not rows else
+                           sentinel_reason + " (no usable sample in the last "
+                           "%d snapshots)" % len(rows)),
+                "note": note}
+
     return {
-        "cpu": {"measured": False, "instrumented": False, "series": [],
-                "reason": "system_metrics.cpu_pct is a -1.0 sentinel — psutil is "
-                          "absent from the VM venv, so no CPU series was ever "
-                          "collected (capture_metrics_baseline.py:121-126)"},
-        "ram": {"measured": False, "instrumented": False, "series": [],
-                "reason": "system_metrics.memory_mb is the same -1.0 sentinel"},
+        "cpu": _series("cpu_pct",
+                       "system_metrics.cpu_pct is a -1.0 sentinel — psutil is "
+                       "absent from the VM venv, so no CPU series is persisted "
+                       "(capture_metrics_baseline.py:121-126). ⭐ The LIVE CPU "
+                       "figure above does NOT depend on this — it is read from "
+                       "/proc/stat — but the HISTORY needs the collector",
+                       "%"),
+        "ram": _series("memory_mb",
+                       "system_metrics.memory_mb is the same -1.0 sentinel; the "
+                       "live RAM figure above is read from /proc/meminfo and is "
+                       "unaffected", "MB"),
         "response_time": {"measured": False, "instrumented": False, "series": [],
                           "reason": "the health-endpoint round trip is measured "
                                     "live but never persisted, so there is no "
                                     "series to plot"},
-        # ⭐ The one REAL series. `instrumented` stays True even with no rows, so
-        # an empty dev-PC chart cannot be misread as a hole in the system.
-        "disk": {"measured": bool(series), "instrumented": True,
-                 "series": series, "unit": "%",
-                 "reason": (None if series else
-                            "disk usage IS collected (real, shutil-based) but "
-                            "this host has recorded no snapshots — the 5-minute "
-                            "collector runs on the VM"),
-                 "note": "disk is the only host metric with a real history — "
-                         "shown because it exists, ⛔ not as a stand-in for CPU"},
+        # ⭐ `instrumented` stays True even with no rows: disk IS collected, so
+        # an empty dev-PC chart must not be misread as a hole in the system.
+        "disk": dict(_series("disk_used_pct", "", "%",
+                             "disk is the host metric with a real persisted "
+                             "history — shown because it exists, ⛔ not as a "
+                             "stand-in for CPU"),
+                     instrumented=True,
+                     reason=(None if any(
+                         r.get("disk_used_pct") is not None
+                         and r["disk_used_pct"] >= 0 for r in rows)
+                         else "disk usage IS collected (real, shutil-based) but "
+                              "this host has recorded no snapshots — the "
+                              "5-minute collector runs on the VM")),
     }
 
 
@@ -789,6 +858,10 @@ def build_system_health(cfg, status_filter=None, kind_filter=None) -> dict:
     # trader process's monotonic clock via /health.
     up_sec = ((trader.get("health") or {}).get("uptime_seconds")
               if trader.get("trader_alive") else None)
+
+    # Read once — the live VM probe samples /proc twice over a short interval,
+    # so calling it a second time would double that cost for no new information.
+    payload_vm = _vm_health(cfg)
 
     # ⚠️⚠️ THE HEADLINE QUESTION OF THIS SCREEN — "is trading safe RIGHT NOW?" —
     # is answered by the LIVE verdict, ⛔ never by preflight's morning stamp.
@@ -843,7 +916,7 @@ def build_system_health(cfg, status_filter=None, kind_filter=None) -> dict:
         "filters": {"active": {k: v for k, v in active.items() if v},
                     "options": options},
 
-        "vm": _vm_health(cfg),
+        "vm": payload_vm,
         "database": dict(dbh, status=_db_row(dbh)["status"],
                          last_backup=host_reader.newest_backup(cfg)),
         "broker": _broker_health(cfg, pf),
@@ -854,11 +927,24 @@ def build_system_health(cfg, status_filter=None, kind_filter=None) -> dict:
         "readiness": readiness,
         "trends": _trends(cfg),
 
+        # ⚠️ This note is derived from the RUNNING HOST, ⛔ not hard-coded — the
+        # old fixed text claimed CPU/RAM/Network were uninstrumented, which
+        # stopped being true once they were wired to the kernel's interfaces and
+        # would have read as a permanent false gap on the production VM.
         "instrumentation_note": (
-            "CPU %, RAM % and Network are NOT INSTRUMENTED on this system: "
-            "system_metrics.cpu_pct/memory_mb are -1.0 sentinels because psutil "
-            "is absent from the VM venv, and no network metric exists anywhere. "
-            "They are shown as gaps rather than as 0 or green."),
+            ("Live CPU %, RAM %, RAM available, Network and System Load are read "
+             "from this host's native interfaces (/proc/stat, /proc/meminfo, "
+             "/proc/net/dev, getloadavg) — no psutil, no agent, no plugin. "
+             "Persisted CPU/RAM HISTORY is a separate matter: the 5-minute "
+             "collector writes -1.0 sentinels without psutil, so those trend "
+             "tabs stay empty until the collector records real samples.")
+            if payload_vm.get("platform_supported") else
+            ("This host is not Linux, so /proc and getloadavg do not exist and "
+             "live CPU %, RAM %, RAM available, Network and System Load read as "
+             "NO DATA — the metric is real, this machine simply cannot serve it. "
+             "On the production Linux VM the same code populates them with no "
+             "GUI change. Disk % is measured everywhere (shutil). Network and "
+             "CPU/RAM history remain gaps as stated per-metric.")),
         "status_guide": [
             {"status": HEALTHY, "label": "Healthy", "rule": "running and responsive"},
             {"status": WARNING, "label": "Warning", "rule": "degraded but not failed"},

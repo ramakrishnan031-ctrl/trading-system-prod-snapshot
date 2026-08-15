@@ -1601,6 +1601,30 @@ def system_metrics_disk_history(cfg: dict, limit: int = 60) -> list:
     return [dict(r) for r in reversed(rows)]
 
 
+def system_metrics_history(cfg: dict, limit: int = 60) -> list:
+    """CPU / memory / disk history from analytics.system_metrics.
+
+    ⭐ Returns the columns AS STORED, sentinels included — the caller decides
+    what a -1.0 means. ⛔ Filtering here would hide the difference between "the
+    collector wrote a sentinel" and "no row exists", which are ⛔ not the same
+    state on the screen.
+
+    ⚠️ Column names mirror `core/analytics_schema.sql:51` exactly (`timestamp`,
+    ⛔ not `ts`; there is no `id`) — see `system_metrics_disk_history` for the
+    defect that cost.
+    """
+    with _ro(cfg) as conn:
+        try:
+            rows = conn.execute(
+                "SELECT timestamp, cpu_pct, memory_mb, disk_used_pct "
+                "FROM system_metrics ORDER BY timestamp DESC LIMIT ?",
+                (int(limit),),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+    return [dict(r) for r in reversed(rows)]
+
+
 def closed_trades_today(cfg: dict, today: str, limit: int = 200) -> list:
     """Closed trades today for the P&L screen (B8/A9) — display columns only."""
     states = _CLOSED_STATES

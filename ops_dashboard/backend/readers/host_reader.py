@@ -174,28 +174,109 @@ def newest_backup(cfg: dict) -> Optional[dict]:
 # G2b-2 — M12 VM stats (platform-guarded; Windows dev → "unavailable") + M15
 # sentinel flags (read-only file presence).
 # ─────────────────────────────────────────────────────────────────────────────
+# ⏱️ CPU % and network throughput are RATES: /proc/stat and /proc/net/dev both
+# publish CUMULATIVE counters, so a single read cannot yield a percentage. Two
+# reads this far apart are differenced. ⛔ Deliberately NOT stateful between
+# requests — a cached previous sample would make the figure depend on how long
+# ago somebody last opened the page.
+_RATE_SAMPLE_SEC = 0.2
+
+
+def _read_proc_stat() -> Optional[tuple]:
+    """(idle_jiffies, total_jiffies) from /proc/stat's aggregate `cpu` line."""
+    try:
+        with open("/proc/stat", "r", encoding="ascii") as fh:
+            for line in fh:
+                if line.startswith("cpu "):
+                    f = [int(x) for x in line.split()[1:]]
+                    # user nice system idle iowait irq softirq steal …
+                    idle = f[3] + (f[4] if len(f) > 4 else 0)
+                    return idle, sum(f)
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
+def _read_net_bytes() -> Optional[int]:
+    """Total rx+tx bytes across real interfaces (⛔ loopback excluded — counting
+    `lo` would report the machine talking to itself as network traffic)."""
+    try:
+        total = 0
+        with open("/proc/net/dev", "r", encoding="ascii") as fh:
+            for line in fh:
+                if ":" not in line:
+                    continue
+                name, rest = line.split(":", 1)
+                if name.strip() == "lo":
+                    continue
+                f = rest.split()
+                total += int(f[0]) + int(f[8])      # rx bytes + tx bytes
+        return total
+    except (OSError, ValueError, IndexError):
+        return None
+
+
 def vm_stats(cfg: dict) -> dict:
-    """Live RAM/load/disk. Linux-only facts; anything unreadable → None +
-    available=False. CPU/RAM history is NOT collected (psutil absent) — the
-    caller renders that gap honestly; nothing is fabricated here."""
+    """Live CPU / RAM / network / load / disk from NATIVE sources.
+
+    ⭐ EVERY SOURCE HERE IS STDLIB OR THE LINUX KERNEL'S OWN INTERFACE —
+    /proc/stat · /proc/meminfo · /proc/net/dev · os.getloadavg · shutil — so a
+    deployment onto the real VM populates these ⛔ WITHOUT psutil, without a
+    third-party agent and ⛔ without any GUI change. Off Linux every field stays
+    None and the caller renders the gap; ⛔ nothing is ever fabricated.
+
+    ⚠️ This is the production path. It was previously RAM-available + load +
+    disk ONLY, which meant CPU %, RAM % and Network were hard-coded gaps that
+    would have stayed "NOT INSTRUMENTED" on the real VM forever.
+    """
     import shutil as _shutil
+    import time as _time
 
     out: dict = {"available": platform.system() == "Linux",
-                 "mem_available_kb": None, "loadavg": None,
-                 "disk_root": None, "disk_data": None}
+                 "mem_available_kb": None, "mem_total_kb": None,
+                 "mem_used_pct": None, "cpu_pct": None,
+                 "net_bytes_per_sec": None, "loadavg": None,
+                 "cpu_count": None, "disk_root": None, "disk_data": None}
     if platform.system() == "Linux":
         try:
+            fields = {}
             with open("/proc/meminfo", "r", encoding="ascii") as fh:
                 for line in fh:
-                    if line.startswith("MemAvailable:"):
-                        out["mem_available_kb"] = int(line.split()[1])
+                    k, _, v = line.partition(":")
+                    if k in ("MemAvailable", "MemTotal"):
+                        fields[k] = int(v.split()[0])
+                    if len(fields) == 2:
                         break
+            out["mem_available_kb"] = fields.get("MemAvailable")
+            out["mem_total_kb"] = fields.get("MemTotal")
+            # ⭐ MemTotal is what makes a PERCENTAGE possible at all; the old
+            # reader took MemAvailable only, so the denominator did not exist
+            # and the screen had to say "a denominator would have to be invented".
+            if fields.get("MemTotal"):
+                used = fields["MemTotal"] - fields.get("MemAvailable", 0)
+                out["mem_used_pct"] = round(100.0 * used / fields["MemTotal"], 1)
         except (OSError, ValueError, IndexError):
             pass
         try:
             out["loadavg"] = list(os.getloadavg())
+            out["cpu_count"] = os.cpu_count()
         except (OSError, AttributeError):
             pass
+        # ── the two-sample rates ────────────────────────────────────────────
+        c0, n0 = _read_proc_stat(), _read_net_bytes()
+        if c0 is not None or n0 is not None:
+            _time.sleep(_RATE_SAMPLE_SEC)
+            c1, n1 = _read_proc_stat(), _read_net_bytes()
+            if c0 and c1:
+                d_total = c1[1] - c0[1]
+                d_idle = c1[0] - c0[0]
+                # ⛔ A non-positive delta means the counters did not advance —
+                # report nothing rather than a divide-by-zero or a fake 0%.
+                if d_total > 0:
+                    out["cpu_pct"] = round(
+                        max(0.0, min(100.0, 100.0 * (d_total - d_idle) / d_total)), 1)
+            if n0 is not None and n1 is not None and n1 >= n0:
+                out["net_bytes_per_sec"] = int((n1 - n0) / _RATE_SAMPLE_SEC)
     # Disk works on every platform (shutil) — root + data dir.
     for key, path in (("disk_root", os.path.abspath(os.sep)),
                       ("disk_data", cfg.get("paths", {}).get("data_store"))):

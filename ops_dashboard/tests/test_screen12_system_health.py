@@ -22,6 +22,7 @@ FIXTURE (conftest), so every number below is traceable:
 """
 from __future__ import annotations
 
+import inspect
 import io
 import os
 import re
@@ -91,17 +92,151 @@ def test_counts_partition_the_service_population(client):
 
 
 # ── NOT INSTRUMENTED never becomes a number ─────────────────────────────────
-def test_cpu_ram_and_network_are_declared_gaps(client):
-    """⛔ system_metrics.cpu_pct/memory_mb are -1.0 sentinels (psutil absent) and
-    no network metric exists. None of the three may show a value."""
+def test_cpu_ram_and_network_are_live_metrics_that_this_host_cannot_serve(client):
+    """⭐ These are read LIVE from /proc — Linux-only. On this (Windows) host the
+    source does not exist, so they are NO DATA: real metrics this machine cannot
+    serve, ⛔ NOT an instrumentation gap in the system.
+
+    ⛔ Whatever the label, none of the three may show a value or a green status."""
     vm = _h(client)["vm"]
     for key in ("cpu_pct", "ram_pct", "network"):
         assert vm[key]["measured"] is False, key
         assert vm[key]["value"] is None, key
-        assert vm[key]["status"] == "UNKNOWN", key
+        assert vm[key]["status"] == "UNKNOWN", key      # ⛔ never green
+        assert vm[key]["instrumented"] is True, key     # ⛔ not a system gap
         assert vm[key]["reason"], key
-    assert "psutil" in vm["cpu_pct"]["reason"]
-    assert "network" in vm["network"]["reason"].lower()
+    assert "/proc/stat" in vm["cpu_pct"]["reason"]
+    assert "/proc/meminfo" in vm["ram_pct"]["reason"]
+    assert "/proc/net/dev" in vm["network"]["reason"]
+
+
+def test_the_live_vm_metrics_populate_from_native_sources_with_no_gui_change(monkeypatch):
+    """⭐⭐ THE PRODUCTION GUARANTEE, and the reason this test exists: Rama's
+    requirement is that deploying onto the real Linux VM populates CPU / RAM /
+    RAM-available / Network / Load *automatically*, with ⛔ no plugin, ⛔ no
+    second monitoring system and ⛔ no future GUI change.
+
+    The screen must therefore READ these, ⛔ not hard-code a verdict about them.
+    Feeding the reader exactly what a Linux host yields proves the panel renders
+    real numbers through the shipped code path."""
+    monkeypatch.setattr(sh.host_reader, "vm_stats", lambda cfg: {
+        "available": True, "cpu_pct": 37.5, "mem_total_kb": 2_048_000,
+        "mem_available_kb": 512_000, "mem_used_pct": 75.0,
+        "net_bytes_per_sec": 3_145_728, "loadavg": [1.25, 0.9, 0.7],
+        "cpu_count": 2,
+        "disk_root": {"used_pct": 41.8}, "disk_data": {"used_pct": 41.8},
+    })
+    vm = sh._vm_health({"paths": {}})
+    assert vm["cpu_pct"]["measured"] is True and vm["cpu_pct"]["value"] == 37.5
+    assert vm["ram_pct"]["measured"] is True and vm["ram_pct"]["value"] == 75.0
+    assert vm["ram_available_mb"]["measured"] is True
+    assert vm["network"]["measured"] is True
+    assert vm["network"]["value"] == "3.0 MB/s"          # ⛔ a RATE, not a total
+    assert vm["system_load"]["measured"] is True and vm["system_load"]["value"] == 1.25
+    assert vm["disk_pct"]["measured"] is True
+    # ⛔ and a busy box must not read green just because it answered
+    assert vm["cpu_pct"]["status"] == "HEALTHY"          # 37.5% is genuinely fine
+    hot = sh._band(97.0, 80, 95)
+    assert hot == "FAILED" and sh._band(85.0, 80, 95) == "WARNING"
+    assert sh._band(None, 80, 95) == "UNKNOWN"           # ⛔ unread is never green
+
+
+def test_the_native_proc_parsers_read_the_real_kernel_formats(monkeypatch):
+    """/proc/stat and /proc/net/dev publish CUMULATIVE counters, in a specific
+    layout. These parsers are fed the genuine kernel formats."""
+    import builtins
+    from backend.readers import host_reader as hr
+
+    FAKE = {
+        # cpu  user nice system idle iowait irq softirq steal …
+        "/proc/stat": "cpu  100 5 95 700 100 0 0 0 0 0\ncpu0 1 2 3 4\nintr 9\n",
+        # iface: rxbytes rxpkts … (8 rx fields) txbytes …
+        "/proc/net/dev": (
+            "Inter-|   Receive                          |  Transmit\n"
+            " face |bytes    packets errs drop fifo frame compressed multicast|"
+            "bytes    packets\n"
+            "    lo: 999999  10 0 0 0 0 0 0 999999  10\n"
+            "  eth0: 1000     10 0 0 0 0 0 0 2000     20\n"),
+    }
+    real_open = builtins.open
+    monkeypatch.setattr(builtins, "open", lambda p, *a, **k: (
+        io.StringIO(FAKE[p]) if p in FAKE else real_open(p, *a, **k)))
+
+    idle, total = hr._read_proc_stat()
+    assert idle == 800                      # idle 700 + iowait 100
+    assert total == 1000                    # every field summed
+    # ⛔ loopback EXCLUDED — counting `lo` reports the box talking to itself
+    # as network traffic. eth0 only: 1000 rx + 2000 tx.
+    assert hr._read_net_bytes() == 3000
+
+
+def test_vm_stats_end_to_end_on_a_simulated_linux_host(monkeypatch, tmp_path):
+    """⭐⭐ THE REAL DEPLOYMENT REHEARSAL. The tests above stub `vm_stats`; this
+    one runs the SHIPPED function with `platform.system()` reporting Linux and
+    the genuine kernel file formats behind `open`, so the whole production path
+    — two-sample timing, parsing, arithmetic — is exercised, ⛔ not just its
+    callers.
+
+    ⚠️ This is as close as a Windows PC can get. It is ⛔ NOT a claim that the
+    VM has been measured; that must be confirmed once on the real host."""
+    import builtins
+    from backend.readers import host_reader as hr
+
+    # /proc/stat advances 100 jiffies between reads, 25 of them idle ⇒ 75% busy.
+    stat_reads = iter([
+        "cpu  100 5 95 700 100 0 0 0 0 0\n",
+        "cpu  160 5 110 725 100 0 0 0 0 0\n",
+    ])
+    # eth0 gains 200 bytes over the 0.2s window ⇒ 1000 B/s. `lo` is noise.
+    net_reads = iter([
+        "  lo: 900 1 0 0 0 0 0 0 900 1\n  eth0: 1000 1 0 0 0 0 0 0 2000 1\n",
+        "  lo: 999 1 0 0 0 0 0 0 999 1\n  eth0: 1100 1 0 0 0 0 0 0 2100 1\n",
+    ])
+    MEM = "MemTotal:       2048000 kB\nMemAvailable:    512000 kB\n"
+    real_open = builtins.open
+
+    def fake_open(path, *a, **k):
+        if path == "/proc/stat":
+            return io.StringIO(next(stat_reads))
+        if path == "/proc/net/dev":
+            return io.StringIO(next(net_reads))
+        if path == "/proc/meminfo":
+            return io.StringIO(MEM)
+        return real_open(path, *a, **k)
+
+    monkeypatch.setattr(builtins, "open", fake_open)
+    monkeypatch.setattr(hr.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(hr.os, "getloadavg", lambda: (1.25, 0.9, 0.7), raising=False)
+
+    out = hr.vm_stats({"paths": {"data_store": str(tmp_path)}})
+    assert out["available"] is True
+    assert out["cpu_pct"] == 75.0                    # (100-25)/100
+    assert out["mem_total_kb"] == 2048000
+    assert out["mem_used_pct"] == 75.0               # (2048000-512000)/2048000
+    assert out["net_bytes_per_sec"] == 1000          # 200 bytes / 0.2s, lo excluded
+    assert out["loadavg"][0] == 1.25
+    assert out["disk_data"] and out["disk_data"]["used_pct"] >= 0
+
+    # ⭐ and the SCREEN renders those numbers through the same shipped path
+    monkeypatch.setattr(sh.host_reader, "vm_stats", lambda cfg: out)
+    vm = sh._vm_health({"paths": {}})
+    # 75% is below both warn bands (CPU 80, RAM 85) ⇒ genuinely HEALTHY
+    assert vm["cpu_pct"]["value"] == 75.0 and vm["cpu_pct"]["status"] == "HEALTHY"
+    assert vm["ram_pct"]["value"] == 75.0 and vm["ram_pct"]["status"] == "HEALTHY"
+    assert vm["network"]["value"] == "1000 B/s"
+    assert vm["system_load"]["value"] == 1.25
+
+
+def test_cpu_percent_is_a_delta_never_a_single_reading():
+    """⛔ A single /proc/stat read is a cumulative counter, not a percentage.
+    The shipped code differences two samples — pinned at the source so it cannot
+    regress into reporting the counter itself."""
+    from backend.readers import host_reader as hr
+    src = inspect.getsource(hr.vm_stats)
+    assert "_RATE_SAMPLE_SEC" in src and "_time.sleep" in src
+    assert "d_total > 0" in src             # ⛔ no divide-by-zero, no fake 0%
+    # the sample window is short enough not to stall the page
+    assert 0 < hr._RATE_SAMPLE_SEC <= 0.5
 
 
 def test_a_gap_is_never_green_on_any_path(client):
@@ -165,18 +300,22 @@ def test_not_instrumented_and_no_data_are_different_states_everywhere(client):
     INSTRUMENTED just because this host has recorded nothing. Under-reporting
     the system is as wrong as over-reporting it."""
     d = _h(client)
-    vm, bk = d["vm"], d["broker"]
-    # genuinely uninstrumented — no collector exists
-    for k in ("cpu_pct", "ram_pct", "network"):
-        assert vm[k]["instrumented"] is False, k
+    vm, bk, tr = d["vm"], d["broker"], d["trends"]
+    # ⛔ GENUINELY UNINSTRUMENTED — nothing records these anywhere
     assert bk["last_api_call"]["instrumented"] is False
-    # instrumented, simply not recorded on THIS host
-    for k in ("ram_available_mb", "system_load"):
+    assert tr["response_time"]["instrumented"] is False   # never persisted
+    assert tr["cpu"]["instrumented"] is False             # collector writes -1.0
+    assert tr["ram"]["instrumented"] is False
+    # ✅ INSTRUMENTED, simply not available/recorded on THIS host
+    for k in ("cpu_pct", "ram_pct", "network", "ram_available_mb", "system_load"):
         assert vm[k]["instrumented"] is True, k
-        assert "VM" in vm[k]["reason"], k
     assert bk["last_successful_order"]["instrumented"] is True
     assert "orders.filled_at" in bk["last_successful_order"]["reason"]
-    # ⛔ neither ever produces a number or a green status
+    # ⭐ AND THE DISTINCTION IS THE POINT: the LIVE cpu figure is instrumented
+    # (read from /proc) while its persisted HISTORY is not (collector sentinel).
+    # Same metric, two different states — collapsing them would mislead either way.
+    assert vm["cpu_pct"]["instrumented"] != tr["cpu"]["instrumented"]
+    # ⛔ none of them ever produces a number or a green status here
     for m in (vm["cpu_pct"], vm["system_load"], bk["last_successful_order"]):
         assert m["value"] is None and m["status"] == "UNKNOWN"
 
@@ -187,10 +326,13 @@ def test_the_export_spells_out_which_kind_of_empty_each_cell_is(client):
     payload = _h(client)
     sheets = {name: (hdr, rows) for name, hdr, rows in sh.export_sheets(payload)}
     summary = dict(sheets["Summary"][1])
-    assert summary["CPU %"] == "NOT INSTRUMENTED"
-    assert summary["Network"] == "NOT INSTRUMENTED"
+    # live /proc metrics: real, unavailable on this host
+    assert summary["CPU %"] == "NO DATA"
+    assert summary["Network"] == "NO DATA"
     assert summary["System Load"] == "NO DATA"
     assert summary["Last successful order"] == "NO DATA"
+    # genuinely uninstrumented anywhere in the system
+    assert summary["Last API call"] == "NOT INSTRUMENTED"
     assert summary["TRADING READINESS (NOW)"] == "NOT READY"
     assert summary["PREFLIGHT VERDICT (HISTORICAL)"] == "READY"
     assert "SUPERSEDED" in summary["Preflight superseded"]
@@ -666,11 +808,13 @@ def test_export_spells_out_the_gaps(client):
     from openpyxl import load_workbook
     wb = load_workbook(io.BytesIO(client.get("/api/export/system-health").data))
     summary = {r[0]: r[1] for r in wb["Summary"].iter_rows(min_row=2, values_only=True)}
-    assert summary["CPU %"] == "NOT INSTRUMENTED"
-    assert summary["RAM %"] == "NOT INSTRUMENTED"
-    assert summary["Network"] == "NOT INSTRUMENTED"
+    # ⭐ CPU/RAM/Network are LIVE metrics read from /proc — on this non-Linux
+    # host the source is absent, so NO DATA, ⛔ never a blank and ⛔ never zero.
+    assert summary["CPU %"] == "NO DATA"
+    assert summary["RAM %"] == "NO DATA"
+    assert summary["Network"] == "NO DATA"
     assert summary["DB connection count"] == "NOT APPLICABLE"
-    assert "psutil" in summary["CPU % why"]
+    assert "/proc/stat" in summary["CPU % why"]
     assert summary["Overall Status"] == "FAILED"
 
 
