@@ -502,7 +502,14 @@ a.kpi-card:hover { border-color: var(--accent); }
    top padding sets the small gap below the status strip (spec: 10-14px). */
 main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padding: 12px 10px 10px 4px; }
 
-.dash-page {
+/* ⭐ `.aud-page` joins this block for ONE reason: so Screen-13's filter controls
+   can be written in the SAME control language as Screens 03/04/05 without
+   restating its two colour values, which is how the panels are kept from
+   drifting apart. ⛔ It repaints nothing on its own — every rule that reads a
+   `--t-*`, `--card*` or `--ink` token is page-scoped to a screen the audit page
+   is not (measured across the file), so on `.aud-page` these definitions stay
+   inert until something references them. */
+.dash-page, .aud-page {
   --t-blue: 56,139,253;  --t-green: 46,160,67;   --t-red: 218,54,51;
   --t-orange: 219,109,40; --t-purple: 163,113,247; --t-yellow: 210,153,34;
   --t-gray: 139,148,158;
@@ -735,9 +742,19 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 .strat-page .flt-row, .sig-page .flt-row, .ord-page .flt-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 14px; }
 .strat-page .flt-field, .sig-page .flt-field, .ord-page .flt-field { display: flex; flex-direction: column; gap: 5px; min-width: 150px; flex: 1 1 150px; }
 .strat-page .flt-k, .sig-page .flt-k, .ord-page .flt-k { font-size: 12px; font-weight: 600; color: var(--muted); }
-.strat-page .flt-c, .sig-page .flt-c, .ord-page .flt-c { height: 36px; padding: 0 10px; font-size: 13px; color: var(--text);
+/* ⭐ Screen-13's FILTERS panel joins the SAME rule, by its own class name, for
+   exactly the reason recorded above: `.sel` was never defined ANYWHERE in this
+   file, so its dates and dropdowns fell back to native browser widgets — pale,
+   light-on-dark controls that made the one panel read as a foreign container on
+   an otherwise dark page. ⛔ Scoped to `.aud-filters` on purpose: the audit
+   global-search box carries `.sel` too and lives in the approved AUDIT EVENTS
+   header, which this correction must not touch. ⛔ No value changed — Screens
+   03/04/05 render byte-identically. */
+.strat-page .flt-c, .sig-page .flt-c, .ord-page .flt-c,
+.aud-page .aud-filters .sel { height: 36px; padding: 0 10px; font-size: 13px; color: var(--text);
   background: var(--card); border: 1px solid var(--card-bd); border-radius: 8px; font-family: inherit; }
-.strat-page .flt-c:focus, .sig-page .flt-c:focus, .ord-page .flt-c:focus { outline: none; border-color: var(--blue); }
+.strat-page .flt-c:focus, .sig-page .flt-c:focus, .ord-page .flt-c:focus,
+.aud-page .aud-filters .sel:focus { outline: none; border-color: var(--blue); }
 .strat-page .flt-sm, .sig-page .flt-sm { height: 30px; padding: 0 8px; width: auto; min-width: 58px; }
 .strat-page .flt-actions, .sig-page .flt-actions, .ord-page .flt-actions { display: flex; gap: 10px; align-items: flex-end; margin-left: auto; }
 .strat-page .btn-ghost, .strat-page .btn-primary,
