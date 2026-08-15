@@ -120,8 +120,12 @@
                       @click="applyFilters()">⌕</button>
             </span>
             <a class="rt-btn tlg-exp" :href="exportUrl()">⇩ Export XLSX</a>
-            <button class="rt-btn" type="button" x-show="!isDefaultOrder()" x-cloak
-                    @click="resetCols()" title="Restore the approved column order">↺ Columns</button>
+            {# ⛔ NO "Columns" BUTTON. The binding PNG's toolbar is Search +
+               Export only, so the reset control other screens carry is not
+               shown here. Header drag/reorder is UNCHANGED and `resetCols()`
+               is kept on the component (a stored order is still restorable by
+               clearing this screen's key) — ⛔ it simply has no UI, and ⛔ no
+               other column-management affordance replaces it. #}
           </span>
         </div>
 
@@ -266,10 +270,20 @@
             This event has no Trade ID, so there is no screener verdict to show.</p>
         </div>
 
-        {# RAW — the event's OWN stored fields. ⛔ Deliberately NOT the signal's
-           `webhook_payload`: that is an unbounded third-party blob and nothing
-           on the approved screen needs it. #}
-        <pre class="tlg-raw mono" x-show="tab === 'raw'" x-cloak x-text="rawJson()"></pre>
+        {# RAW PAYLOAD — the event's OWN stored record, verbatim. ⛔ It is NOT the
+           signal's `webhook_payload`: that is an unbounded third-party blob and
+           nothing on the approved screen renders it, so it is not even SELECTed.
+           ⛔ And there is no per-event broker payload to show: these events are
+           DERIVED from stored columns, so the record below IS the payload. That
+           is stated in the UI rather than left for the operator to assume. #}
+        <div x-show="tab === 'raw'" x-cloak>
+          <p class="tlg-note">
+            The stored event record, verbatim. <b class="tlg-ni">NO SEPARATE RAW PAYLOAD</b>
+            — this event is derived from stored columns, so no broker or webhook
+            payload exists for it.
+          </p>
+          <pre class="tlg-raw mono" x-text="rawJson()"></pre>
+        </div>
 
         <div class="tlg-replay">
           <button class="btn-primary" type="button" @click="replay()"
@@ -479,7 +493,7 @@ function tradeLogsPage() {
     ],
 
     TABS: [{ k: "details", l: "DETAILS" }, { k: "rdo", l: "INPUT / DECISION / OUTPUT" },
-           { k: "raw", l: "RAW" }],
+           { k: "raw", l: "RAW PAYLOAD" }],
 
     /* the approved 10 columns — ⛔ no Scanner; Component retained (it is in the
        binding PNG and the logger/stage attribution is real) */

@@ -768,10 +768,14 @@ def _orders_of(cfg: dict, trade_id) -> list:
 
 
 # ── XLSX ─────────────────────────────────────────────────────────────────────
-EXPORT_HEADER = ("Date", "Time", "Trade ID", "Order ID", "Symbol", "Strategy",
-                 "Event Type", "Status", "Severity", "Message", "Component",
-                 "Reference ID")
+#: ⭐ The FIRST TEN are the approved table columns in the approved order —
+#: Date · Time · Trade ID · Order ID · SYMBOL · STRATEGY · Event Type · Status ·
+#: Message · Component — so the export opens in the order the operator was just
+#: reading. Severity and Reference ID follow AFTER, never interleaved.
 #: ⛔ There is deliberately no "Scanner" column, and a test asserts its absence.
+EXPORT_HEADER = ("Date", "Time", "Trade ID", "Order ID", "Symbol", "Strategy",
+                 "Event Type", "Status", "Message", "Component",
+                 "Severity", "Reference ID")
 
 
 def export_rows(payload: dict) -> list:
@@ -782,7 +786,7 @@ def export_rows(payload: dict) -> list:
         out.append([
             e.get("date"), e.get("time"), e.get("trade_id"), e.get("order_id"),
             e.get("symbol"), e.get("strategy"), e.get("event_type"),
-            e.get("status"), e.get("severity"), e.get("message"),
-            e.get("component"), e.get("ref_id"),
+            e.get("status"), e.get("message"), e.get("component"),
+            e.get("severity"), e.get("ref_id"),
         ])
     return out

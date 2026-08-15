@@ -332,6 +332,56 @@ def test_the_approved_ten_columns_survive_scanner_removal():
     assert "scanner" not in block.lower()
 
 
+def test_symbol_comes_before_strategy_everywhere_it_is_ordered():
+    """⭐ A FINAL-COMPLIANCE INVARIANT, pinned in all three places at once so the
+    three cannot drift: the visible/draggable default order, and the export.
+    Both columns are kept — Scanner is the one that was removed, ⛔ not Symbol."""
+    tpl = _tpl()
+    block = re.search(r"DEFAULT_COLS:\s*\[(.*?)\n    \],", tpl, re.S).group(1)
+    keys = re.findall(r'key:\s*"([a-z_]+)"', block)
+    assert keys.index("symbol") < keys.index("strategy")
+    hdr = list(trade_logs.EXPORT_HEADER)
+    assert hdr.index("Symbol") < hdr.index("Strategy")
+
+
+def test_the_export_opens_in_the_approved_table_order():
+    """The first TEN export columns are the approved table columns in the
+    approved order; Severity and Reference ID follow AFTER, never interleaved."""
+    tpl = _tpl()
+    block = re.search(r"DEFAULT_COLS:\s*\[(.*?)\n    \],", tpl, re.S).group(1)
+    labels = re.findall(r'label:\s*"([^"]+)"', block)
+    assert list(trade_logs.EXPORT_HEADER[:10]) == labels
+    assert list(trade_logs.EXPORT_HEADER[10:]) == ["Severity", "Reference ID"]
+
+
+def test_there_is_no_visible_columns_button(client):
+    """⛔ The binding PNG's table toolbar is Search + Export ONLY. Header drag
+    stays; the reset control other screens carry is not shown here, and ⛔ no
+    other column-management affordance replaces it."""
+    body = _page_content(client)
+    assert "↺ Columns" not in body
+    assert "Columns</button>" not in body
+    assert "resetCols()" not in body          # not wired to any visible control
+    # ⭐ but drag/reorder itself is UNTOUCHED
+    assert "onDragStart" in body and 'draggable="true"' in body
+
+
+def test_the_third_detail_tab_is_labelled_raw_payload(client):
+    body = _page_content(client)
+    assert "RAW PAYLOAD" in body
+    tpl = _tpl()
+    tabs = re.search(r"TABS:\s*\[(.*?)\],", tpl, re.S).group(1)
+    labels = re.findall(r'l:\s*"([^"]+)"', tabs)
+    assert labels == ["DETAILS", "INPUT / DECISION / OUTPUT", "RAW PAYLOAD"]
+
+
+def test_the_raw_payload_tab_says_what_it_cannot_show(client):
+    """⛔ A derived event has no broker/webhook payload of its own, and the tab
+    says so rather than letting the operator assume the record IS one."""
+    body = _page_content(client)
+    assert "NO SEPARATE RAW PAYLOAD" in body
+
+
 def test_the_filters_are_the_approved_set_without_scanner():
     tpl = _tpl()
     block = re.search(r"SELECTS:\s*\[(.*?)\n    \],", tpl, re.S).group(1)
