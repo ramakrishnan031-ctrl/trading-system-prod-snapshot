@@ -3268,6 +3268,12 @@ table td.ctr { text-align: center !important; }
 .slg-page .slg-ni { font-size: 13px; color: var(--dim); letter-spacing: .02em;
   white-space: nowrap; }
 .slg-page .slg-note { font-size: 13px; color: var(--dim); margin: 10px 0 0; line-height: 1.5; }
+/* the approved SEARCH panel — same shape as Screens 13/14's rail search */
+.slg-page .slg-sf { display: flex; flex-direction: column; gap: 9px; }
+.slg-page .slg-sf-r { display: flex; flex-direction: column; gap: 4px; }
+.slg-page .slg-sf-r .slg-f-l { display: flex; align-items: baseline; gap: 8px; }
+.slg-page .slg-sf .sel[disabled] { opacity: .5; cursor: not-allowed; }
+.slg-page .slg-sbtn { margin-top: 4px; }
 
 /* severity donut */
 .slg-page .slg-donut-body { display: flex; align-items: center; gap: 14px; }

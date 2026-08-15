@@ -174,6 +174,80 @@ def test_the_filters_are_the_approved_set():
     assert 'x-model="f.start"' in tpl and 'x-model="f.end"' in tpl
 
 
+# ── the approved SEARCH section (binding TXT §SEARCH) ──────────────────────
+def test_the_search_panel_has_the_five_approved_fields(client):
+    """The binding TXT requires a SEARCH section with these five. ⛔ The small
+    table-toolbar search does NOT satisfy it — that is a global box, not the
+    approved per-field panel, and both are present."""
+    body = _page_content(client)
+    i = body.find("SEARCH")
+    assert i > 0, "the approved SEARCH panel is missing"
+    panel = body[i:i + 2600]
+    for field in ("Service Name", "Module", "Error Code", "Message",
+                  "Reference ID"):
+        assert field in panel, field
+    # the toolbar search is retained alongside, not substituted for it
+    assert "Search logs" in body
+
+
+def test_search_by_service_name_narrows_the_same_population(client):
+    p = _s(client)
+    svc = next((r["service"] for r in p["records"] if r["service"]), None)
+    assert svc, "fixture produced no service-attributed event"
+    narrow = _s(client, WIDE + "&service_q=" + svc.split()[0])
+    assert 0 < narrow["count"] <= p["count"]
+    assert all(svc.split()[0].lower() in (r["service"] or "").lower()
+               for r in narrow["records"])
+    assert narrow["kpi"]["total_events"] == narrow["count"]
+
+
+def test_search_by_reference_id_finds_that_exact_record(client):
+    """⭐ Reference ID IS instrumented — every event carries a deterministic id
+    built from its real source, so the approved field genuinely works."""
+    p = _s(client)
+    ref = p["records"][0]["ref_id"]
+    narrow = _s(client, WIDE + "&ref_q=" + ref.replace("#", "%23"))
+    assert narrow["count"] >= 1
+    assert any(r["ref_id"] == ref for r in narrow["records"])
+
+
+def test_search_by_module_and_message_are_contains_matches(client):
+    """⛔ CONTAINS, not exact: the FILTERS dropdowns are exact because they list
+    values that exist, but a typed fragment must not silently match nothing."""
+    p = _s(client)
+    mod = next((r["module"] for r in p["records"] if r["module"]), None)
+    assert mod
+    frag = str(mod)[: max(3, len(str(mod)) // 2)]
+    narrow = _s(client, WIDE + "&module_q=" + frag)
+    assert narrow["count"] >= 1
+    assert all(frag.lower() in (r["module"] or "").lower()
+               for r in narrow["records"])
+
+
+def test_the_error_code_search_field_is_shown_but_not_queryable(client):
+    """⛔ The approved field is SHOWN because the design requires it, and it is
+    DISABLED because no error-code scheme exists — a box that accepted one could
+    only ever return nothing. It says NOT INSTRUMENTED instead of pretending."""
+    body = _page_content(client)
+    i = body.find("Error Code")
+    assert i > 0
+    assert "disabled" in body[i:i + 700]
+    assert "NOT INSTRUMENTED" in body[max(0, i - 200):i + 400]
+    # ⛔ and the builder accepts no error-code parameter at all
+    src = _read("backend", "services", "system_logs.py")
+    assert 'f.get("error_code_q")' not in src
+    assert _s(client)["gaps"]["error_code"]["measured"] is False
+
+
+def test_search_and_filters_are_separate_parameters():
+    """⛔ Binding a typed fragment to a dropdown's EXACT match would make the
+    search return nothing for every partial word."""
+    src = _read("backend", "services", "system_logs.py")
+    body = re.search(r"def _matches\(.*?\n\n\n", src, re.S).group(0)
+    assert 'has("service", f.get("service_q"))' in body
+    assert 'eq("service", f.get("service"))' in body
+
+
 # ── the reader: three formats, and only one of them is this screen's ────────
 def test_only_the_dated_json_system_logs_are_read():
     """⚠️ MEASURED: the logs directory holds THREE formats — JSON system logs,

@@ -328,6 +328,41 @@
         <p class="slg-note" x-text="(data.gaps && data.gaps.trading_impact) ? data.gaps.trading_impact.reason : ''"></p>
       </section>
 
+      {# ── SEARCH — the binding TXT's five approved fields ─────────────────
+         ⭐ These are CONTAINS searches over the SAME filtered population the
+         table shows, and they are separate parameters from the FILTERS
+         dropdowns above: binding a typed fragment to a dropdown's exact match
+         would silently return nothing for every partial word.
+         ⛔ ERROR CODE is shown because the design requires it, and DISABLED
+         because no error-code scheme exists in this system — a box that
+         accepted one could only ever return nothing. It says so rather than
+         pretending to search. #}
+      <section class="panel slg-searchp">
+        <h3 class="panel-title">SEARCH</h3>
+        <div class="slg-sf">
+          <label class="slg-sf-r"><span class="slg-f-l">Service Name</span>
+            <input type="text" class="sel" placeholder="Enter service name"
+                   x-model="f.service_q" @keyup.enter="applyFilters()"></label>
+          <label class="slg-sf-r"><span class="slg-f-l">Module</span>
+            <input type="text" class="sel" placeholder="Enter module"
+                   x-model="f.module_q" @keyup.enter="applyFilters()"></label>
+          <label class="slg-sf-r">
+            <span class="slg-f-l">Error Code
+              <span class="slg-ni">NOT INSTRUMENTED</span></span>
+            <input type="text" class="sel" disabled
+                   placeholder="no error-code scheme exists"
+                   title="A repo-wide search for an XXX-0000 error-code scheme returns zero, so this field cannot be queried."></label>
+          <label class="slg-sf-r"><span class="slg-f-l">Message</span>
+            <input type="text" class="sel" placeholder="Enter keyword in message"
+                   x-model="f.message_q" @keyup.enter="applyFilters()"></label>
+          <label class="slg-sf-r"><span class="slg-f-l">Reference ID</span>
+            <input type="text" class="sel" placeholder="Enter reference ID"
+                   x-model="f.ref_q" @keyup.enter="applyFilters()"></label>
+          <button class="btn-primary slg-sbtn" type="button"
+                  @click="applyFilters()">⌕ Search</button>
+        </div>
+      </section>
+
       <section class="panel slg-etypes">
         <h3 class="panel-title">EVENT TYPES</h3>
         <table class="cap-table slg-mini"><tbody>
@@ -460,7 +495,11 @@ function systemLogsPage() {
     COLS_KEY: "screen15.systemlogs.colOrder.v1",
 
     f: { start: "", end: "", service: "", module: "", severity: "",
-         event_type: "", status: "", q: "" },
+         event_type: "", status: "", q: "",
+         /* the approved SEARCH panel — CONTAINS matches, kept separate from the
+            exact-match FILTER dropdowns above. ⛔ No error_code key: no such
+            scheme exists, so the field is shown disabled rather than querying. */
+         service_q: "", module_q: "", message_q: "", ref_q: "" },
     sel: null,
     detail: { found: false },
 

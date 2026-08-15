@@ -414,9 +414,13 @@ def _syslog_kwargs() -> dict:
         return (request.args.get(name) or "").strip() or None
 
     return {"start": _arg("start"), "end": _arg("end"),
+            # FILTERS (exact — they are dropdowns)
             "service": _arg("service"), "module": _arg("module"),
             "severity": _arg("severity"), "event_type": _arg("event_type"),
-            "status": _arg("status"), "q": _arg("q")}
+            "status": _arg("status"), "q": _arg("q"),
+            # the approved SEARCH panel (contains — it is free text)
+            "service_q": _arg("service_q"), "module_q": _arg("module_q"),
+            "message_q": _arg("message_q"), "ref_q": _arg("ref_q")}
 
 
 @analytics2_api.route("/api/system-logs/screen", methods=["GET"])

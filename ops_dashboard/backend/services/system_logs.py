@@ -233,9 +233,31 @@ def _from_recovery(rows: list) -> list:
 
 # ── the screen ───────────────────────────────────────────────────────────────
 def _matches(e: dict, f: dict) -> bool:
+    """FILTERS are EXACT (they are dropdowns of values that exist); the approved
+    SEARCH panel is CONTAINS (it is free text). ⭐ They are separate parameters
+    on purpose — binding a typed fragment to a dropdown's exact match would make
+    the search silently return nothing for every partial word."""
     def eq(key, val):
         return not val or str(e.get(key) or "") == str(val)
 
+    def has(key, val):
+        return not val or str(val).strip().lower() in str(e.get(key) or "").lower()
+
+    # ── the approved SEARCH fields ───────────────────────────────────────────
+    if not has("service", f.get("service_q")):
+        return False
+    if not has("module", f.get("module_q")):
+        return False
+    if not has("message", f.get("message_q")):
+        return False
+    if not has("ref_id", f.get("ref_q")):
+        return False
+    # ⛔ There is deliberately NO error-code search parameter: no error-code
+    # scheme exists in this system, so a box that accepted one could only ever
+    # return nothing. The field is shown as the approved design requires and is
+    # declared NOT INSTRUMENTED instead of quietly matching zero rows.
+
+    # ── the approved FILTER dropdowns ────────────────────────────────────────
     if not eq("service", f.get("service")):
         return False
     if not eq("module", f.get("module")):
@@ -348,7 +370,9 @@ def build_system_logs(cfg: dict, start: Optional[str] = None,
                 "message, not a lifecycle"),
             "error_code": _gap(
                 "no error-code scheme exists in this system — a repo-wide "
-                "search for an XXX-0000 code returns zero"),
+                "search for an XXX-0000 code returns zero, so the approved "
+                "Error Code search field is shown but cannot be queried: a box "
+                "that accepted one could only ever return nothing"),
             "resolution": _gap(
                 "log lines carry no resolution status, time or resolved-at; "
                 "only cron_heartbeat and reconciliation_log record an outcome"),
