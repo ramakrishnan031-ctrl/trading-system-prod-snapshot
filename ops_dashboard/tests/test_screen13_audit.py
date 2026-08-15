@@ -485,6 +485,33 @@ def test_column_drag_reuses_the_established_convention():
     assert "next.length === this.DEFAULT_COLS.length" in body
 
 
+def test_every_table_mixin_member_the_page_calls_actually_exists():
+    """⚠️ THIS CLASS OF BUG BIT TWICE ON THIS SCREEN, and both times silently:
+    `tSize` (really `tPageSize`) rendered "Showing NaN to NaN", and `tPages`
+    (really `tPageCount`) made the NUMBERED page buttons vanish — the approved
+    design shows `1 2 3 4 5 … 855`, so a pager with only ‹ › is a missing
+    element, not a cosmetic nit.
+
+    Alpine swallows an undefined-method binding, so nothing throws visibly and
+    every contract test still passes. Checking the names against the mixin's
+    real source is the only cheap way to catch it."""
+    tpl = _tpl()
+    mixin = _read("frontend", "static", "components.js")
+    defined = set(re.findall(r"^\s{4}(t[A-Za-z]+)\s*:", mixin, re.M))
+    assert {"tPageCount", "tPaged", "tPageSize", "tPage", "tSort"} <= defined, defined
+    used = set(re.findall(r"\b(t[A-Z][A-Za-z]*)\b", tpl))
+    unknown = sorted(u for u in used if u not in defined)
+    assert not unknown, "template calls table-mixin members that do not exist: %s" % unknown
+
+
+def test_the_pager_renders_numbered_pages_not_just_arrows():
+    """The approved design's pager is `‹ 1 2 3 4 5 … 855 ›`."""
+    tpl = _tpl()
+    assert "pageList()" in tpl
+    body = re.search(r"pageList\(\)\s*\{(.*?)\n    \},", tpl, re.S).group(1)
+    assert "tPageCount" in body and "…" in body
+
+
 def test_header_and_body_share_one_column_list_so_they_cannot_desync():
     """⛔ The classic drag defect: headers reorder, cells do not. Both loops must
     iterate the SAME `cols` array."""

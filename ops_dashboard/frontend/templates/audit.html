@@ -175,8 +175,8 @@
                     :disabled="p === '…'"
                     @click="p !== '…' && (tPage = p)" x-text="p"></button>
           </template>
-          <button class="rt-btn" type="button" @click="tPage = Math.min(tPages(rows()), tPage + 1)"
-                  :disabled="tPage >= tPages(rows())">›</button>
+          <button class="rt-btn" type="button" @click="tPage = Math.min(tPageCount(rows()), tPage + 1)"
+                  :disabled="tPage >= tPageCount(rows())">›</button>
         </span>
         <span class="aud-rpp">Rows per page:
           <select class="sel" x-model.number="tPageSize" @change="tPage = 1">
@@ -536,7 +536,7 @@ function auditPage() {
       return "Showing " + a + " to " + b + " of " + this.fmt(n) + " entries";
     },
     pageList() {
-      const t = this.tPages(this.rows()), c = this.tPage, out = [];
+      const t = this.tPageCount(this.rows()), c = this.tPage, out = [];
       if (t <= 7) { for (let i = 1; i <= t; i++) out.push(i); return out; }
       out.push(1);
       if (c > 3) out.push("…");
