@@ -531,7 +531,11 @@ def test_text_meets_the_thirteen_pixel_floor():
 def test_the_screen_is_scoped_and_cannot_repaint_another():
     css = _css()
     start = css.index("SCREEN 14 — TRADE LOGS")
-    block = css[start:]
+    # ⚠️ BOUND IT AT THE NEXT SCREEN HEADER. Reading to EOF passed only while
+    # this was the last block in the file; Screen 15 appended after it and the
+    # test then judged .slg-page rules as Screen-14's.
+    nxt = re.search(r"SCREEN \d+ [—-]", css[start + 20:])
+    block = css[start: start + 20 + nxt.start()] if nxt else css[start:]
     for line in block.splitlines():
         line = line.strip()
         if line.startswith(".") and "{" in line:

@@ -3703,6 +3703,72 @@ def tradelog_signals_by_id(cfg: dict, signal_ids) -> list:
     return [dict(r) for r in rows]
 
 
+# ── Screen-15 structured sources ────────────────────────────────────────────
+# ⭐ `system_events` is the ONLY table in this schema carrying a structured EVENT
+# TYPE. Measured on production: STARTUP / SHUTDOWN / CRASH_DETECTED / CONFIG_DIFF
+# — so of the eleven approved event types only Service Started / Stopped /
+# Restarted are evidenced, and the screen says so rather than inventing the rest.
+def syslog_events_range(cfg: dict, start: str, end: str, limit: int = 4000) -> list:
+    with _ro(cfg) as conn:
+        try:
+            rows = conn.execute(
+                "SELECT event_id, timestamp, event_type, scenario, details "
+                "FROM system_events WHERE substr(timestamp,1,10) BETWEEN ? AND ? "
+                "ORDER BY timestamp DESC, event_id DESC LIMIT ?",
+                (start, end, int(limit)),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+    return [dict(r) for r in rows]
+
+
+def syslog_cron_range(cfg: dict, start: str, end: str, limit: int = 6000) -> list:
+    """Scheduler runs. ⭐ `status` is a STRUCTURED SUCCESS/PARTIAL/FAILED column,
+    which is why this is the one source that can fill the approved Status column
+    honestly. ⚠️ `duration_sec` is populated on only 4 of 2132 production rows,
+    so a duration is per-row optional and must never be defaulted to 0."""
+    with _ro(cfg) as conn:
+        try:
+            rows = conn.execute(
+                "SELECT id, job_name, executed_at, status, duration_sec, message "
+                "FROM cron_heartbeat WHERE substr(executed_at,1,10) BETWEEN ? AND ? "
+                "ORDER BY executed_at DESC, id DESC LIMIT ?",
+                (start, end, int(limit)),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+    return [dict(r) for r in rows]
+
+
+def syslog_retention(cfg: dict) -> dict:
+    """Store-wide counts/bounds for the RETENTION panel. ⛔ Not range-filtered."""
+    out: dict = {"per_source": {}, "records": 0, "oldest": None, "newest": None}
+    probes = (
+        ("system_events", "MIN(timestamp)", "MAX(timestamp)"),
+        ("cron_heartbeat", "MIN(executed_at)", "MAX(executed_at)"),
+        ("reconciliation_log", "MIN(ts)", "MAX(ts)"),
+    )
+    with _ro(cfg) as conn:
+        for table, lo, hi in probes:
+            try:
+                r = conn.execute(
+                    "SELECT COUNT(*) AS n, %s AS lo, %s AS hi FROM %s" % (lo, hi, table)
+                ).fetchone()
+            except sqlite3.OperationalError:
+                continue
+            n = int(r["n"] or 0)
+            out["per_source"][table] = {"records": n, "oldest": r["lo"],
+                                        "newest": r["hi"]}
+            out["records"] += n
+            for key, val in (("oldest", r["lo"]), ("newest", r["hi"])):
+                if not val:
+                    continue
+                cur = out[key]
+                if cur is None or (val < cur if key == "oldest" else val > cur):
+                    out[key] = val
+    return out
+
+
 def tradelog_orders_of_trade(cfg: dict, trade_id: str) -> list:
     with _ro(cfg) as conn:
         try:

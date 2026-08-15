@@ -25,7 +25,8 @@ from flask import Blueprint, current_app, jsonify, request, send_file
 
 from ..auth import login_required
 from ..services import (audit, analytics_period, execution_analytics,
-                        slippage_analytics, system_health, trade_logs)
+                        slippage_analytics, system_health, system_logs,
+                        trade_logs)
 
 
 def _xlsx(sheets: list, download_name: str):
@@ -402,3 +403,58 @@ def export_trade_logs_screen():
     rows = trade_logs.export_rows(payload)
     return _xlsx([("Trade Log Events", rows[0], rows[1:])],
                  "trade_logs_%s_%s.xlsx" % (payload["from"], payload["to"]))
+
+
+# ── SCREEN 15 — SYSTEM LOGS ──────────────────────────────────────────────────
+# ⭐ ADDITIVE: the M13 `/api/logs` raw-tail endpoint is deliberately UNTOUCHED —
+# it is the hardened file access this screen reads THROUGH, and its own contract
+# test still passes.
+def _syslog_kwargs() -> dict:
+    def _arg(name):
+        return (request.args.get(name) or "").strip() or None
+
+    return {"start": _arg("start"), "end": _arg("end"),
+            "service": _arg("service"), "module": _arg("module"),
+            "severity": _arg("severity"), "event_type": _arg("event_type"),
+            "status": _arg("status"), "q": _arg("q")}
+
+
+@analytics2_api.route("/api/system-logs/screen", methods=["GET"])
+@login_required
+def get_system_logs_screen():
+    """Screen 15. Read-only. ONE filtered population feeds the KPI deck, the
+    event table, the severity donut, the event-type panel and the export."""
+    cfg = current_app.config["GUI_CONFIG"]
+    return jsonify(system_logs.build_system_logs(cfg, **_syslog_kwargs()))
+
+
+@analytics2_api.route("/api/system-logs/detail", methods=["GET"])
+@login_required
+def get_system_logs_detail():
+    """COMPONENT TIMELINE · ERROR INVESTIGATION · RECOVERY TRACKING · REPLAY.
+
+    ⛔ Stages this system does not stamp come back unavailable WITH a reason;
+    the replay shows the RECORDED sequence rather than a simulated lifecycle.
+    """
+    cfg = current_app.config["GUI_CONFIG"]
+    ref = (request.args.get("ref_id") or "").strip()
+    payload = system_logs.build_system_logs(cfg, **_syslog_kwargs())
+    rec = system_logs.event_detail(payload, ref)
+    if rec is None:
+        return jsonify({"error": "unknown reference id", "ref_id": ref}), 404
+    rec["replay"] = system_logs.replay(payload, ref)
+    return jsonify(rec)
+
+
+@analytics2_api.route("/api/export/system-logs", methods=["GET"])
+@login_required
+def export_system_logs_screen():
+    """XLSX of the FILTERED view only (approved: "Export filtered results only").
+
+    ⛔ Unrecorded fields export as NOT INSTRUMENTED, never as a blank cell.
+    """
+    cfg = current_app.config["GUI_CONFIG"]
+    payload = system_logs.build_system_logs(cfg, **_syslog_kwargs())
+    rows = system_logs.export_rows(payload)
+    return _xlsx([("System Log Events", rows[0], rows[1:])],
+                 "system_logs_%s_%s.xlsx" % (payload["from"], payload["to"]))

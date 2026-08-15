@@ -123,3 +123,110 @@ def parse_structured(lines: list, level: Optional[str] = None,
                 continue
         out.append(row)
     return out
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# SCREEN 15 — SYSTEM LOGS
+#
+# ⚠️ THE LOGS DIRECTORY HOLDS THREE DIFFERENT FORMATS, and that is measured, not
+# assumed. On a real day: `system_*.log` / `reconciler_*.log` / `trades_*.log`
+# are JSON-lines written by `core/logger.py`'s JSON formatter (664/664 parsed);
+# `debug_*.log` is PLAIN TEXT written by its `_PlainFormatter` (0 JSON lines);
+# and `failed_alerts.log` / `test_failed.log` carry a DIFFERENT JSON shape
+# (`severity`/`title`/`body`/`source_module`, ⛔ no `level`, ⛔ no `logger`).
+#
+# ⛔ A reader that treated every '{'-line as a system log emitted 405 rows with a
+# NULL severity and a NULL module — malformed records that would have been shown
+# to an operator as real events. Only the three DATED system logs are read here,
+# and what was skipped is COUNTED and returned rather than silently dropped.
+#
+# ⭐ The whole point is that this runs ON THE VM: `paths.logs_dir` is overridden
+# at deployment to /home/ubuntu/systems/trading-system/logs, so these are local
+# file reads through the existing hardened tail. ⛔ No remote fetch is added.
+# ═════════════════════════════════════════════════════════════════════════════
+_SYSTEM_STEMS = ("system", "reconciler", "trades")
+_SYSLOG_RE = None
+
+
+def _syslog_re():
+    global _SYSLOG_RE
+    if _SYSLOG_RE is None:
+        import re
+        _SYSLOG_RE = re.compile(
+            r"^(%s)_(\d{4}-\d{2}-\d{2})\.log$" % "|".join(_SYSTEM_STEMS))
+    return _SYSLOG_RE
+
+
+def system_log_files(cfg: dict, start: Optional[str] = None,
+                     end: Optional[str] = None) -> list:
+    """The dated JSON system logs whose date falls in [start, end].
+
+    ⛔ `debug_*.log` is excluded because it is plain text, and the alert-failure
+    logs because they are a different record shape — neither is this screen's
+    source, and including either would produce rows with no severity.
+    """
+    out = []
+    for f in list_log_files(cfg):
+        m = _syslog_re().match(f["name"])
+        if not m:
+            continue
+        day = m.group(2)
+        if (start and day < start) or (end and day > end):
+            continue
+        out.append(dict(f, stem=m.group(1), date=day))
+    out.sort(key=lambda r: (r["date"], r["stem"]))
+    return out
+
+
+def read_system_logs(cfg: dict, start: Optional[str] = None,
+                     end: Optional[str] = None, per_file: int = 2000) -> dict:
+    """Parse the dated JSON system logs into records the service can classify.
+
+    Returns {"rows": [...], "files": n, "lines": n, "skipped_not_json": n,
+             "skipped_foreign_shape": n, "bytes_read": n} — ⭐ the skip counts
+    are RETURNED so a screen can state what it did not read instead of implying
+    it read everything.
+    """
+    rows, lines, not_json, foreign, read_bytes, files = [], 0, 0, 0, 0, 0
+    for meta in system_log_files(cfg, start, end):
+        try:
+            path = resolve_log_path(cfg, meta["name"])
+        except (PermissionError, FileNotFoundError):
+            continue
+        files += 1
+        tail = tail_lines(path, per_file)
+        read_bytes += tail["bytes_read"]
+        for idx, raw in enumerate(tail["lines"]):
+            s = raw.strip()
+            if not s:
+                continue
+            lines += 1
+            if not s.startswith("{"):
+                not_json += 1
+                continue
+            try:
+                rec = json.loads(s)
+            except ValueError:
+                not_json += 1
+                continue
+            if not isinstance(rec, dict) or "level" not in rec or "logger" not in rec:
+                foreign += 1          # the alert-failure shape, or anything new
+                continue
+            rows.append({
+                "ts": rec.get("ts"),
+                "level": rec.get("level"),
+                "logger": rec.get("logger"),
+                "msg": rec.get("msg"),
+                # ⭐ a DETERMINISTIC reference: file + line offset. ⛔ Nothing is
+                # minted from a clock or a counter, so a re-read addresses the
+                # same record and a poll cannot renumber the feed.
+                "ref_id": "LOG-%s#%d" % (meta["name"], idx),
+                "source_file": meta["name"],
+                "stem": meta["stem"],
+                "trade_id": rec.get("trade_id"),
+                "order_id": rec.get("order_id"),
+                "signal_id": rec.get("signal_id"),
+            })
+    return {"rows": rows, "files": files, "lines": lines,
+            "skipped_not_json": not_json, "skipped_foreign_shape": foreign,
+            "bytes_read": read_bytes}
