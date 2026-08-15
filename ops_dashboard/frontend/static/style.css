@@ -2073,3 +2073,308 @@ table td.ctr { text-align: center !important; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .slp-page .slp-foot { margin-top: 14px; color: var(--dim); font-size: 12.5px; }
 .slp-page .slp-cap-warn { color: var(--yellow); margin-left: 10px; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SCREEN 11 — EXECUTION ANALYTICS (15-Aug-2026).  Scoped to `.exec-page`.
+
+   ⛔ NOTHING here restates a spacing, colour, font or table rule that Screens
+   02-10 already define. `.panel`, `.cap-table`, `.kpi-row`, `.filters`, `.flt`,
+   `.rt-btn`, `.btn-export`, `.period-sel`, `.pos-donut`, `.ord-legend`,
+   `.curve-wrap`, `.curve-svg`, `.mono` and the global `table td.ctr { center }`
+   rule are all reused as-is.
+
+   This block adds ONLY what Screen 11 genuinely introduces:
+     - the main+rail grid (same shape as Screens 09/10)
+     - an 18-column table with a GROUPED header band
+     - the four status badges + their donut arcs and legend dots
+     - the not-instrumented ("gap") row treatment in Delay Summary
+     - a three-series throughput chart and the delay trend
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* -- page frame ---------------------------------------------------------- */
+.exec-page .exec-head { display: flex; align-items: flex-start;
+  justify-content: space-between; gap: 16px; margin-bottom: 10px; }
+.exec-page .exec-h1 { margin: 0; font-size: 1.15rem; }
+.exec-page .exec-sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
+.exec-page .exec-bands { display: flex; flex-direction: column; gap: 3px;
+  align-items: flex-end; text-align: right; }
+.exec-page .exec-bands-k { font-size: 11.5px; color: var(--dim);
+  text-transform: uppercase; letter-spacing: .05em; }
+.exec-page .exec-bands b { font-size: 12px; color: var(--muted); font-weight: 500; }
+.exec-page .exec-range { margin-left: auto; color: var(--muted); font-size: 12.5px;
+  font-variant-numeric: tabular-nums; }
+
+.exec-page .exec-grid { display: grid; grid-template-columns: minmax(0,1fr) 340px;
+  gap: 16px; align-items: start; }
+.exec-page .exec-main { min-width: 0; }   /* required, else the wide table
+                                             stretches the grid column */
+.exec-page .exec-rail { display: flex; flex-direction: column; gap: 16px; }
+@media (max-width: 1400px) { .exec-page .exec-grid { grid-template-columns: 1fr; } }
+
+.exec-page .exec-panel-head { display: flex; align-items: center;
+  justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+.exec-page .exec-panel-head .panel-title { margin: 0; }
+.exec-page .exec-note { color: var(--dim); font-size: 12px; margin-top: 6px; line-height: 1.5; }
+.exec-page .exec-empty { color: var(--dim); font-size: 12.5px; text-align: center; padding: 14px 0; }
+.exec-page .exec-dim { color: var(--dim); }
+.exec-page .exec-sub-h { margin-top: 14px; }
+
+/* Six KPI cards on ONE row beside the 340px rail — the shared
+   minmax(180px,1fr) wraps the sixth (the Screen-09/10 finding, same cause). */
+.exec-page .kpi-row { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; }
+.exec-page .kpi-card { padding: 11px 12px; }
+.exec-page .kpi-val { font-size: 1.18rem; }
+@media (max-width: 1500px) { .exec-page .kpi-row { grid-template-columns: repeat(3, minmax(0,1fr)); } }
+
+.exec-page .exec-kpi-note { color: var(--dim); font-size: 12px; margin: -4px 0 8px; }
+.exec-page .exec-dot { margin: 0 7px; color: var(--border); }
+.exec-page .exec-warn { color: var(--yellow); }
+.exec-page .exec-err { color: var(--orange); margin-left: 10px; }
+
+/* -- filters ------------------------------------------------------------- */
+.exec-page .exec-filter-panel { padding-bottom: 10px; }
+.exec-page .exec-flt-title { font-size: .72rem; text-transform: uppercase;
+  letter-spacing: .06em; color: var(--dim); margin-bottom: 10px; }
+.exec-page .exec-filters { margin-bottom: 0; align-items: flex-end; row-gap: 12px; }
+.exec-page .exec-f { display: flex; flex-direction: column; gap: 4px; }
+.exec-page .exec-f > span:first-child { font-size: 12px; color: var(--dim);
+  text-transform: uppercase; letter-spacing: .05em; }
+.exec-page .exec-dates { display: flex; align-items: center; gap: 6px; }
+.exec-page .exec-fbtns { display: flex; gap: 8px; margin-left: auto; }
+.exec-page .exec-filter-state { margin-top: 9px; padding-top: 8px;
+  border-top: 1px solid var(--border); color: var(--muted); font-size: 12.5px; }
+.exec-page .exec-filter-state b { color: var(--text); font-variant-numeric: tabular-nums; }
+
+/* -- SCREEN-08/09/10 ALIGNMENT, CARRIED FORWARD BY COLUMN ROLE -------------
+   Identical discipline to `.cap-page`, `.pnl-page` and `.slp-page`, and scoped
+   the same way for the same reason: `.cap-table` is shared with nine other
+   screens, so an unscoped heading rule would silently re-align tables nobody
+   asked about.
+
+   NOT `th:first-child`. This screen's table has TWO label columns (Trading Date
+   and Strategy) and Strategy is the THIRD heading, so a positional selector
+   would centre a label. `.lbl` states the role in the markup. Data CELLS are
+   already centred by the global `table td.ctr` rule — nothing is added here. */
+.exec-page .cap-table th { text-align: center; }
+.exec-page .cap-table th.lbl { text-align: left; }
+
+/* -- timing table: 18 columns under a GROUPED header ----------------------
+   Headings wrap, cells do not — the Screen-10 fix, carried: pinning a min-width
+   pushed the STATUS column off-screen behind a scroll. The grouped band is what
+   makes 18 columns findable rather than merely present. */
+.exec-page .exec-tbl-wrap { overflow-x: auto; }
+.exec-page .exec-tbl { min-width: 0; width: 100%; }
+/* Horizontal padding only is tightened (3px, vs 4-5px on Screens 09/10): this
+   table carries 15 columns and was 31px over its wrapper at 1600. ⭐ The VERTICAL
+   rhythm is unchanged, so the row density still matches the other screens. */
+.exec-page .exec-tbl td { white-space: nowrap; padding: 6px 3px; font-size: 12.5px; }
+.exec-page .exec-tbl th { white-space: normal; padding: 6px 3px;
+  font-size: .6rem; letter-spacing: .01em; line-height: 1.3; vertical-align: bottom; }
+.exec-page .exec-grp th { font-size: .58rem; color: var(--dim);
+  border-bottom: 1px solid var(--border); padding-bottom: 4px;
+  letter-spacing: .06em; text-transform: uppercase; }
+.exec-page .exec-grp th + th { border-left: 1px solid var(--border); }
+.exec-page .exec-th { cursor: pointer; user-select: none; }
+.exec-page .exec-th:hover { color: var(--text); }
+.exec-page .exec-arrow { color: var(--dim); font-size: .58rem; margin-left: 3px; }
+.exec-page .exec-tbl .mono { font-variant-numeric: tabular-nums; }
+.exec-page .exec-remark-i { color: var(--yellow); cursor: help; font-size: 13px;
+  margin-left: 5px; vertical-align: middle; }
+.exec-page .exec-status-cell { white-space: nowrap; }
+/* The longest strategy name ("mean_reversion_long") wanted 124px on a table
+   already 155px over its wrapper. Capped with an ellipsis + the full name in the
+   cell's own title, ⛔ not truncated silently. */
+.exec-page .exec-tbl td:nth-child(3) { max-width: 100px; overflow: hidden;
+  text-overflow: ellipsis; }
+.exec-page .exec-pager { display: flex; align-items: center; gap: 7px;
+  margin-top: 10px; font-size: 12.5px; color: var(--muted); flex-wrap: wrap; }
+.exec-page .exec-pg-of { margin-left: auto; font-variant-numeric: tabular-nums; }
+
+/* -- STATUS: the approved three bands, plus an honest fourth ---------------
+   Fast GREEN · Moderate YELLOW · Slow RED, exactly as approved.
+   UNMEASURED is GREY on purpose: it is not a speed, it is the absence of one,
+   and it must not be able to read as any of the three. */
+.exec-page .exec-badge { display: inline-block; padding: 2px 8px; border-radius: 999px;
+  font-size: 11px; font-weight: 700; letter-spacing: .02em; white-space: nowrap; }
+.exec-page .exec-FAST       { background: var(--pos-tint);   color: var(--pos); }
+.exec-page .exec-MODERATE   { background: var(--warn-tint);  color: var(--yellow); }
+.exec-page .exec-SLOW       { background: var(--neg-tint);   color: var(--neg); }
+.exec-page .exec-UNMEASURED { background: var(--muted-tint); color: var(--dim); }
+
+/* -- analytics rows ------------------------------------------------------- */
+/* ── ONE BOTTOM ANALYTICS ZONE ────────────────────────────────────────────
+   ⚠️ REPLACES a two-tier layout that produced exactly the defect Rama named:
+   Distribution+Summary in an upper partition, the charts in a lower one, and a
+   tall empty region between them because the rail outgrew the main column.
+
+   The fix is structural, ⛔ not cosmetic shrinking: the rail now carries ONLY
+   the two rankings (so it cannot outgrow the table), and every analytic panel
+   lives in this ONE zone. Both rows share the zone's own row-gap, so they read
+   as a single band rather than two dashboard tiers. */
+.exec-page .exec-zone { display: flex; flex-direction: column; gap: 16px;
+  margin-top: 16px; }
+.exec-page .exec-zone-row { display: grid; gap: 16px; align-items: stretch; }
+/* row A — the four compact panels; row B — the two charts that need width */
+.exec-page .exec-zone-a { grid-template-columns: 1fr 1.25fr 1.15fr 1fr; }
+.exec-page .exec-zone-b { grid-template-columns: 2fr 1fr; }
+@media (max-width: 1500px) {
+  .exec-page .exec-zone-a { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 1100px) {
+  .exec-page .exec-zone-a, .exec-page .exec-zone-b { grid-template-columns: 1fr; }
+}
+.exec-page .exec-sum th, .exec-page .exec-sum td { font-size: 12.5px; padding: 6px 6px; }
+.exec-page .exec-tot { margin-top: 10px; padding-top: 9px;
+  border-top: 1px solid var(--border); color: var(--muted); font-size: 12.5px; }
+.exec-page .exec-tot b { color: var(--text); margin-left: 6px;
+  font-variant-numeric: tabular-nums; }
+
+/* -- THE NOT-INSTRUMENTED ROWS. Dimmed and tagged, ⛔ never hidden and ⛔ never
+      shown as a number. A reader must be able to see that the stage EXISTS and
+      is NOT measured; that is the whole point of keeping the row. */
+.exec-page .exec-gap td { color: var(--dim); background: var(--shade-tint); }
+.exec-page .exec-gap-tag { display: inline-block; margin-left: 6px; padding: 1px 6px;
+  border: 1px dashed var(--border); border-radius: 999px;
+  font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--dim); }
+.exec-page .exec-comp-tag { display: inline-block; margin-left: 6px; padding: 1px 6px;
+  border-radius: 999px; background: var(--accent-tint); color: var(--blue);
+  font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
+.exec-page .exec-gapnote { color: var(--yellow); }
+
+/* -- status guide -------------------------------------------------------- */
+.exec-page .exec-guide { list-style: none; margin: 0; padding: 0;
+  display: flex; flex-direction: column; gap: 9px; }
+.exec-page .exec-guide li { display: flex; align-items: flex-start; gap: 9px;
+  font-size: 12.5px; color: var(--muted); line-height: 1.45; }
+.exec-page .exec-guide li .exec-badge { flex: 0 0 auto; }
+.exec-page .exec-guide-r { padding-top: 1px; }
+
+/* -- warnings ------------------------------------------------------------ */
+.exec-page .exec-warns { list-style: none; margin: 0; padding: 0;
+  display: flex; flex-direction: column; gap: 8px; }
+.exec-page .exec-warns li { display: flex; align-items: center; gap: 7px;
+  flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+.exec-page .exec-warn-ts { color: var(--dim); font-size: 11.5px; }
+.exec-page .exec-warn-sub { color: var(--dim); font-size: 11.5px; }
+.exec-page .exec-warn-v { margin-left: auto; color: var(--text);
+  font-variant-numeric: tabular-nums; }
+
+/* -- delay-distribution donut. THE SCREEN-09/10 LESSON, CARRIED:
+      `.pos-donut circle { fill:none; stroke-width:5 }` is scoped to `.pos-page`,
+      so a donut on any other page inherits the SVG default (fill black, no
+      stroke) and renders as a solid black disc. ⛔ Do not widen the .pos-page
+      rule to fix that — it would silently restyle Screen 06. */
+.exec-page .pos-donut circle { fill: none; stroke-width: 5; }
+.exec-page .pd-track { stroke: var(--gray); }
+.exec-page .exec-donut { width: 104px; height: 104px; }
+.exec-page .exec-donut .pd-arc { transition: none; }
+.exec-page .exec-donut-wrap { display: flex; align-items: center; gap: 14px; }
+.exec-page .exec-legend { min-width: 0; display: flex; flex-direction: column;
+  gap: 6px; font-size: 12.5px; color: var(--muted); }
+.exec-page .exec-legend > div { display: flex; align-items: center; gap: 8px; }
+.exec-page .exec-legend b { margin-left: auto; color: var(--text);
+  font-variant-numeric: tabular-nums; }
+.exec-page .dot { width: 9px; height: 9px; border-radius: 50%;
+  flex: 0 0 auto; display: inline-block; }
+/* Bucket ramp: green (fast) → red (slow), so the donut reads in the same
+   direction as the status bands rather than as arbitrary categories. */
+.exec-page .exec-arc-b0 { stroke: var(--pos); }
+.exec-page .exec-arc-b1 { stroke: #57ab5a; }
+.exec-page .exec-arc-b2 { stroke: var(--yellow); }
+.exec-page .exec-arc-b3 { stroke: var(--orange); }
+.exec-page .exec-arc-b4 { stroke: var(--neg); }
+.exec-page .exec-dot-b0 { background: var(--pos); }
+.exec-page .exec-dot-b1 { background: #57ab5a; }
+.exec-page .exec-dot-b2 { background: var(--yellow); }
+.exec-page .exec-dot-b3 { background: var(--orange); }
+.exec-page .exec-dot-b4 { background: var(--neg); }
+.exec-page .exec-dot-FAST       { background: var(--pos); }
+.exec-page .exec-dot-MODERATE   { background: var(--yellow); }
+.exec-page .exec-dot-SLOW       { background: var(--neg); }
+.exec-page .exec-dot-UNMEASURED { background: #484f58; }
+
+/* -- charts. viewBox widths are sized to the ACTUAL rendered panel widths so
+      the scale is ~1:1 and the label font-sizes below are the sizes the
+      operator really sees. ⛔ Do not widen a viewBox without re-checking them —
+      a 600-wide box in a 285px panel scaled Screen-10's labels to about 4px. */
+.exec-page .exec-curve-wrap { padding: 6px 8px 2px; }
+.exec-page .exec-curve { height: 210px; }
+.exec-page .exec-gl { stroke: var(--border); stroke-width: 1; stroke-dasharray: 3 3; }
+.exec-page .exec-axis { fill: var(--muted); font-size: 11.5px;
+  font-variant-numeric: tabular-nums; }
+.exec-page .exec-pt-lbl { fill: var(--text); font-size: 12px;
+  font-variant-numeric: tabular-nums; }
+.exec-page .exec-l-sig { stroke: var(--blue); stroke-width: 1.8; }
+.exec-page .exec-l-cre { stroke: var(--pos); stroke-width: 1.8; }
+.exec-page .exec-l-fil { stroke: var(--purple); stroke-width: 1.8; }
+.exec-page .exec-l-sig-d { fill: var(--blue); }
+.exec-page .exec-l-cre-d { fill: var(--pos); }
+.exec-page .exec-l-fil-d { fill: var(--purple); }
+.exec-page .exec-l-trend { stroke: var(--orange); stroke-width: 1.8; }
+.exec-page .exec-l-trend-d { fill: var(--orange); }
+.exec-page .exec-tp-legend { display: flex; gap: 14px; font-size: 12px; color: var(--muted); }
+.exec-page .exec-tp-legend span { display: flex; align-items: center; gap: 6px; }
+.exec-page .exec-dot-sig { background: var(--blue); }
+.exec-page .exec-dot-cre { background: var(--pos); }
+.exec-page .exec-dot-fil { background: var(--purple); }
+.exec-page .exec-tp-tot { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 9px;
+  padding-top: 9px; border-top: 1px solid var(--border);
+  color: var(--muted); font-size: 12.5px; }
+.exec-page .exec-tp-tot b { color: var(--text); margin-left: 6px;
+  font-variant-numeric: tabular-nums; }
+
+/* -- rail + footer ------------------------------------------------------- */
+.exec-page .exec-rail .cap-table th { font-size: .6rem; letter-spacing: .01em; }
+.exec-page .exec-rail .cap-table th, .exec-page .exec-rail .cap-table td {
+  padding: 6px 4px; font-size: 12px; }
+.exec-page .exec-rail .cap-table td:first-child { max-width: 130px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.exec-page .exec-foot { margin-top: 14px; color: var(--dim); font-size: 12.5px; }
+.exec-page .exec-cap-warn { color: var(--yellow); margin-left: 10px; }
+
+/* -- draggable column headers: the Screens 04/05/07 affordance, reused ----- */
+.exec-page .exec-th { cursor: grab; user-select: none; }
+.exec-page .exec-th:active { cursor: grabbing; }
+.exec-page th.is-drag { opacity: .45; }
+.exec-page th.is-over { box-shadow: inset 2px 0 0 var(--blue); color: var(--muted); }
+.exec-page .exec-grip { color: var(--border); margin-right: 3px; font-size: .55rem; }
+.exec-page .exec-th:hover .exec-grip { color: var(--muted); }
+.exec-page .exec-head-tools { display: flex; align-items: center; gap: 8px; }
+
+/* -- trade state: a DIFFERENT axis from execution speed, so a DIFFERENT shape.
+      Outlined pills, ⛔ not the filled speed badges — an operator must never read
+      "CLOSED" as a speed grade. */
+.exec-page .exec-state { display: inline-block; padding: 1px 7px; border-radius: 4px;
+  font-size: 10.5px; font-weight: 600; letter-spacing: .03em;
+  border: 1px solid var(--border); color: var(--muted); white-space: nowrap; }
+.exec-page .exec-st-CLOSED   { border-color: var(--gray);   color: var(--muted); }
+.exec-page .exec-st-OPEN     { border-color: var(--blue);   color: var(--blue); }
+.exec-page .exec-st-PENDING  { border-color: var(--yellow); color: var(--yellow); }
+.exec-page .exec-st-REJECTED { border-color: var(--neg);    color: var(--neg); }
+.exec-page .exec-st-UNKNOWN  { border-color: var(--border); color: var(--dim); }
+
+/* -- throughput: the wide chart + the day separators -- */
+.exec-page .exec-curve-w { height: 220px; }
+.exec-page .exec-daysep { stroke: var(--border); stroke-width: 1; opacity: .7; }
+
+/* -- rail rankings: BOUNDED so the rail cannot outgrow the table -----------
+   ⚠️ The second pass moved Warnings and the Status Guide out of the rail to
+   close a dead column, and the two rankings ALONE were still taller than the
+   table — the symbol list grows with the traded universe, so the rail height is
+   data-dependent and cannot be balanced by choosing which panels live in it.
+   Bounding each list makes the rail height a CONSTANT, so the gap can no longer
+   reopen on a day with many symbols. Same device as Screen 09's legend. */
+/* ⚠️ MEASURED, ⛔ not guessed. Three arrangements were tried:
+     ① rankings unbounded  → rail 877px vs table 650px = a 227px dead column
+     ② align-items:stretch → the row sized to the RAIL, so the same 227px simply
+       moved INSIDE the table panel. ⛔ Worse: the gap was no longer visibly a
+       layout artefact, it looked like missing rows.
+     ③ bounded lists (this) → rail 716px vs table 650px = 66px.
+   CSS cannot size one grid item from its sibling's height without JS, so a
+   modest slack on the shorter column is unavoidable; what matters is that the
+   WORST case is now bounded — a day with 60 symbols can no longer stretch the
+   rail past the table at all. ⛔ Do not "fix" the residue with align-items. */
+.exec-page .exec-rank-scroll { max-height: 232px; overflow-y: auto; }
+.exec-page .exec-rank-scroll table { width: 100%; }
+.exec-page .exec-rank-scroll thead th { position: sticky; top: 0;
+  background: var(--panel); z-index: 1; }

@@ -57,6 +57,12 @@ def _css_rules() -> list:
     # ⚠️ The split lands INSIDE the block's own opening /* … */, so the comment
     # stripper below would never see that opener. Drop to the first close first.
     block = block.split("*/", 1)[1]
+    # ⚠️⚠️ AND STOP AT THE NEXT SCREEN'S BANNER. The first version ran to END OF
+    # FILE, which was silently correct only while Screen 10 was the last block in
+    # style.css — the moment Screen 11 was appended this test read ITS rules and
+    # failed on `.exec-page`. ⛔ A test whose scope is "everything after me" is a
+    # trap for whoever appends next, and it fired on the very next screen.
+    block = re.split(r"SCREEN \d+ [—-]", block, maxsplit=1)[0]
     block = re.sub(r"/\*.*?\*/", " ", block, flags=re.S)
     return re.findall(r"([^{}]+)\{([^{}]*)\}", block)
 

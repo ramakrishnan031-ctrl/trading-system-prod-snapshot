@@ -1,71 +1,778 @@
 {% extends "base.html" %}
-{% block title %}Execution{% endblock %}
+{% from "components.html" import kpi_row, kpi_card %}
+{% block title %}AlgoCore Systems — Execution Analytics{% endblock %}
 {% block nav_execution %}active{% endblock %}
 {% block content %}
-<div x-data="pageBase('/api/execution')" x-init="load()" @ops-refresh.window="load()">
-  <section class="panel">
-    <h2 class="panel-title">Execution — latency distributions
-      <span class="panel-sub" x-text="data.today || ''"></span>
-    </h2>
-    <div class="big-grid">
-      <template x-for="metric in ['signal_to_order_ms', 'order_to_fill_ms', 'total_latency_ms']" :key="metric">
-        <div class="bignum" style="align-items:stretch">
-          <span class="bn-label" x-text="metric.replaceAll('_',' ')"></span>
-          <template x-for="b in (data.latency && data.latency[metric] ? data.latency[metric].buckets : [])" :key="b.bucket">
-            <div class="hbar-row">
-              <span class="hbar-label" style="width:96px" x-text="b.bucket"></span>
-              <span class="hbar"><span class="hbar-fill" :style="'width:' + (data.latency[metric].n ? Math.round(100*b.count/data.latency[metric].n) : 0) + '%'"></span></span>
-              <span class="hbar-val" x-text="b.count"></span>
-            </div>
-          </template>
-          <span class="bn-sub" x-text="(data.latency && data.latency[metric] ? data.latency[metric].n : 0) + ' samples'"></span>
+{# ═══════════════════════════════════════════════════════════════════════════
+   SCREEN 11 — EXECUTION ANALYTICS.  Built to gui/11. Execution_Analytics.png
+   and .txt, reconciled with what this system actually measures.
+
+   1. SCANNER IS GONE — filter, column and the whole SCANNER EXECUTION RANKING
+      panel the reference carries. Strategy IS the scanner identity on this
+      system (Rama, 14-Aug; measured on Screen 07: signals.scanner EQUALS
+      trades.strategy on all 603 trades). ⛔ Do not reintroduce any of the three.
+
+   2. THE RETIRED SECOND-SCORE LABEL IS NOT A COLUMN — System Score (ACHIEVED)
+      + Score Threshold, as Screens 04/05/06/07/10 do. Not spelled out anywhere
+      in this file: the guard walks the whole frontend, comments included.
+
+   3. ⚠️⚠️ THREE OF THE REFERENCE'S SEVEN DELAYS ARE NOT INSTRUMENTED — risk and
+      capital record no timestamp at all, and order_execution_log.
+      exchange_timestamp is never written. They are SHOWN AS EXPLICIT GAPS in
+      the Delay Summary rather than dropped or zeroed. ⛔ A 0.00 would read as
+      "measured, and it was instant" on the one screen whose job is to say where
+      the time goes; dropping them would imply the remaining stages account for
+      the whole lifecycle. Neither is acceptable.
+
+   4. ALIGNMENT BY COLUMN ROLE (Screens 08/09/10), scoped to `.exec-page`.
+      Row/side labels LEFT via an explicit `lbl`; data columns CENTER.
+
+   5. COLUMNS ARE DRAGGABLE — the SAME convention Screens 04/05/07 already use
+      (draggable th · is-drag/is-over · localStorage order · a 250 ms guard so a
+      drag is not read as a sort click · groups() re-merged from the live order).
+      ⛔ Section/panel drag is NOT implemented: nothing in this project does it —
+      no gridstack, no sortable, no draggable panel anywhere — and inventing a
+      page-level interaction here would be a new pattern, not a reused one.
+
+   6. LAYOUT — ONE bottom analytics zone, ⛔ not two tiers. The table + the two
+      rankings are the primary band; every analytic panel then sits in a single
+      continuous zone beneath it. The rail holds ONLY the two rankings so it
+      cannot outgrow the table and open the dead column the first pass had.
+   ═══════════════════════════════════════════════════════════════════════════ #}
+<div class="dash-page exec-page" x-data="executionPage()" x-init="boot()"
+     @ops-refresh.window="refresh()">
+
+  <div class="exec-head">
+    <div>
+      <h2 class="panel-title exec-h1">Execution Analytics</h2>
+      <div class="exec-sub">Measure and analyze execution performance across the trading lifecycle</div>
+    </div>
+    <span class="exec-bands" x-show="data.status_guide" x-cloak>
+      <span class="exec-bands-k">Bands</span>
+      <b>fast ≤ 2s · moderate ≤ 5s · slow &gt; 5s — of TOTAL delay</b>
+    </span>
+  </div>
+
+  <div class="period-sel" role="tablist" aria-label="Period">
+    <template x-for="p in PERIODS" :key="p.k">
+      <button class="ps-btn" type="button" :class="isPeriod(p.k) ? 'ps-active' : ''"
+              @click="setPeriod(p.k)" x-text="p.l"></button>
+    </template>
+    <span class="ps-range" x-show="pPeriod==='custom'" x-cloak>
+      <input class="flt" type="date" x-model="pFrom" @change="reload()" aria-label="From">
+      <span class="ps-arrow">→</span>
+      <input class="flt" type="date" x-model="pTo" @change="reload()" aria-label="To">
+    </span>
+    <span class="exec-range" x-text="data.from ? (data.from + ' → ' + data.to) : ''"></span>
+  </div>
+
+  {% call kpi_row() %}
+    {{ kpi_card("Total Signals",          "dash(t('total_signals'))",   tone="info") }}
+    {{ kpi_card("Total Orders",           "dash(t('total_orders'))",    tone="info") }}
+    {{ kpi_card("Average Execution Delay","sec(t('avg_delay_sec'))",    tone="warn") }}
+    {{ kpi_card("Fastest Execution",      "sec(t('fastest_sec'))",      tone="pos")  }}
+    {{ kpi_card("Slowest Execution",      "sec(t('slowest_sec'))",      tone="neg")  }}
+    {{ kpi_card("Average Fill Time",      "sec(t('avg_fill_sec'))",     tone="info") }}
+  {% endcall %}
+  <div class="exec-kpi-note">
+    <span x-text="bandLine()"></span>
+    <span class="exec-dot">·</span>
+    <span x-text="'average over ' + dash(t('measured')) + ' measured of ' + dash(t('total_orders')) + ' executions'"></span>
+    <template x-if="t('unmeasured')">
+      <span><span class="exec-dot">·</span><span class="exec-warn"
+            x-text="t('unmeasured') + ' unmeasured (never filled ⇒ no total delay)'"></span></span>
+    </template>
+    <span class="exec-dot">·</span>
+    <span class="exec-dim" x-text="fastestSlowest()"></span>
+    <template x-if="stateLine()">
+      <span><span class="exec-dot">·</span><span x-text="stateLine()"></span></span>
+    </template>
+  </div>
+  <!-- ⚠️ Total Signals and Total Orders have DIFFERENT denominators and the page
+       says so rather than letting the two cards imply a funnel. -->
+  <div class="exec-kpi-note exec-dim" x-text="dataTot().signals_basis || ''"></div>
+
+  <!-- FILTERS. ⛔ Scanner is deliberately absent (ruling 1). -->
+  <section class="panel exec-filter-panel">
+    <h3 class="panel-title exec-flt-title">Filters</h3>
+    <div class="filters exec-filters">
+      <label class="exec-f"><span>Date Range</span>
+        <span class="exec-dates">
+          <input class="flt" type="date" x-model="pFrom" aria-label="From">
+          <span class="ps-arrow">–</span>
+          <input class="flt" type="date" x-model="pTo" aria-label="To">
+        </span>
+      </label>
+      <label class="exec-f"><span>Strategy</span>
+        <select class="flt" x-model="f.strategy">
+          <option value="">All Strategies</option>
+          <template x-for="o in opt('strategy')" :key="o"><option :value="o" x-text="o"></option></template>
+        </select></label>
+      <label class="exec-f"><span>Symbol</span>
+        <select class="flt" x-model="f.symbol">
+          <option value="">All Symbols</option>
+          <template x-for="o in opt('symbol')" :key="o"><option :value="o" x-text="o"></option></template>
+        </select></label>
+      <label class="exec-f"><span>Trade Type</span>
+        <select class="flt" x-model="f.trade_type">
+          <option value="">All Types</option>
+          <template x-for="o in opt('trade_type')" :key="o"><option :value="o" x-text="o"></option></template>
+        </select></label>
+      <label class="exec-f"><span>Direction</span>
+        <select class="flt" x-model="f.direction">
+          <option value="">All Directions</option>
+          <template x-for="o in opt('direction')" :key="o"><option :value="o" x-text="o"></option></template>
+        </select></label>
+      <label class="exec-f"><span>Execution Status</span>
+        <select class="flt" x-model="f.status">
+          <option value="">All Statuses</option>
+          <template x-for="o in opt('status')" :key="o">
+            <option :value="o" x-text="stLabel(o)"></option></template>
+        </select></label>
+      <span class="exec-fbtns">
+        <button class="rt-btn" type="button" @click="resetFilters()">Reset Filters</button>
+        <button class="rt-btn rt-active" type="button" @click="applyFilters()">Apply Filters</button>
+      </span>
+    </div>
+    <div class="exec-filter-state" x-show="isFiltered()" x-cloak>
+      Filtered — <b x-text="data.execution_count"></b> of
+      <b x-text="data.execution_count_unfiltered"></b> executions in range.
+      Every panel below, and the XLSX export, reflect this filtered set.
+    </div>
+  </section>
+
+  <!-- PRIMARY BAND: the timing table beside the two rankings. -->
+  <div class="exec-grid">
+  <div class="exec-main">
+    <section class="panel">
+      <div class="exec-panel-head">
+        <h3 class="panel-title">Timing Breakdown &amp; Delay Analysis</h3>
+        <span class="exec-head-tools">
+          <button class="rt-btn" type="button" x-show="!isDefaultOrder()" x-cloak
+                  @click="resetCols()">Reset columns</button>
+          <button class="btn-export" type="button" @click="exportXlsx()">⭳ Export XLSX</button>
+        </span>
+      </div>
+      <div class="exec-tbl-wrap">
+        <table class="cap-table exec-tbl">
+          <thead>
+            <!-- Group band: consecutive columns sharing `group` merge, and it is
+                 recomputed from the LIVE order — so dragging a column out of a
+                 band splits the band instead of mislabelling it. -->
+            <tr class="exec-grp">
+              <template x-for="g in groups()" :key="g.id">
+                <th :colspan="g.span" :class="g.lbl ? 'lbl' : ''"><span x-text="g.label"></span></th>
+              </template>
+            </tr>
+            <tr>
+              <template x-for="c in cols" :key="c.key">
+                <th :class="[c.lbl ? 'lbl' : '', dragKey === c.key ? 'is-drag' : '',
+                             overKey === c.key ? 'is-over' : '', 'exec-th']"
+                    draggable="true" role="button" tabindex="0"
+                    :title="(c.group ? c.group + ' — ' : '') + c.label
+                            + (c.title ? ' — ' + c.title : '') + ' · click to sort, drag to reorder'"
+                    @dragstart="onDragStart(c.key, $event)"
+                    @dragover.prevent="overKey = c.key"
+                    @dragleave="overKey === c.key && (overKey = '')"
+                    @drop.prevent="onDrop(c.key)"
+                    @dragend="onDragEnd()"
+                    @click="headClick(c.key)" @keyup.enter="tSort(c.key)">
+                  <span class="exec-grip" aria-hidden="true">⠿</span><span
+                        x-text="c.label"></span><span class="exec-arrow" x-text="tArrow(c.key)"></span>
+                </th>
+              </template>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="r in tPaged(rows())" :key="r.trade_id">
+              <tr>
+                <template x-for="c in cols" :key="c.key">
+                  <td :class="c.lbl ? '' : 'ctr'" x-html="cell(r, c)"></td>
+                </template>
+              </tr>
+            </template>
+            <tr x-show="!rows().length" x-cloak>
+              <td :colspan="cols.length" class="exec-empty">No executions for the current filters.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="exec-pager" x-show="rows().length" x-cloak>
+        <span class="exec-pg-lbl">Rows per page:</span>
+        <template x-for="n in tPageSizes" :key="n">
+          <button class="rt-btn" type="button" :class="tPageSize===n?'rt-active':''"
+                  @click="tPageSize=n; tPage=1" x-text="n"></button>
+        </template>
+        <span class="exec-pg-of" x-text="pageLabel()"></span>
+        <button class="rt-btn" type="button" @click="tPage=Math.max(1,tPage-1)" :disabled="tPage<=1">‹</button>
+        <button class="rt-btn" type="button"
+                @click="tPage=Math.min(tPageCount(rows()),tPage+1)"
+                :disabled="tPage>=tPageCount(rows())">›</button>
+      </div>
+      <div class="exec-note" x-text="data.score_note || ''"></div>
+      <div class="exec-note" x-text="dataDur().basis || ''"></div>
+      <div class="exec-note" x-show="reconcileBad()" x-cloak>
+        ⚠ <b x-text="dataRec().unreconciled_rows"></b> row(s) where the parts do not
+        sum to the total — <span x-text="dataRec().note || ''"></span>
+      </div>
+    </section>
+  </div><!-- /exec-main -->
+
+  <!-- RAIL: ONLY the two rankings, so it cannot outgrow the table.
+       ⛔ Scanner Execution Ranking removed (ruling 1). -->
+  <aside class="exec-rail">
+    <section class="panel">
+      <div class="exec-panel-head"><h3 class="panel-title">Strategy Execution Ranking</h3>
+        <button class="btn-export" type="button" @click="exportXlsx()">⭳ Export XLSX</button></div>
+      <div class="exec-rank-scroll"><table class="cap-table"><thead><tr>
+        <th class="lbl">Strategy</th><th>Avg Delay</th><th>Worst Delay</th><th>Fastest</th>
+      </tr></thead><tbody>
+        <template x-for="r in (data.per_strategy || [])" :key="r.strategy">
+          <tr><td :title="r.strategy" x-text="r.strategy"></td>
+            <td class="ctr" :class="tone(r.avg_delay_sec)" x-text="sec(r.avg_delay_sec)"></td>
+            <td class="ctr num-neg" x-text="sec(r.worst_delay_sec)"></td>
+            <td class="ctr num-pos" x-text="sec(r.fastest_sec)"></td></tr>
+        </template>
+        <tr x-show="!(data.per_strategy||[]).length" x-cloak>
+          <td colspan="4" class="exec-empty">No executions.</td></tr>
+      </tbody></table></div>
+    </section>
+
+    <section class="panel">
+      <div class="exec-panel-head"><h3 class="panel-title">Symbol Execution Ranking</h3>
+        <button class="btn-export" type="button" @click="exportXlsx()">⭳ Export XLSX</button></div>
+      <div class="exec-rank-scroll"><table class="cap-table"><thead><tr>
+        <th class="lbl">Symbol</th><th>Avg Delay</th><th>Worst Delay</th><th>Fastest</th>
+      </tr></thead><tbody>
+        <template x-for="r in (data.per_symbol || [])" :key="r.symbol">
+          <tr><td x-text="r.symbol"></td>
+            <td class="ctr" :class="tone(r.avg_delay_sec)" x-text="sec(r.avg_delay_sec)"></td>
+            <td class="ctr num-neg" x-text="sec(r.worst_delay_sec)"></td>
+            <td class="ctr num-pos" x-text="sec(r.fastest_sec)"></td></tr>
+        </template>
+        <tr x-show="!(data.per_symbol||[]).length" x-cloak>
+          <td colspan="4" class="exec-empty">No executions.</td></tr>
+      </tbody></table></div>
+      <div class="exec-note">Scanner ranking omitted — strategy is the scanner
+        identity on this system.</div>
+    </section>
+  </aside>
+  </div><!-- /exec-grid -->
+
+  <!-- ═══ BOTTOM ANALYTICS ZONE — ONE continuous zone, ⛔ not two tiers.
+       Both rows share the same grid gap and sit directly beneath the primary
+       band, so there is no vertical gutter between them and no "chart area 1 /
+       chart area 2". Panels that answer the same question are adjacent:
+       distribution ↔ summary (where the time goes), throughput ↔ delay-through-
+       day (how it moved through the session), warnings ↔ status guide (what to
+       act on and what the bands mean). ═══ -->
+  <div class="exec-zone">
+    <div class="exec-zone-row exec-zone-a">
+      <section class="panel">
+        <h3 class="panel-title">Delay Distribution
+          <span class="panel-sub">by total delay</span></h3>
+        <div class="pos-donut-wrap exec-donut-wrap">
+          <svg class="pos-donut exec-donut" viewBox="0 0 42 42" aria-hidden="true">
+            <circle class="pd-track" cx="21" cy="21" r="15.9155"></circle>
+            <g x-html="pieMarkup()"></g>
+          </svg>
+          <div class="ord-legend pos-legend exec-legend">
+            <template x-for="s in pieSegs()" :key="s.bucket">
+              <div><span class="dot" :class="s.cls"></span><span x-text="s.bucket"></span>
+                <b x-text="s.orders + ' (' + (s.pct === null ? '—' : s.pct.toFixed(2) + '%') + ')'"></b></div>
+            </template>
+            <div x-show="!pieSegs().length" x-cloak class="exec-empty">No measured executions.</div>
+          </div>
         </div>
-      </template>
-    </div>
-  </section>
+        <!-- ⛔ The donut is over MEASURED executions only: an unmeasured row has
+             no delay and cannot sit in a delay bucket. The count says so. -->
+        <div class="exec-tot">Measured orders <b x-text="dash(t('measured'))"></b>
+          <span class="exec-dim" x-show="t('unmeasured')" x-cloak
+                x-text="'· ' + t('unmeasured') + ' unmeasured, in no bucket'"></span></div>
+      </section>
 
-  <section class="panel">
-    <h2 class="panel-title">order_execution_log — today</h2>
-    <div class="tbl-scroll">
-    <table class="cap-table">
-      <thead><tr><th>Order</th><th>Symbol</th><th>Strategy</th><th>Leg</th><th>Side</th>
-        <th>Intended</th><th>Actual</th><th>Slip ₹</th><th>Qty</th><th>Partial</th><th>Retries</th><th>Status</th></tr></thead>
-      <tbody>
-        <template x-for="(r, i) in data.execution_log || []" :key="i">
-          <tr>
-            <td class="mono" x-text="(r.order_id || '').slice(0,12)"></td>
-            <td x-text="r.symbol"></td><td x-text="dash(r.strategy_name)"></td>
-            <td x-text="r.leg"></td><td x-text="dash(r.side)"></td>
-            <td class="cap-num" x-text="dash(r.intended_price)"></td>
-            <td class="cap-num" x-text="dash(r.actual_price)"></td>
-            <td class="cap-num" x-text="dash(r.slippage_rs)"></td>
-            <td class="cap-num" x-text="r.filled_qty + '/' + r.qty"></td>
-            <td x-text="r.is_partial ? 'yes' : ''"></td>
-            <td class="cap-num" x-text="r.retry_count"></td>
-            <td x-text="dash(r.status)"></td>
-          </tr>
-        </template>
-        <tr x-show="!data.execution_log || data.execution_log.length === 0" x-cloak>
-          <td colspan="12" class="ev-empty">No execution-log rows today.</td></tr>
-      </tbody>
-    </table>
-    </div>
-  </section>
+      <section class="panel">
+        <h3 class="panel-title">Delay Summary</h3>
+        <table class="cap-table exec-sum"><thead><tr>
+          <th class="lbl">Stage</th><th>Avg</th><th>Worst</th><th>n</th>
+        </tr></thead><tbody>
+          <template x-for="s in (data.delay_summary || [])" :key="s.key">
+            <tr :class="s.measured ? '' : 'exec-gap'">
+              <td :title="s.source || s.reason || ''">
+                <span x-text="s.stage"></span>
+                <span class="exec-gap-tag" x-show="!s.measured" x-cloak>not instrumented</span>
+                <span class="exec-comp-tag" x-show="s.note" x-cloak x-text="'composite'"></span>
+              </td>
+              <td class="ctr" :class="s.measured ? tone(s.avg_sec) : ''" x-text="s.measured ? sec(s.avg_sec) : '—'"></td>
+              <td class="ctr" x-text="s.measured ? sec(s.worst_sec) : '—'"></td>
+              <td class="ctr" x-text="s.measured ? s.n : '—'"></td>
+            </tr>
+          </template>
+        </tbody></table>
+        <div class="exec-note exec-gapnote" x-text="data.instrumentation_note || ''"></div>
+      </section>
 
-  <section class="panel">
-    <h2 class="panel-title">Reconciler actions — today</h2>
-    <table class="cap-table">
-      <thead><tr><th>Time</th><th>Severity</th><th>Action</th></tr></thead>
-      <tbody>
-        <template x-for="(r, i) in data.reconciliation_actions || []" :key="i">
-          <tr><td class="ev-ts" x-text="r.ts"></td>
-            <td><span class="fam-pill" :class="r.severity === 'CRITICAL' ? 'sev-chip sev-CRITICAL' : (r.severity === 'WARN' ? 'sev-chip sev-WARNING' : 'sev-chip sev-INFO')" x-text="r.severity"></span></td>
-            <td class="wrapcell" style="max-width:none" x-text="r.summary"></td></tr>
-        </template>
-        <tr x-show="!data.reconciliation_actions || data.reconciliation_actions.length === 0" x-cloak>
-          <td colspan="3" class="ev-empty">No reconciler actions today.</td></tr>
-      </tbody>
-    </table>
-  </section>
+      <section class="panel">
+        <h3 class="panel-title">Recent Execution Warnings</h3>
+        <ul class="exec-warns">
+          <template x-for="(w, i) in (data.warnings || []).slice(0, 7)" :key="i">
+            <li>
+              <span class="exec-warn-ts mono" x-text="dash(w.time)"></span>
+              <span class="exec-badge" :class="'exec-' + w.severity" x-text="w.label"></span>
+              <span class="exec-warn-sub" x-text="(w.strategy || '') + ' / ' + (w.symbol || '')"></span>
+              <b class="exec-warn-v" x-text="sec(w.value_sec)"></b>
+            </li>
+          </template>
+          <li x-show="!(data.warnings||[]).length" x-cloak class="exec-empty">
+            No execution warnings in range.</li>
+        </ul>
+        <div class="exec-note" x-text="data.warnings_note || ''"></div>
+      </section>
+
+      <section class="panel">
+        <h3 class="panel-title">Status Guide</h3>
+        <ul class="exec-guide">
+          <template x-for="g in (data.status_guide || [])" :key="g.status">
+            <li><span class="exec-badge" :class="'exec-' + g.status" x-text="g.label"></span>
+              <span class="exec-guide-r" x-text="g.rule"></span></li>
+          </template>
+        </ul>
+        <h3 class="panel-title exec-sub-h">Status Distribution</h3>
+        <table class="cap-table exec-sum"><tbody>
+          <template x-for="s in (data.status_distribution || [])" :key="s.status">
+            <tr><td><span class="dot" :class="'exec-dot-' + s.status"></span>
+                <span x-text="s.label"></span></td>
+              <td class="ctr" x-text="s.count"></td>
+              <td class="ctr" x-text="pctOf(s.count)"></td></tr>
+          </template>
+        </tbody></table>
+        <div class="exec-note" x-text="dataTot().pct_basis || ''"></div>
+      </section>
+    </div>
+
+    <div class="exec-zone-row exec-zone-b">
+      <section class="panel">
+        <div class="exec-panel-head">
+          <h3 class="panel-title">Throughput Analysis
+            <span class="panel-sub" x-text="tpBucketLabel()"></span></h3>
+          <span class="exec-tp-legend">
+            <span><i class="dot exec-dot-sig"></i>Signals Received</span>
+            <span><i class="dot exec-dot-cre"></i>Orders Created</span>
+            <span><i class="dot exec-dot-fil"></i>Orders Filled</span>
+          </span>
+        </div>
+        <div class="curve-wrap exec-curve-wrap">
+          <svg class="curve-svg exec-curve-w" viewBox="0 0 900 220" aria-hidden="true">
+            <g x-html="tpMarkup()"></g>
+          </svg>
+        </div>
+        <div class="exec-tp-tot">
+          <span>Total Signals <b x-text="dash(tp('signals'))"></b></span>
+          <span>Total Orders <b x-text="dash(tp('created'))"></b></span>
+          <span>Total Filled <b x-text="dash(tp('filled'))"></b></span>
+          <span>Peak signals/min <b x-text="dash(tp('peak_signals_per_min'))"></b></span>
+          <span>Peak orders/min <b x-text="dash(tp('peak_created_per_min'))"></b></span>
+        </div>
+        <div class="exec-note" x-text="data.throughput_note || ''"></div>
+      </section>
+
+      <section class="panel">
+        <h3 class="panel-title">Average Delay Through Day
+          <span class="panel-sub">lower is better</span></h3>
+        <div class="curve-wrap exec-curve-wrap">
+          <svg class="curve-svg exec-curve" viewBox="0 0 460 220" aria-hidden="true">
+            <g x-html="trendMarkup()"></g>
+          </svg>
+        </div>
+        <div class="exec-note" x-text="data.trend_note || ''"></div>
+      </section>
+    </div>
+  </div>
+
+  <div class="exec-foot">
+    <span>ℹ</span> All values are read-only and auto-update with the page.
+    <span x-show="data.row_cap_applied" x-cloak class="exec-cap-warn">
+      ⚠ Row cap in force — totals may be truncated.</span>
+    <span class="exec-err" x-show="loadError" x-cloak x-text="loadError"></span>
+  </div>
 </div>
+
+<script>
+function executionPage() {
+  return Object.assign(
+    pageBase("/api/analytics/execution"),
+    tableMixin({ defaultSize: 50, pageSizes: [25, 50, 100, 200] }),
+    {
+    PERIODS: [{k:"today",l:"Today"},{k:"yesterday",l:"Yesterday"},
+              {k:"week",l:"This Week"},{k:"month",l:"This Month"},
+              {k:"custom",l:"Custom Range"}],
+
+    /* Column ROLES and GROUPS in one place.
+       `lbl` = a row/side label heading, which stays LEFT; every other heading
+       sits over its own data and is CENTRED by `.exec-page .cap-table th`.
+       ⛔ Not `th:first-child` — Strategy is the third heading.
+
+       ORDER puts the operationally important columns FIRST: the delays and the
+       status are what this screen exists to show, so they precede the raw
+       instants and the entry/exit lifecycle. Anything past the fold is reachable
+       by scrolling AND by dragging it left. */
+    DEFAULT_COLS: [
+      { key:"date",   label:"Trading Date", group:"Common info", lbl:true },
+      { key:"time",   label:"Time", group:"Common info",
+        title:"signals.received_at (IST) — the signal instant; falls back to trade creation when the trade has no signal row" },
+      { key:"strategy", label:"Strategy", group:"Common info", lbl:true },
+      { key:"symbol", label:"Symbol", group:"Common info" },
+      { key:"trade_type", label:"Trade Type", group:"Common info",
+        title:"Product on the ENTRY order; UNKNOWN when the trade has no ENTRY order row" },
+      { key:"direction", label:"Direction", group:"Common info" },
+      { key:"system_score", label:"System Score", group:"Common info", title:"The ACHIEVED screener score" },
+      { key:"score_threshold", label:"Score Threshold", group:"Common info", title:"The minimum the signal had to reach" },
+
+      { key:"screening_sec", label:"Screening", group:"Delay analysis (sec)",
+        title:"Sum of the 10 screening-step latencies" },
+      { key:"signal_to_order_sec", label:"Signal→Order", group:"Delay analysis (sec)",
+        title:"COMPOSITE: validation + risk + capital + create + submit. It cannot be split with the timestamps that exist" },
+      { key:"order_to_fill_sec", label:"Fill", group:"Delay analysis (sec)",
+        title:"Submit → fill. Contains the exchange-accept segment, which cannot be split out" },
+      { key:"total_sec", label:"Total", group:"Delay analysis (sec)", title:"signals.received_at → fill" },
+
+      { key:"status", label:"Status", group:"Execution" },
+
+      { key:"order_submit_time", label:"Order Submit", group:"Lifecycle instants (IST)",
+        title:"ENTRY orders.placed_at. ⛔ There is no separate order-CREATE instant" },
+      { key:"fill_time", label:"Entry Fill", group:"Lifecycle instants (IST)", title:"ENTRY orders.filled_at" },
+      { key:"exit_time", label:"Exit", group:"Lifecycle instants (IST)",
+        title:"trades.exit_time — when the position was FULLY closed. Empty while the trade is open" },
+
+      { key:"trade_state", label:"Trade State", group:"Trade lifecycle" },
+      { key:"duration", label:"Trade Duration", group:"Trade lifecycle",
+        title:"Exit − ENTRY FILL. ⛔ Not from signal or submit time, and only ever present on a CLOSED trade" },
+    ],
+    cols: [], dragKey: "", overKey: "", _dragEndAt: 0,
+    /* v1 → v2 whenever the column SET changes, so a saved order written for a
+       different set is retired rather than silently half-merged. */
+    COLS_KEY: "screen11.execution.colOrder.v1",
+
+    ST_LABEL: { FAST:"Fast", MODERATE:"Moderate", SLOW:"Slow", UNMEASURED:"Unmeasured" },
+    BUCKET_CLS: ["exec-dot-b0","exec-dot-b1","exec-dot-b2","exec-dot-b3","exec-dot-b4"],
+    BUCKET_ARC: ["exec-arc-b0","exec-arc-b1","exec-arc-b2","exec-arc-b3","exec-arc-b4"],
+
+    pPeriod: "today", pFrom: "", pTo: "", pick: "today",
+    f: { strategy:"", symbol:"", trade_type:"", direction:"", status:"" },
+    applied: { strategy:"", symbol:"", trade_type:"", direction:"", status:"" },
+
+    boot() { this.initCols(); this.load(); },
+    /* THE POLL PATH (ops-refresh). ⛔ Must not reset the pager, the sort, the
+       column order or the filters — the operator is looking at the page while it
+       refreshes. */
+    refresh() { this.load(); },
+    reload() { this.tPage = 1; this.load(); },
+
+    /* ── column order: the Screens 04/05/07 convention, reused verbatim ── */
+    initCols() {
+      this.cols = this.DEFAULT_COLS.slice();
+      let saved = null;
+      try { saved = JSON.parse(window.localStorage.getItem(this.COLS_KEY) || "null"); }
+      catch (e) { saved = null; }
+      if (!Array.isArray(saved) || !saved.length) return;
+      const byKey = {};
+      this.DEFAULT_COLS.forEach(c => { byKey[c.key] = c; });
+      const next = [];
+      saved.forEach(k => { if (byKey[k] && next.indexOf(byKey[k]) === -1) next.push(byKey[k]); });
+      /* Columns added since the order was saved are appended rather than lost. */
+      this.DEFAULT_COLS.forEach(c => { if (next.indexOf(c) === -1) next.push(c); });
+      if (next.length === this.DEFAULT_COLS.length) this.cols = next;
+    },
+    saveCols() {
+      try { window.localStorage.setItem(this.COLS_KEY, JSON.stringify(this.cols.map(c => c.key))); }
+      catch (e) {}
+    },
+    isDefaultOrder() {
+      return this.cols.length === this.DEFAULT_COLS.length
+             && this.cols.every((c, i) => c.key === this.DEFAULT_COLS[i].key);
+    },
+    resetCols() {
+      this.cols = this.DEFAULT_COLS.slice();
+      try { window.localStorage.removeItem(this.COLS_KEY); } catch (e) {}
+    },
+    onDragStart(key, ev) {
+      this.dragKey = key;
+      if (ev && ev.dataTransfer) {
+        ev.dataTransfer.effectAllowed = "move";
+        try { ev.dataTransfer.setData("text/plain", key); } catch (e) {}
+      }
+    },
+    onDrop(targetKey) {
+      const from = this.cols.findIndex(c => c.key === this.dragKey);
+      const to = this.cols.findIndex(c => c.key === targetKey);
+      this.overKey = "";
+      if (from < 0 || to < 0 || from === to) return;
+      const next = this.cols.slice();
+      next.splice(to, 0, next.splice(from, 1)[0]);
+      this.cols = next;
+      this.saveCols();
+      this._dragEndAt = Date.now();
+    },
+    onDragEnd() { this.dragKey = ""; this.overKey = ""; this._dragEndAt = Date.now(); },
+    headClick(key) {
+      /* A drag ends with a click event on the same th. Without this guard every
+         reorder would also flip the sort. */
+      if (Date.now() - this._dragEndAt < 250) return;
+      this.tSort(key);
+    },
+    /* Merge consecutive columns that share a group — recomputed from the LIVE
+       order, so dragging a column out of a band splits the band. */
+    groups() {
+      const out = []; let i = 0, id = 0;
+      while (i < this.cols.length) {
+        const g = this.cols[i].group || "";
+        let n = 1;
+        while (g && i + n < this.cols.length && this.cols[i + n].group === g) n++;
+        out.push({ id: id++, label: g, span: n, lbl: !!this.cols[i].lbl });
+        i += n;
+      }
+      return out;
+    },
+
+    /* ONE query builder — the fetch and the export both use it. */
+    params() {
+      const p = new URLSearchParams();
+      p.set("period", this.pPeriod);
+      if (this.pPeriod === "custom") {
+        if (this.pFrom) p.set("from", this.pFrom);
+        if (this.pTo) p.set("to", this.pTo);
+      }
+      Object.keys(this.applied).forEach(k => { if (this.applied[k]) p.set(k, this.applied[k]); });
+      return p;
+    },
+    qs() { return "?" + this.params().toString(); },
+    exportXlsx() { window.location = "/api/export/execution?" + this.params().toString(); },
+
+    isPeriod(k) { return this.pick === k; },
+    setPeriod(k) {
+      this.pick = k;
+      if (k === "yesterday") {
+        const d = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+        this.pPeriod = "custom"; this.pFrom = d; this.pTo = d;
+      } else if (k === "custom") { this.pPeriod = "custom"; }
+      else { this.pPeriod = k; this.pFrom = ""; this.pTo = ""; }
+      this.reload();
+    },
+    applyFilters() { this.applied = Object.assign({}, this.f); this.reload(); },
+    resetFilters() {
+      this.f = { strategy:"", symbol:"", trade_type:"", direction:"", status:"" };
+      this.applied = Object.assign({}, this.f); this.reload();
+    },
+    isFiltered() { return Object.keys(this.applied).some(k => this.applied[k]); },
+    opt(k) { return (this.data.filters && this.data.filters.options
+                     && this.data.filters.options[k]) || []; },
+
+    /* ── formatters. A missing value is a DASH, ⛔ never 0.00 ── */
+    t(k) { return this.data.totals ? this.data.totals[k] : null; },
+    dataTot() { return this.data.totals || {}; },
+    dataRec() { return this.data.reconcile || {}; },
+    dataDur() { return this.data.duration || {}; },
+    reconcileBad() { return (this.dataRec().unreconciled_rows || 0) > 0; },
+    tp(k) { const x = (this.data.throughput || {}).totals || {}; return x[k]; },
+    sec(v) { return (v === null || v === undefined) ? "—" : Number(v).toFixed(2) + "s"; },
+    stLabel(s) { return this.ST_LABEL[s] || s; },
+    tone(v) { if (v === null || v === undefined) return "";
+              return v <= 2 ? "num-pos" : (v <= 5 ? "num-warn" : "num-neg"); },
+    dirCls(d) { return d === "LONG" ? "num-pos" : (d === "SHORT" ? "num-neg" : ""); },
+    esc(s) { return String(s === null || s === undefined ? "" : s)
+                    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;"); },
+    pctOf(n) { const tot = this.t("total_orders"); return tot ? (100 * n / tot).toFixed(2) + "%" : "—"; },
+    bandLine() {
+      if (this.t("total_orders") === null || this.t("total_orders") === undefined) return "";
+      return this.t("fast") + " fast · " + this.t("moderate") + " moderate · " + this.t("slow") + " slow";
+    },
+    fastestSlowest() {
+      const f = this.t("fastest_symbol"), s = this.t("slowest_symbol");
+      if (!f && !s) return "";
+      return "fastest " + (f || "—") + " · slowest " + (s || "—");
+    },
+    stateLine() {
+      const st = this.data.trade_states || [];
+      if (!st.length) return "";
+      const d = this.dataDur();
+      return st.map(x => x.count + " " + x.state.toLowerCase()).join(" · ")
+             + (d.avg ? " · avg duration " + d.avg : "");
+    },
+    tpBucketLabel() {
+      const b = this.tp("bucket_min"), d = this.tp("days");
+      if (!b) return "per minute";
+      return "per minute · " + b + "-min buckets" + (d > 1 ? " · " + d + " days" : "");
+    },
+
+    rows() { return this.data.rows || []; },
+    pageLabel() {
+      const n = this.rows().length; if (!n) return "0 of 0";
+      const s = (this.tPage - 1) * this.tPageSize + 1;
+      return s + "–" + Math.min(n, s + this.tPageSize - 1) + " of " + n;
+    },
+
+    /* ── ONE cell renderer, so a reordered column still renders correctly.
+         Returns MARKUP (the Screen-07 `cell(r,c)` convention) because Status and
+         Trade State are badges, not text. ── */
+    cell(r, c) {
+      const k = c.key, v = r[k];
+      if (k === "status") {
+        const rem = r.remarks
+          ? ' <span class="exec-remark-i" title="' + this.esc(r.remarks) + '">ⓘ</span>' : "";
+        return '<span class="exec-badge exec-' + this.esc(r.status) + '">'
+               + this.esc(this.stLabel(r.status)) + "</span>" + rem;
+      }
+      if (k === "trade_state") {
+        return '<span class="exec-state exec-st-' + this.esc(v) + '">' + this.esc(v) + "</span>";
+      }
+      if (k === "direction") {
+        return '<span class="' + this.dirCls(v) + '">' + this.esc(v || "—") + "</span>";
+      }
+      if (k === "strategy") {
+        return '<span title="' + this.esc(v) + '">' + this.esc(v || "—") + "</span>";
+      }
+      if (k === "duration") {
+        /* ⛔ An open trade shows a dash, never 00:00:00 — a zero would read as a
+           trade that exited the instant it filled. */
+        return v ? '<span class="mono">' + this.esc(v) + "</span>" : "—";
+      }
+      if (k === "exit_time" || k === "fill_time" || k === "order_submit_time") {
+        return v ? '<span class="mono">' + this.esc(v) + "</span>" : "—";
+      }
+      if (k.slice(-4) === "_sec") {
+        if (v === null || v === undefined) return "—";
+        const cls = (k === "total_sec") ? this.tone(v) : "";
+        return '<span class="' + cls + '">' + Number(v).toFixed(2) + "s</span>";
+      }
+      return (v === null || v === undefined || v === "") ? "—" : this.esc(v);
+    },
+
+    /* ── delay-distribution donut. Same geometry as Screens 06/07/09/10
+         (r = 15.9155 ⇒ circumference 100), so a percentage IS the dash length. */
+    pieSegs() {
+      const d = this.data.distribution || [];
+      const total = d.reduce((a, b) => a + (b.orders || 0), 0);
+      if (!total) return [];
+      const out = []; let acc = 0;
+      d.forEach((b, i) => {
+        if (!b.orders) return;
+        const pct = 100 * b.orders / total;
+        out.push({ bucket: b.bucket, orders: b.orders, pct: pct,
+                   cls: this.BUCKET_CLS[i % 5], arc: this.BUCKET_ARC[i % 5],
+                   dash: pct.toFixed(3) + " " + (100 - pct).toFixed(3),
+                   offset: (-acc).toFixed(3) });
+        acc += pct;
+      });
+      return out;
+    },
+    pieMarkup() {
+      return this.pieSegs().map(s =>
+        '<circle class="pd-arc ' + s.arc + '" cx="21" cy="21" r="15.9155" ' +
+        'stroke-dasharray="' + s.dash + '" stroke-dashoffset="' + s.offset + '"></circle>'
+      ).join("");
+    },
+
+    /* ── charts. ⚠️ Built as MARKUP and injected with x-html on a <g>.
+         ⛔ NEVER `<template x-for>` inside <svg>: the HTML parser makes it an SVG
+         element named "template", not an HTMLTemplateElement, so Alpine repeats
+         nothing and the panel renders as an EMPTY BOX. Pinned by a test. ── */
+    _axis(x, y, txt, anchor, cls) {
+      return '<text class="' + (cls || "exec-axis") + '" x="' + x + '" y="' + y
+             + '" text-anchor="' + (anchor || "middle") + '">' + this.esc(txt) + "</text>";
+    },
+
+    /* THROUGHPUT — three independent series on a gap-filled session axis.
+       ⛔ The line BREAKS between days: joining the last bucket of one day to the
+       first of the next would draw continuity across a closed market. */
+    tpSeries() { return ((this.data.throughput || {}).series) || []; },
+    tpMarkup() {
+      const s = this.tpSeries();
+      const X0 = 58, X1 = 890, Y0 = 26, Y1 = 176;
+      if (!s.length) return this._axis(470, 100, "No signals or orders in this period");
+      const max = Math.max(...s.map(p => Math.max(p.signals, p.created, p.filled)), 0);
+      /* A flat-zero window must not divide by zero, and must not be stretched to
+         look like activity: the axis simply tops out at 1/min. */
+      const top = max > 0 ? max * 1.25 : 1;
+      const xf = i => (s.length === 1 ? (X0 + X1) / 2 : X0 + (X1 - X0) * i / (s.length - 1));
+      const yf = v => Y1 - (Y1 - Y0) * (v / top);
+      let out = "";
+      for (let i = 0; i <= 4; i++) {
+        const v = top * i / 4, y = yf(v).toFixed(1);
+        out += '<line class="exec-gl" x1="54" y1="' + y + '" x2="894" y2="' + y + '"></line>'
+             + this._axis(50, (Number(y) + 4).toFixed(1), v.toFixed(v < 1 ? 2 : 1), "end");
+      }
+      /* one polyline per (series, day) run — the day break is the whole point */
+      [["signals","exec-l-sig"],["created","exec-l-cre"],["filled","exec-l-fil"]]
+        .forEach(([k, cls]) => {
+          let run = [], day = null;
+          const flush = () => { if (run.length > 1) {
+              out += '<polyline class="curve-line ' + cls + '" fill="none" points="'
+                   + run.join(" ") + '"></polyline>'; } run = []; };
+          s.forEach((p, i) => {
+            if (p.day !== day) { flush(); day = p.day; }
+            run.push(xf(i).toFixed(1) + "," + yf(p[k]).toFixed(1));
+          });
+          flush();
+        });
+      /* day separators + labels, only when the window spans more than one day */
+      const dayStarts = [];
+      s.forEach((p, i) => { if (i === 0 || p.day !== s[i - 1].day) dayStarts.push(i); });
+      if (dayStarts.length > 1) {
+        dayStarts.forEach((i, n) => {
+          if (n === 0) return;
+          const x = ((xf(i) + xf(i - 1)) / 2).toFixed(1);
+          out += '<line class="exec-daysep" x1="' + x + '" y1="' + Y0 + '" x2="' + x + '" y2="' + Y1 + '"></line>';
+        });
+        const step = Math.max(1, Math.ceil(dayStarts.length / 8));
+        dayStarts.forEach((i, n) => {
+          if (n % step === 0) out += this._axis(xf(i).toFixed(1), 200, s[i].day.slice(5));
+        });
+      } else {
+        const step = Math.max(1, Math.ceil(s.length / 9));
+        s.forEach((p, i) => {
+          if (i % step === 0 || i === s.length - 1) out += this._axis(xf(i).toFixed(1), 200, p.at);
+        });
+      }
+      return out;
+    },
+
+    /* AVERAGE DELAY THROUGH DAY — the approved 7-mark timeline. */
+    XT: ["09:15","10:00","11:00","12:00","13:00","14:00","15:30"],
+    trendRows() { return this.data.trend || []; },
+    trendMarkup() {
+      const rows = this.trendRows();
+      const X0 = 50, X1 = 434, Y0 = 32, Y1 = 176;
+      const vals = rows.map(b => b.avg_delay_sec).filter(v => v !== null && v !== undefined);
+      const top = vals.length ? Math.max(...vals) * 1.3 : 1;
+      const xf = i => X0 + (X1 - X0) * i / (this.XT.length - 1);
+      const yf = v => Y1 - (Y1 - Y0) * (v / top);
+      let out = "";
+      for (let i = 0; i <= 3; i++) {
+        const v = top * i / 3, y = yf(v).toFixed(1);
+        out += '<line class="exec-gl" x1="46" y1="' + y + '" x2="440" y2="' + y + '"></line>'
+             + this._axis(42, (Number(y) + 4).toFixed(1), v.toFixed(2) + "s", "end");
+      }
+      /* ⛔ The line BREAKS across a bucket with no observation. */
+      let cur = []; const segs = [];
+      rows.forEach((b, i) => {
+        const v = b.avg_delay_sec;
+        if (v === null || v === undefined) { if (cur.length > 1) segs.push(cur.join(" ")); cur = []; return; }
+        cur.push(xf(i).toFixed(1) + "," + yf(v).toFixed(1));
+      });
+      if (cur.length > 1) segs.push(cur.join(" "));
+      segs.forEach(p => { out += '<polyline class="curve-line exec-l-trend" fill="none" points="' + p + '"></polyline>'; });
+      rows.forEach((b, i) => {
+        const v = b.avg_delay_sec;
+        if (v === null || v === undefined) return;
+        out += '<circle class="exec-l-trend-d" cx="' + xf(i).toFixed(1) + '" cy="' + yf(v).toFixed(1) + '" r="3.2"></circle>'
+             + '<text class="exec-pt-lbl" x="' + xf(i).toFixed(1) + '" y="' + (yf(v) - 8).toFixed(1)
+             + '" text-anchor="middle">' + v.toFixed(2) + "s</text>";
+      });
+      this.XT.forEach((l, i) => { out += this._axis(xf(i).toFixed(1), 200, l); });
+      if (!vals.length) out += this._axis(240, 104, "No measured executions in this period");
+      return out;
+    },
+  });
+}
+</script>
 {% endblock %}

@@ -152,8 +152,16 @@ DDL = [
     # core/schema.sql; it was absent here, which is what made the pre-13-Aug
     # mapping test vacuous. The fixture's contract is to match schema.sql for
     # every column a reader touches, and signal_scores() touches this one.
+    # Screen-11: `ts` and `latencies` are the REAL column names in
+    # core/schema.sql:705-708 (`created_at` below is a fixture-ism that predates
+    # this and is kept so the existing seed insert is unchanged). `latencies` is
+    # the ONLY per-stage timing this system records — screening/step_executor.py
+    # writes it as {step_name: elapsed_ms} over the ten screening steps — so the
+    # fixture must carry it for the Execution-Analytics reader to be testable.
     """CREATE TABLE screener_results (id INTEGER PRIMARY KEY AUTOINCREMENT,
-        signal_id TEXT, score INTEGER, eligible_score INTEGER, created_at TEXT)""",
+        signal_id TEXT, score INTEGER, eligible_score INTEGER, created_at TEXT,
+        tier TEXT, status TEXT, step_results TEXT, latencies TEXT,
+        market_data_snapshot TEXT, ts TEXT)""",
 ]
 
 DDL_V42_EXTRA = [
@@ -366,16 +374,41 @@ def _seed(conn: sqlite3.Connection, schema_version: int) -> None:
     # numbers on purpose: with one value for both, a reader that returned the
     # threshold under the "System Score" label — which is exactly the defect
     # corrected on 13-Aug — would pass every assertion.
+    # Screen-11: `latencies` carries the per-step screening times. The two rows
+    # are seeded with DIFFERENT step sets and DIFFERENT totals on purpose (sum
+    # 41.5 ms vs 12.0 ms), so a reader that returned a constant, or summed the
+    # wrong signal's blob, would fail rather than coincidentally pass.
+    _lat = {
+        "sig_trd_c1": {"volume_surge": 12.5, "vwap_position": 8.0, "atr_filter": 6.0,
+                       "rsi_range": 5.0, "price_action": 10.0},          # = 41.5 ms
+        "sig_trd_c4": {"volume_surge": 7.0, "vwap_position": 5.0},        # = 12.0 ms
+    }
     for sid in ("sig_trd_c1", "sig_trd_c4"):
-        c.execute("INSERT INTO screener_results(signal_id,score,eligible_score,created_at) "
-                  "VALUES(?,?,?,?)", (sid, 72, 65, _ts("10:30:00")))
+        c.execute("INSERT INTO screener_results(signal_id,score,eligible_score,created_at,"
+                  "tier,status,step_results,latencies,market_data_snapshot,ts) "
+                  "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                  (sid, 72, 65, _ts("10:30:00"), "A", "PASS", "{}",
+                   json.dumps(_lat[sid]), "{}", _ts("10:30:00")))
 
     # G5c multi-day trades for the period layer — gap_fade_long closed on YDAY
     # (within trailing-7) + TENDAYS (trailing-30 only). created_at+exit_time dated
     # that day ⇒ invisible to today-scoped counts; ALL older than today's 14:50 win
     # ⇒ loss-streak assertions (global + per-strategy) are unmoved.
-    def _mkclosed(tid, day, reason, net, hh="14:00:00", sym="AAA"):
+    def _mkclosed(tid, day, reason, net, hh="14:00:00", sym="AAA", lat=(120, 850, 970),
+                  exit_hh=None):
+        # `lat` = (signal_to_order_ms, order_to_fill_ms, total_latency_ms). The
+        # default reproduces the original seed EXACTLY, so every pre-existing
+        # caller and latency assertion is byte-unchanged; Screen-11 passes varied
+        # values so the FAST/MODERATE/SLOW bands and the warning thresholds are
+        # each exercised by a real row rather than assumed reachable.
         ts = f"{day}T{hh}+05:30"
+        # Screen-11: exit_time defaults to ts (byte-identical to the original
+        # seed) but can be moved LATER so Trade Duration is a real span. ⭐ With
+        # entry == exit the duration is 0, and 0 is exactly the value a broken
+        # duration would produce — the fixture could not tell the two apart.
+        # ⚠️ Any override must stay on the SAME DAY: Screen 09 buckets by
+        # exit_time, so moving it across midnight would silently re-bucket it.
+        ex = f"{day}T{exit_hh}+05:30" if exit_hh else ts
         c.execute(
             "INSERT INTO trades(trade_id,signal_id,symbol,direction,strategy,sector,qty_planned,"
             "qty_filled,entry_target_price,entry_actual_price,sl_initial,tgt_initial,margin_reserved,"
@@ -383,17 +416,34 @@ def _seed(conn: sqlite3.Connection, schema_version: int) -> None:
             "net_pnl,status,actual_position_value_rs,signal_to_order_ms,order_to_fill_ms,total_latency_ms) "
             "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (tid, f"sig_{tid}", sym, "LONG", "gap_fade_long", "IT", 10, 10, 1000.0, 1001.0,
-             990.0, 1015.0, 5000.0, 100.0, ts, ts, ts, reason, 1001.0 + net / 10.0, 5.0,
-             net + 5, net, "CLOSED", 10000.0, 120, 850, 970))
+             990.0, 1015.0, 5000.0, 100.0, ts, ts, ex, reason, 1001.0 + net / 10.0, 5.0,
+             net + 5, net, "CLOSED", 10000.0, *lat))
         c.execute("INSERT INTO signals(signal_id,symbol,scanner,strategy,received_at,status) "
                   "VALUES(?,?,?,?,?,?)",
                   (f"sig_{tid}", sym, "gap_fade_long", "gap_fade_long", ts, "TRADED"))
     # Screen-10 needs several SYMBOLS to rank and several PRICE BUCKETS to fill,
     # so these three carry distinct symbols. `sym` defaults to "AAA", so every
     # pre-existing caller and assertion is byte-unchanged.
-    _mkclosed("trd_w1", YDAY, "SL_HIT", -30.0, sym="BBB")
-    _mkclosed("trd_w2", YDAY, "TGT_HIT", 80.0, sym="CCC")
-    _mkclosed("trd_m1", TENDAYS, "TGT_HIT", 50.0, sym="DDD")
+    # Screen-11 latency spread, and every value is chosen to land in a DIFFERENT
+    # band so no band is merely assumed reachable:
+    #   trd_w1  6.20 s total → SLOW      · fill 3.40 s → BOTH warnings fire
+    #   trd_w2  3.50 s total → MODERATE  · fill 2.60 s → ⛔ under the 3 s fill
+    #                                       threshold, so ONLY the total warning
+    #                                       is eligible — and 3.50 s is under the
+    #                                       5 s total threshold too, so NEITHER
+    #                                       fires. That is the control: it proves
+    #                                       the warning list is not just "every
+    #                                       non-fast row".
+    #   trd_m1  latency NULL → UNMEASURED (a closed trade whose timing was never
+    #                                       recorded; ⛔ must not read as fast)
+    #   Exits are moved LATER THE SAME DAY so Trade Duration is a real span
+    #   (1h05m / 0h35m / 1h30m) rather than 0 — see the note in _mkclosed.
+    _mkclosed("trd_w1", YDAY, "SL_HIT", -30.0, sym="BBB", lat=(2800, 3400, 6200),
+              exit_hh="15:05:00")
+    _mkclosed("trd_w2", YDAY, "TGT_HIT", 80.0, sym="CCC", lat=(900, 2600, 3500),
+              exit_hh="14:35:00")
+    _mkclosed("trd_m1", TENDAYS, "TGT_HIT", 50.0, sym="DDD", lat=(None, None, None),
+              exit_hh="15:30:00")
 
     # ── fm_ledger: INIT total=100000; realized losses 450 + one win 200 ──
     # 25-Jul-2026: this used to seed TWO INIT rows split by bucket (intraday

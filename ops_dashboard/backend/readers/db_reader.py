@@ -12,6 +12,7 @@ A write through any connection from here raises sqlite3.OperationalError
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 from contextlib import contextmanager
 from typing import Any, Iterator, Optional
@@ -1615,6 +1616,173 @@ def slippage_rows_range(cfg: dict, from_date: str, to_date: str,
             except sqlite3.OperationalError:
                 return []
     return [dict(r) for r in rows]
+
+
+def execution_rows_range(cfg: dict, from_date: str, to_date: str,
+                         limit: Optional[int] = None) -> list:
+    """Screen-11 spine: one row per TRADE (one entry execution) whose TRADE DAY
+    falls in [from_date, to_date], carrying every lifecycle instant the system
+    actually records.
+
+    ⛔ NO DEFAULT ROW CAP — same reason as `closed_trades_range` and
+    `slippage_rows_range`: a silent truncation would let the KPI deck, the timing
+    table, the rankings and the distribution describe DIFFERENT populations with
+    nothing on screen saying so.
+
+    ⚠️⚠️ WHAT THIS CAN AND CANNOT MEASURE — read before adding a column.
+    The reference design asks for EIGHT lifecycle instants (signal · validation ·
+    risk · capital · order-create · order-submit · exchange-accept · fill). This
+    system records FOUR, and the gap is a REAL INSTRUMENTATION GAP, ⛔ not an
+    oversight in this reader:
+
+      ✅ signal        `signals.received_at`      (and `triggered_at` upstream)
+      ✅ screening     `screener_results.ts` + its per-step `latencies` JSON
+      ✅ order submit  `orders.placed_at`   (ENTRY leg)
+      ✅ fill          `orders.filled_at`   (ENTRY leg)
+
+      ⛔ risk evaluation      — NO timestamp exists anywhere in the codebase
+      ⛔ capital evaluation   — NO timestamp exists anywhere in the codebase
+      ⛔ order CREATE         — `orders` has ONE instant (`placed_at`); there is
+                                no create/submit pair to subtract
+      ⛔ exchange accept      — `order_execution_log.exchange_timestamp` EXISTS
+                                as a column but is NEVER WRITTEN: the only caller
+                                of `insert_order_execution_log`
+                                (orders/slippage_recorder.py:149) does not set
+                                the key, so it is structurally always NULL
+
+    ⇒ the three persisted delays below are the ONLY ones derivable, and
+    `signal_to_order_ms` is a COMPOSITE that CONTAINS validation, risk, capital,
+    order-create and submit. ⛔ It must never be relabelled as any one of them.
+
+    LATENCY PROVENANCE (orders/order_manager.py:454-456), quoted so the screen
+    cannot drift from the writer:
+      signal_to_order_ms = signals.received_at → ENTRY orders.placed_at
+      order_to_fill_ms   = ENTRY orders.placed_at → filled_at
+      total_latency_ms   = signals.received_at → filled_at
+
+    ⚠️ `total_latency_ms` is computed INDEPENDENTLY from the same two endpoints,
+    ⛔ not as the sum of the other two, and each is separately clamped to ≥ 0 for
+    NTP skew. So `total == part1 + part2` is a PROPERTY TO CHECK, ⛔ not an
+    identity to assume — the service reports any row where it fails.
+
+    ⚠️ All three are written ONLY by `_compute_and_store_latency`, which runs ONLY
+    on fill. A PENDING or REJECTED trade therefore carries NULL, and that is
+    CORRECT: it has no fill time. ⛔ Never impute one.
+
+    `product` and the ENTRY order's own `status`/`rejection_reason` come from the
+    ENTRY row via CORRELATED SUBQUERIES — ⛔ never a LEFT JOIN, which would FAN
+    OUT on a trade with more than one ENTRY row.
+    """
+    def _entry(col):
+        return (f"(SELECT o.{col} FROM orders o WHERE o.trade_id = t.trade_id "
+                f" AND o.leg='ENTRY' ORDER BY o.placed_at LIMIT 1) AS entry_{col}")
+
+    sql = (
+        # ⭐ `entry_time` and `exit_time` are the TRADE-LEVEL lifecycle instants and
+        # their meaning is fixed by core/schema.sql:141-142 — `entry_time` is
+        # "when entry was filled" and `exit_time` is "when position was FULLY
+        # CLOSED". ⇒ Trade Duration is exit_time − entry_time, and that already
+        # respects partial fills and multi-leg exits: order_manager writes
+        # entry_time from the fill event (:431) and exit_time only in
+        # close_trade (:661), which runs once the position is flat.
+        # ⛔ Do NOT recompute either from `orders` rows — a first partial fill is
+        # not the trade's entry, and one exit leg is not "fully closed".
+        "SELECT t.trade_id, t.signal_id, t.strategy, t.symbol, t.direction, "
+        "t.status, t.created_at, t.entry_time, t.exit_time, t.exit_reason, "
+        "t.qty_planned, t.qty_filled, "
+        "t.signal_to_order_ms, t.order_to_fill_ms, t.total_latency_ms, "
+        "s.received_at AS signal_received_at, s.triggered_at AS signal_triggered_at, "
+        "s.status AS signal_status, "
+        + _entry("placed_at") + ", " + _entry("filled_at") + ", "
+        + _entry("product") + ", " + _entry("status") + ", "
+        + _entry("rejection_reason") + ", " + _entry("qty_filled") + ", "
+        + _entry("qty_requested") + " "
+        "FROM trades t LEFT JOIN signals s ON s.signal_id = t.signal_id "
+        "WHERE substr(t.created_at,1,10) BETWEEN ? AND ? "
+        # Newest first BY THE EXACT INSTANT THE ROW RENDERS. ⚠️ Ordering on
+        # `t.created_at` alone left the visible Time column non-monotonic, and a
+        # plain COALESCE was still wrong: the service shows the signal instant
+        # ONLY when it lands on the trade's own day. This CASE mirrors
+        # `execution_analytics._row_instant` exactly, so the sort key and the
+        # displayed value can never diverge.
+        "ORDER BY CASE WHEN substr(s.received_at,1,10) = substr(t.created_at,1,10) "
+        "          THEN s.received_at ELSE t.created_at END DESC, t.created_at DESC"
+    )
+    params: list = [from_date, to_date]
+    if limit is not None:
+        sql += " LIMIT ?"
+        params.append(int(limit))
+    with _ro(cfg) as conn:
+        try:
+            rows = conn.execute(sql, tuple(params)).fetchall()
+        except sqlite3.OperationalError:
+            return []
+    return [dict(r) for r in rows]
+
+
+def screening_latencies(cfg: dict, signal_ids) -> dict:
+    """{signal_id: {"total_ms": float, "steps": {step: ms}, "ts": str}}.
+
+    ⭐ THE ONLY GENUINE SUB-STAGE BREAKDOWN THIS SYSTEM HAS. `screener_results
+    .latencies` is written by `screening/step_executor.py:178` as
+    `{step_name: elapsed_ms}` over the ten named screening steps
+    (volume_surge · vwap_position · atr_filter · rsi_range · price_action ·
+    sector_strength · time_of_day · spread_check · circuit_check · signal_age).
+
+    ⛔ This is SCREENING time, and it is reported under that name. It is ⛔ NOT
+    "validation + risk + capital" — those are different stages of the pipeline
+    and none of them is timed (see `execution_rows_range`).
+
+    A malformed or absent JSON blob yields no entry rather than a zero: an
+    unparseable measurement is an ABSENT measurement, ⛔ never a fast one.
+    """
+    ids = tuple(dict.fromkeys(s for s in (signal_ids or []) if s))
+    if not ids:
+        return {}
+    out: dict = {}
+    with _ro(cfg) as conn:
+        try:
+            rows = conn.execute(
+                "SELECT signal_id, latencies, ts FROM screener_results "
+                "WHERE signal_id IN (" + _in_clause(ids) + ")", ids,
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return {}
+    for r in rows:
+        try:
+            steps = json.loads(r["latencies"] or "{}")
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(steps, dict) or not steps:
+            continue
+        vals = {k: float(v) for k, v in steps.items()
+                if isinstance(v, (int, float))}
+        if not vals:
+            continue
+        # Keep the LAST screening pass for a signal (a re-screen supersedes).
+        prev = out.get(r["signal_id"])
+        if prev is None or str(r["ts"] or "") >= str(prev["ts"] or ""):
+            out[r["signal_id"]] = {"total_ms": round(sum(vals.values()), 3),
+                                   "steps": vals, "ts": r["ts"]}
+    return out
+
+
+def signal_throughput_range(cfg: dict, from_date: str, to_date: str) -> list:
+    """Per-MINUTE signal arrivals, straight from `signals.received_at`.
+
+    Grouped in SQL over EVERY stored signal in the window — deliberately NOT
+    derived from a capped row list, which would make a stress period look calm
+    on exactly the day it mattered."""
+    with _ro(cfg) as conn:
+        try:
+            rows = conn.execute(
+                "SELECT substr(received_at,1,16) AS minute, COUNT(*) AS n "
+                "FROM signals WHERE substr(received_at,1,10) BETWEEN ? AND ? "
+                "GROUP BY minute ORDER BY minute", (from_date, to_date),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+    return [{"minute": r["minute"], "n": int(r["n"])} for r in rows if r["minute"]]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
