@@ -88,9 +88,15 @@
           </select>
         </label>
       </template>
+      {# The two filter actions use the SHARED .btn-ghost/.btn-primary pair that
+         Screens 03/04/05 already use, so this panel's buttons cannot drift from
+         theirs. ⛔ The `▼` stays: it is approved content from `13. Audit.png`,
+         and this correction is cosmetic. ⛔ The `.rt-btn` pill is NOT retired —
+         it is still the right component for the AUDIT EVENTS toolbar and the
+         chart range chips, which are approved and out of scope. #}
       <span class="aud-fbtns">
-        <button class="rt-btn" type="button" @click="resetFilters()">Reset Filters</button>
-        <button class="rt-btn rt-active" type="button" @click="applyFilters()">▼ Apply Filters</button>
+        <button class="btn-ghost" type="button" @click="resetFilters()">Reset Filters</button>
+        <button class="btn-primary" type="button" @click="applyFilters()">▼ Apply Filters</button>
       </span>
     </div>
   </section>

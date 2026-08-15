@@ -757,14 +757,30 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 .aud-page .aud-filters .sel:focus { outline: none; border-color: var(--blue); }
 .strat-page .flt-sm, .sig-page .flt-sm { height: 30px; padding: 0 8px; width: auto; min-width: 58px; }
 .strat-page .flt-actions, .sig-page .flt-actions, .ord-page .flt-actions { display: flex; gap: 10px; align-items: flex-end; margin-left: auto; }
+/* ⭐ Screen-13's two filter actions join the SAME pair, so they cannot drift from
+   Screens 03/04/05. ⛔ Deliberately NOT extended to `.rt-btn`: that pill is a
+   real app-wide component and Screen-13 still uses it for the AUDIT EVENTS
+   toolbar, the chart range chips and the ✕ buttons, all approved and out of
+   scope — re-skinning it here would repaint them too.
+   ⚠️ MEASURED, and it is why `.aud-x` was left alone: there are TWO `.aud-x`
+   buttons (audit.html:76 clears the date range, :201 closes AUDIT DETAILS), so
+   restyling that class to match Screen-04's `.flt-reload` would have silently
+   repainted the DETAILS panel as well. ⭐ And `.flt-reload` is styled ONLY under
+   `.sig-page` — on Orders/Positions it is a NATIVE button, so it is not a
+   reference worth copying. */
 .strat-page .btn-ghost, .strat-page .btn-primary,
 .sig-page .btn-ghost, .sig-page .btn-primary,
-.ord-page .btn-ghost, .ord-page .btn-primary { height: 36px; padding: 0 16px; font-size: 13px; font-weight: 600;
+.ord-page .btn-ghost, .ord-page .btn-primary,
+.aud-page .btn-ghost, .aud-page .btn-primary { height: 36px; padding: 0 16px; font-size: 13px; font-weight: 600;
   border-radius: 8px; cursor: pointer; font-family: inherit; }
-.strat-page .btn-ghost, .sig-page .btn-ghost, .ord-page .btn-ghost { background: transparent; color: var(--muted); border: 1px solid var(--card-bd); }
-.strat-page .btn-ghost:hover, .sig-page .btn-ghost:hover, .ord-page .btn-ghost:hover { color: var(--text); border-color: var(--blue); }
-.strat-page .btn-primary, .sig-page .btn-primary, .ord-page .btn-primary { background: var(--blue); color: #fff; border: 1px solid var(--blue); }
-.strat-page .btn-primary:hover, .sig-page .btn-primary:hover, .ord-page .btn-primary:hover { filter: brightness(1.08); }
+.strat-page .btn-ghost, .sig-page .btn-ghost, .ord-page .btn-ghost,
+.aud-page .btn-ghost { background: transparent; color: var(--muted); border: 1px solid var(--card-bd); }
+.strat-page .btn-ghost:hover, .sig-page .btn-ghost:hover, .ord-page .btn-ghost:hover,
+.aud-page .btn-ghost:hover { color: var(--text); border-color: var(--blue); }
+.strat-page .btn-primary, .sig-page .btn-primary, .ord-page .btn-primary,
+.aud-page .btn-primary { background: var(--blue); color: #fff; border: 1px solid var(--blue); }
+.strat-page .btn-primary:hover, .sig-page .btn-primary:hover, .ord-page .btn-primary:hover,
+.aud-page .btn-primary:hover { filter: brightness(1.08); }
 
 /* Strategy hierarchy */
 .strat-page .hier-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
