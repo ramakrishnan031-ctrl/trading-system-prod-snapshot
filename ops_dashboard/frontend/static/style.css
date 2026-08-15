@@ -2378,3 +2378,204 @@ table td.ctr { text-align: center !important; }
 .exec-page .exec-rank-scroll table { width: 100%; }
 .exec-page .exec-rank-scroll thead th { position: sticky; top: 0;
   background: var(--panel); z-index: 1; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SCREEN 12 — SYSTEM HEALTH (15-Aug-2026).  Scoped to `.sysh-page`.
+
+   ⛔ NOTHING here restates a spacing, colour, font or table rule that Screens
+   02-11 already define. `.panel`, `.cap-table`, `.kpi-row`, `.flt`, `.rt-btn`,
+   `.btn-export`, `.curve-wrap`, `.curve-svg`, `.mono`, `.num-pos/.num-warn/
+   .num-neg` and the global `table td.ctr { center }` rule are all reused.
+
+   ⭐ THE SEMANTIC TEXT COLOURS ARE THE PROJECT'S OWN: `--pos` / `--yellow` /
+   `--neg` via the existing `.num-pos` / `.num-warn` / `.num-neg` utilities. ⛔ No
+   new palette is introduced — the alert text simply USES them, which is the
+   approved requirement (colour on the words, not only on an icon or a badge).
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* -- page frame ---------------------------------------------------------- */
+.sysh-page .sysh-head { display: flex; align-items: flex-start;
+  justify-content: space-between; gap: 16px; margin-bottom: 10px; }
+.sysh-page .sysh-h1 { margin: 0; font-size: 1.15rem; }
+.sysh-page .sysh-sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
+.sysh-page .sysh-gen { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
+.sysh-page .sysh-gen-k { font-size: 11.5px; color: var(--dim);
+  text-transform: uppercase; letter-spacing: .05em; }
+.sysh-page .sysh-gen b { font-size: 13px; color: var(--muted);
+  font-variant-numeric: tabular-nums; }
+.sysh-page .sysh-panel-head { display: flex; align-items: center;
+  justify-content: space-between; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+.sysh-page .sysh-panel-head .panel-title { margin: 0; }
+.sysh-page .sysh-note { color: var(--dim); font-size: 12px; margin-top: 6px; line-height: 1.5; }
+.sysh-page .sysh-empty { color: var(--dim); font-size: 12.5px; text-align: center; padding: 12px 0; }
+.sysh-page .sysh-sub-h { margin-top: 14px; }
+.sysh-page .sysh-err { color: var(--orange); margin-left: 10px; }
+.sysh-page .sysh-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+/* TOP band: overall · KPI deck · uptime · DB · broker, all one row at width. */
+.sysh-page .sysh-top { display: grid;
+  grid-template-columns: 1.05fr 1.9fr 1.15fr 1.15fr 1.15fr; gap: 14px; }
+@media (max-width: 1600px) { .sysh-page .sysh-top { grid-template-columns: 1fr 1fr 1fr; } }
+@media (max-width: 1100px) { .sysh-page .sysh-top { grid-template-columns: 1fr; } }
+.sysh-page .sysh-top .kpi-row { grid-template-columns: repeat(4, minmax(0,1fr));
+  gap: 10px; align-content: start; }
+.sysh-page .kpi-card { padding: 11px 12px; }
+.sysh-page .kpi-val { font-size: 1.3rem; }
+
+.sysh-page .sysh-overall { display: flex; flex-direction: column; gap: 5px;
+  justify-content: center; }
+.sysh-page .sysh-ov-k { font-size: 11.5px; color: var(--dim);
+  text-transform: uppercase; letter-spacing: .06em; }
+.sysh-page .sysh-ov-v { font-size: 1.7rem; font-weight: 700; letter-spacing: .01em; }
+.sysh-page .sysh-ov-note { font-size: 12px; color: var(--muted); line-height: 1.4; }
+/* A tinted card back so overall status is legible across the room, ⛔ without
+   replacing the text colour that carries the meaning. */
+.sysh-page .sysh-bg-HEALTHY { border-color: rgba(63,185,80,.45); }
+.sysh-page .sysh-bg-WARNING { border-color: rgba(210,153,34,.5); }
+.sysh-page .sysh-bg-FAILED  { border-color: rgba(248,81,73,.55); }
+.sysh-page .sysh-bg-UNKNOWN { border-color: var(--border); }
+
+.sysh-page .sysh-uptime { display: flex; flex-direction: column; }
+.sysh-page .sysh-up-v { font-size: 1.35rem; font-weight: 700;
+  font-variant-numeric: tabular-nums; }
+.sysh-page .sysh-hc { display: flex; flex-wrap: wrap; gap: 6px; margin-top: auto;
+  padding-top: 8px; border-top: 1px solid var(--border); }
+.sysh-page .sysh-hc b { color: var(--muted); font-variant-numeric: tabular-nums; }
+
+/* -- key/value tables (DB · broker · VM · pillars) ------------------------ */
+.sysh-page .sysh-kv th, .sysh-page .sysh-kv td { font-size: 12.5px; padding: 5px 6px; }
+.sysh-page .sysh-kv td.lbl { color: var(--muted); white-space: nowrap; }
+.sysh-page .sysh-na { color: var(--dim); cursor: help; }
+/* UNKNOWN / not-instrumented is GREY. ⛔ Never green, ⛔ never red — an absent
+   measurement is neither good news nor an incident. */
+.sysh-page .sysh-unknown { color: var(--dim); }
+.sysh-page .sysh-gapbox { display: flex; flex-direction: column; gap: 4px;
+  background: var(--panel2); border: 1px dashed var(--border); border-radius: 8px;
+  padding: 10px 11px; }
+.sysh-page .sysh-gapbox b { font-size: 12.5px; letter-spacing: .04em; }
+.sysh-page .sysh-gapbox span { color: var(--dim); font-size: 11.5px; line-height: 1.45; }
+.sysh-page .sysh-gapnote { color: var(--yellow); }
+
+/* -- SEMANTIC STATUS: the approved four ----------------------------------
+   Healthy GREEN · Warning YELLOW · Failed RED · Unknown GREY, used identically
+   on pills, dots and TEXT so a colour never means two things on one page. */
+.sysh-page .sysh-pill { display: inline-block; padding: 2px 8px; border-radius: 999px;
+  font-size: 11px; font-weight: 700; letter-spacing: .02em; white-space: nowrap; }
+.sysh-page .sysh-HEALTHY { background: var(--pos-tint);   color: var(--pos); }
+.sysh-page .sysh-WARNING { background: var(--warn-tint);  color: var(--yellow); }
+.sysh-page .sysh-FAILED  { background: var(--neg-tint);   color: var(--neg); }
+.sysh-page .sysh-UNKNOWN { background: var(--muted-tint); color: var(--dim); }
+.sysh-page .dot { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto;
+  display: inline-block; margin-right: 6px; vertical-align: baseline; }
+.sysh-page .sysh-dot-HEALTHY { background: var(--pos); }
+.sysh-page .sysh-dot-WARNING { background: var(--yellow); }
+.sysh-page .sysh-dot-FAILED  { background: var(--neg); }
+.sysh-page .sysh-dot-UNKNOWN { background: #484f58; }
+
+/* -- MAIN: service table beside the VM / dependency rail ------------------ */
+.sysh-page .sysh-main { display: grid; grid-template-columns: minmax(0,1fr) 330px;
+  gap: 16px; align-items: start; margin-top: 16px; }
+@media (max-width: 1400px) { .sysh-page .sysh-main { grid-template-columns: 1fr; } }
+.sysh-page .sysh-rail { display: flex; flex-direction: column; gap: 16px; }
+
+/* -- ALIGNMENT BY COLUMN ROLE (Screens 08/09/10/11) -----------------------
+   Scoped, for the same reason as every other screen: `.cap-table` is shared, so
+   an unscoped heading rule would silently re-align tables nobody asked about.
+   `.lbl` states the role in the markup; data CELLS are centred by the global
+   `table td.ctr` rule and nothing is added here for them. */
+.sysh-page .cap-table th { text-align: center; }
+.sysh-page .cap-table th.lbl { text-align: left; }
+
+.sysh-page .sysh-tbl-wrap { overflow-x: auto; }
+.sysh-page .sysh-tbl { min-width: 0; width: 100%; }
+.sysh-page .sysh-tbl td { white-space: nowrap; padding: 6px 5px; font-size: 12.5px; }
+.sysh-page .sysh-tbl th { white-space: normal; padding: 6px 5px;
+  font-size: .62rem; letter-spacing: .02em; line-height: 1.3; vertical-align: bottom; }
+.sysh-page .sysh-tbl td:first-child { max-width: 240px; overflow: hidden;
+  text-overflow: ellipsis; }
+/* draggable headers — the Screens 04/05/07/11 affordance, reused */
+.sysh-page .sysh-th { cursor: grab; user-select: none; }
+.sysh-page .sysh-th:active { cursor: grabbing; }
+.sysh-page th.is-drag { opacity: .45; }
+.sysh-page th.is-over { box-shadow: inset 2px 0 0 var(--blue); color: var(--muted); }
+.sysh-page .sysh-grip { color: var(--border); margin-right: 3px; font-size: .55rem; }
+.sysh-page .sysh-th:hover .sysh-grip { color: var(--muted); }
+.sysh-page .sysh-arrow { color: var(--dim); font-size: .58rem; margin-left: 3px; }
+.sysh-page .sysh-legend { display: flex; align-items: center; gap: 14px;
+  flex-wrap: wrap; margin-top: 10px; padding-top: 9px;
+  border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; }
+.sysh-page .sysh-legend-note { margin-top: 0; flex: 1 1 240px; }
+
+/* -- dependencies -------------------------------------------------------- */
+.sysh-page .sysh-deps { list-style: none; margin: 0; padding: 0;
+  display: flex; flex-direction: column; gap: 8px; }
+.sysh-page .sysh-deps li { display: flex; align-items: center; gap: 4px;
+  font-size: 12.5px; color: var(--muted); cursor: help; }
+.sysh-page .sysh-dep-n { flex: 1 1 auto; }
+.sysh-page .sysh-deps b { font-size: 11.5px; font-weight: 700; }
+
+/* -- BOTTOM ANALYTICS ZONE — one continuous band, ⛔ not two tiers -------- */
+.sysh-page .sysh-zone { display: flex; flex-direction: column; gap: 16px;
+  margin-top: 16px; }
+.sysh-page .sysh-zone-row { display: grid; gap: 16px; align-items: stretch; }
+/* FIVE panels: dependencies moved out of the rail so the rail (VM only)
+   is shorter than the service table — that is what closes the gap that
+   otherwise opens UNDER THE WIDE TABLE rather than beside the narrow rail. */
+.sysh-page .sysh-zone-a { grid-template-columns: .85fr 1fr 1.15fr 1fr 1.05fr; }
+.sysh-page .sysh-zone-b { grid-template-columns: 2fr 1fr; }
+@media (max-width: 1700px) { .sysh-page .sysh-zone-a { grid-template-columns: 1fr 1fr 1fr; } }
+@media (max-width: 1250px) { .sysh-page .sysh-zone-a { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 1100px) {
+  .sysh-page .sysh-zone-a, .sysh-page .sysh-zone-b { grid-template-columns: 1fr; }
+}
+
+/* -- events · alerts · recovery lists ------------------------------------ */
+.sysh-page .sysh-events, .sysh-page .sysh-alerts { list-style: none; margin: 0;
+  padding: 0; display: flex; flex-direction: column; gap: 7px; }
+.sysh-page .sysh-events li, .sysh-page .sysh-alerts li { display: flex;
+  align-items: baseline; gap: 6px; font-size: 12.5px; line-height: 1.4;
+  flex-wrap: wrap; }
+.sysh-page .sysh-ts { color: var(--dim); font-size: 11.5px; flex: 0 0 auto; }
+.sysh-page .sysh-ev-l { font-weight: 600; }
+.sysh-page .sysh-ev-d { color: var(--dim); font-size: 11.5px; }
+.sysh-page .sysh-sev { font-size: 10.5px; font-weight: 700; letter-spacing: .04em;
+  flex: 0 0 auto; }
+/* THE ALERT TEXT ITSELF is coloured by `txt(status)` in the markup — this rule
+   only sets its weight/flow. ⛔ Do not add a colour here: it would override the
+   semantic class and repaint every alert the same. */
+.sysh-page .sysh-al-t { flex: 1 1 160px; }
+.sysh-page .sysh-rec-counts { display: flex; gap: 10px; font-size: 11.5px; }
+.sysh-page .sysh-rec-state { margin-left: auto; font-size: 11.5px; font-weight: 600; }
+
+/* -- trading readiness --------------------------------------------------- */
+.sysh-page .sysh-ready { display: flex; flex-direction: column; gap: 6px; }
+.sysh-page .sysh-ready-v { font-size: 1.6rem; font-weight: 800; letter-spacing: .02em; }
+.sysh-page .sysh-ready-r { font-size: 12px; line-height: 1.45; }
+.sysh-page .sysh-contra { display: flex; flex-direction: column; gap: 3px;
+  background: var(--neg-tint); border: 1px solid rgba(248,81,73,.45);
+  border-radius: 7px; padding: 8px 10px; font-size: 11.5px; line-height: 1.45; }
+.sysh-page .sysh-pillars { margin-top: 6px; }
+.sysh-page .sysh-pillars td { cursor: help; }
+.sysh-page .sysh-pill-n { color: var(--dim); font-size: 11px; margin-left: 4px; }
+
+/* -- status guide + colour key ------------------------------------------- */
+.sysh-page .sysh-guide { list-style: none; margin: 0; padding: 0;
+  display: flex; flex-direction: column; gap: 8px; }
+.sysh-page .sysh-guide li { display: flex; align-items: flex-start; gap: 8px;
+  font-size: 12.5px; color: var(--muted); line-height: 1.45; }
+.sysh-page .sysh-guide li > span:first-child { flex: 0 0 auto; font-weight: 600; }
+.sysh-page .sysh-guide-r { color: var(--dim); }
+.sysh-page .sysh-ckey li > span:first-child { min-width: 205px; }
+
+/* -- trends -------------------------------------------------------------- */
+.sysh-page .sysh-trend-tabs { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
+.sysh-page .sysh-trend-gap { margin-top: 4px; }
+.sysh-page .sysh-curve-wrap { padding: 6px 8px 2px; }
+.sysh-page .sysh-curve { height: 180px; }
+.sysh-page .sysh-gl { stroke: var(--border); stroke-width: 1; stroke-dasharray: 3 3; }
+.sysh-page .sysh-line { stroke: var(--blue); stroke-width: 1.8; }
+.sysh-page .sysh-dot-pt { fill: var(--blue); }
+.sysh-page .sysh-axis { fill: var(--muted); font-size: 11.5px;
+  font-variant-numeric: tabular-nums; }
+
+.sysh-page .sysh-foot { margin-top: 14px; color: var(--dim); font-size: 12.5px; }

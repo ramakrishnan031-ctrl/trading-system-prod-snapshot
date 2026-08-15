@@ -1213,6 +1213,159 @@ def latest_heartbeats(cfg: dict, today: str) -> dict:
             for r in rows}
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Screen-12 — System Health readers. ADDITIVE; every existing reader above is
+# untouched. All read-only (mode=ro); NO schema.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def latest_preflight(cfg: dict, run_date: str) -> Optional[dict]:
+    """The most recent preflight RUN for the date, plus every check it produced.
+
+    ⭐ THIS IS THE AUTHORITATIVE READINESS SOURCE, ⛔ not a GUI re-derivation:
+    `preflight_runs.overall_status` is written by the orchestrator as
+    READY | READY_WITH_WARNINGS | CRITICAL_FAILURE, and
+    `preflight_check_results` carries one row per check with its group,
+    criticality (CRITICAL|WARN|INFO) and status (PASS|FAIL|WARN|AUTOFIXED|
+    SKIPPED). ⛔ The screen must not invent a readiness verdict of its own.
+
+    ⚠️ Preflight runs in PHASES (A 08:30 funds · B 09:14 deployment · C signals),
+    so "the latest run" is the latest by `started_at` REGARDLESS of phase, and
+    the phase travels with it — a Phase-A pass says nothing about Phase B.
+    """
+    with _ro(cfg) as conn:
+        try:
+            run = conn.execute(
+                "SELECT run_id, run_date, phase, started_at, completed_at, "
+                "total_checks, passed, failed_critical, warnings, "
+                "autofixes_attempted, autofixes_succeeded, overall_status "
+                "FROM preflight_runs WHERE run_date=? "
+                "ORDER BY started_at DESC LIMIT 1", (run_date,),
+            ).fetchone()
+            if run is None:
+                return None
+            checks = conn.execute(
+                "SELECT check_name, check_group, criticality, status, duration_ms, "
+                "fix_attempted, fix_result FROM preflight_check_results "
+                "WHERE run_id=? ORDER BY check_group, check_name",
+                (run["run_id"],),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return None
+    out = dict(run)
+    out["checks"] = [dict(c) for c in checks]
+    return out
+
+
+def preflight_autofix_events(cfg: dict, run_date: str, limit: int = 50) -> list:
+    """Auto-recovery lifecycle rows for the date, newest first.
+
+    ⭐ `preflight_autofix_log.result` is SUCCESS | FAILED, and a row with NEITHER
+    is an attempt that has not resolved — which is exactly the reference design's
+    Recovery Triggered / Success / Failed. ⛔ A TRIGGERED row must never be
+    counted as a recovery: that is the whole point of the panel.
+    """
+    with _ro(cfg) as conn:
+        try:
+            rows = conn.execute(
+                "SELECT log_id, run_id, check_name, attempted_at, fix_action, "
+                "before_state, after_state, result, error_msg "
+                "FROM preflight_autofix_log WHERE substr(attempted_at,1,10)=? "
+                "ORDER BY attempted_at DESC LIMIT ?", (run_date, int(limit)),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+    return [dict(r) for r in rows]
+
+
+def db_health(cfg: dict) -> dict:
+    """Live database health, MEASURED at request time.
+
+    `query_ms` times a REAL round trip to the production DB (a trivial COUNT on
+    a table the screen already reads), so it is the latency of an actual query
+    — ⛔ not an arbitrary HTTP timing and ⛔ not a stored number that could be
+    hours stale.
+
+    ⛔ CONNECTION COUNT IS NOT REPORTED. SQLite has no server and therefore no
+    connection pool; a number here would be the GUI's own handle count, which
+    says nothing about the trading system. Reported as not-applicable rather
+    than as a plausible integer.
+    """
+    import os
+    import time
+
+    path = cfg.get("paths", {}).get("main_db")
+    out = {"reachable": False, "path": path, "size_mb": None, "query_ms": None,
+           "schema_version": None, "journal_mode": None,
+           "connection_count": None,
+           "connection_count_note": ("SQLite is embedded — there is no server and "
+                                     "no connection pool, so a count would describe "
+                                     "the dashboard, not the trading system"),
+           "error": None}
+    if path and os.path.isfile(path):
+        try:
+            out["size_mb"] = round(os.path.getsize(path) / 2**20, 2)
+        except OSError:
+            pass
+    t0 = time.perf_counter()
+    try:
+        with _ro(cfg) as conn:
+            conn.execute("SELECT COUNT(*) FROM trades").fetchone()
+            out["reachable"] = True
+            try:
+                row = conn.execute(
+                    "SELECT value FROM schema_meta WHERE key='schema_version'"
+                ).fetchone()
+                out["schema_version"] = row["value"] if row else None
+            except sqlite3.OperationalError:
+                pass
+            try:
+                out["journal_mode"] = conn.execute(
+                    "PRAGMA journal_mode").fetchone()[0]
+            except sqlite3.Error:
+                pass
+    except sqlite3.Error as exc:
+        out["error"] = str(exc)[:200]
+    out["query_ms"] = round((time.perf_counter() - t0) * 1000.0, 2)
+    return out
+
+
+def last_successful_order(cfg: dict) -> Optional[dict]:
+    """The most recent order that actually FILLED — the strongest available
+    evidence that the broker write path works end to end.
+
+    ⛔ NOT the most recent order PLACED: a placed-and-rejected order proves the
+    opposite of what this field is for.
+    """
+    with _ro(cfg) as conn:
+        try:
+            row = conn.execute(
+                "SELECT order_id, trade_id, symbol, leg, filled_at, status "
+                "FROM orders WHERE filled_at IS NOT NULL AND filled_at <> '' "
+                "ORDER BY filled_at DESC LIMIT 1"
+            ).fetchone()
+        except sqlite3.OperationalError:
+            return None
+    return dict(row) if row else None
+
+
+def system_events_recent(cfg: dict, limit: int = 40) -> list:
+    """Service lifecycle events, newest first, from the system's own event log.
+
+    ⛔ NOT a new event store: `system_events` is where main.py already records
+    STARTUP / SHUTDOWN / CRASH_DETECTED / CONFIG_DIFF / KILL_AUTO_CLEARED /
+    EOD_SKIPPED_LATE.
+    """
+    with _ro(cfg) as conn:
+        try:
+            rows = conn.execute(
+                "SELECT timestamp, event_type, scenario, details FROM system_events "
+                "ORDER BY timestamp DESC LIMIT ?", (int(limit),),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+    return [dict(r) for r in rows]
+
+
 def control_tower_open_findings(cfg: dict, limit: int = 100) -> list:
     with _ro(cfg) as conn:
         try:

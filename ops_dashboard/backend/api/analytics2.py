@@ -11,6 +11,8 @@ routes and never touch any existing endpoint):
   GET /api/export/slippage      ?period&from&to&…      XLSX of the SAME filtered set
   GET /api/analytics/execution  ?period&from&to&…      (distinct from today-scoped /api/execution)
   GET /api/export/execution     ?period&from&to&…      XLSX of the SAME filtered set
+  GET /api/system-health        ?status&kind          live snapshot (⛔ no period)
+  GET /api/export/system-health ?status&kind          XLSX of the SAME view
 Every builder is read-only over db_reader.*_range (mode=ro); NO schema. The
 existing /api/pnl, /api/strategies, /api/slippage, /api/execution, Reports stay
 UNTOUCHED.
@@ -22,7 +24,8 @@ import io
 from flask import Blueprint, current_app, jsonify, request, send_file
 
 from ..auth import login_required
-from ..services import analytics_period, execution_analytics, slippage_analytics
+from ..services import (analytics_period, execution_analytics,
+                        slippage_analytics, system_health)
 
 
 def _xlsx(sheets: list, download_name: str):
@@ -239,3 +242,45 @@ def export_execution():
         cfg, p, frm, to, **_execution_kwargs())
     return _xlsx(execution_analytics.export_sheets(payload),
                  "execution_%s_to_%s.xlsx" % (payload["from"], payload["to"]))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Screen-12 System Health (15-Aug-2026). ADDITIVE — the existing `/api/services`
+# and `/api/vm` in api/system.py are UNTOUCHED and keep their own contracts.
+#
+# ⚠️ NOT under /api/analytics/: this screen is a LIVE OPERATIONAL SNAPSHOT, not a
+# period-scoped analytic. It takes no `period`, and giving it one would invite a
+# reader to believe the health of an hour ago is retrievable — it is not.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _health_kwargs() -> dict:
+    def _arg(name, upper=False):
+        v = (request.args.get(name) or "").strip()
+        return (v.upper() if upper else v) or None
+
+    return {"status_filter": _arg("status", upper=True), "kind_filter": _arg("kind")}
+
+
+@analytics2_api.route("/api/system-health", methods=["GET"])
+@login_required
+def get_system_health():
+    """Screen 12. Read-only; a live snapshot of infrastructure health."""
+    cfg = current_app.config["GUI_CONFIG"]
+    return jsonify(system_health.build_system_health(cfg, **_health_kwargs()))
+
+
+@analytics2_api.route("/api/export/system-health", methods=["GET"])
+@login_required
+def export_system_health():
+    """XLSX of the CURRENT view — services, readiness, dependencies, alerts,
+    auto-recovery, events and a summary.
+
+    ⭐ Same builder, same arguments, so the Services sheet carries exactly the
+    rows the table shows under the current filter. ⭐ The Summary sheet spells
+    out `NOT INSTRUMENTED` for CPU / RAM / Network with their reasons: a sheet
+    that left them blank would let a reader assume the value was simply zero.
+    """
+    cfg = current_app.config["GUI_CONFIG"]
+    payload = system_health.build_system_health(cfg, **_health_kwargs())
+    return _xlsx(system_health.export_sheets(payload),
+                 "system_health_%s.xlsx" % payload["today"])

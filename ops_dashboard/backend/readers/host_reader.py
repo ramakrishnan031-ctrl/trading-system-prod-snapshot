@@ -55,6 +55,122 @@ def all_units(cfg: dict) -> list:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Screen-12 — per-unit lifecycle detail. ADDITIVE: `unit_state`/`all_units`
+# above are byte-unchanged and keep their own callers.
+# ─────────────────────────────────────────────────────────────────────────────
+_SHOW_PROPS = ("ActiveState", "SubState", "ActiveEnterTimestamp",
+               "ExecMainStatus", "NRestarts")
+
+
+def unit_details(unit: str) -> dict:
+    """`systemctl show <unit>` for the properties Screen 12 needs.
+
+    ⭐ ONE subprocess call for all five properties, ⛔ not five calls — the units
+    list is polled on every refresh and five `systemctl` spawns per unit would
+    make the health screen the most expensive page in the dashboard.
+
+    ⭐ `systemctl show -p <prop> --value` is the project's ESTABLISHED way to read
+    unit properties (`deploy/token_watcher.sh:133-134`, `deploy/resume.sh:40`),
+    so this reuses the pattern rather than inventing one.
+
+    Never raises. On a non-Linux box (or any failure) every field is None and
+    `available` is False — ⛔ the caller must render that as UNKNOWN, never as
+    healthy and never as failed.
+    """
+    out = {"unit": unit, "available": False, "state": unit_state(unit),
+           "sub_state": None, "started_at": None, "uptime_sec": None,
+           "exec_main_status": None, "restarts": None}
+    if not _systemctl_available():
+        return out
+    try:
+        proc = subprocess.run(  # nosec B603 (no shell, fixed binary, fixed args)
+            ["systemctl", "show", unit, "-p", ",".join(_SHOW_PROPS)],
+            capture_output=True, text=True, timeout=_TIMEOUT_SEC, check=False,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return out
+    props = {}
+    for line in (proc.stdout or "").splitlines():
+        if "=" in line:
+            k, _, v = line.partition("=")
+            props[k.strip()] = v.strip()
+    if not props:
+        return out
+    out["available"] = True
+    out["sub_state"] = props.get("SubState") or None
+    out["exec_main_status"] = props.get("ExecMainStatus") or None
+    try:
+        out["restarts"] = int(props.get("NRestarts") or 0)
+    except ValueError:
+        out["restarts"] = None
+    ts = props.get("ActiveEnterTimestamp") or ""
+    # systemd prints e.g. "Fri 2026-08-15 08:15:19 IST". An inactive unit prints
+    # an EMPTY value — ⛔ that is "never started", not "started at epoch".
+    out["started_at"] = ts or None
+    out["uptime_sec"] = _uptime_from_systemd_stamp(ts)
+    return out
+
+
+def _uptime_from_systemd_stamp(stamp: str) -> Optional[int]:
+    """Seconds since `ActiveEnterTimestamp`, or None when it cannot be trusted.
+
+    ⛔ Returns None rather than 0 for an unparseable or absent stamp: a zero
+    uptime reads as "just restarted", which is a materially different and
+    alarming statement from "not known".
+
+    ⚠️ The stamp carries a timezone ABBREVIATION ("IST"), which `strptime` cannot
+    map to an offset. The date and clock time are parsed and compared against
+    LOCAL wall-clock — correct here because the VM and the dashboard both run in
+    IST, and stated so the assumption is visible rather than buried.
+    """
+    from datetime import datetime
+
+    parts = (stamp or "").split()
+    if len(parts) < 3:
+        return None
+    try:
+        started = datetime.strptime(" ".join(parts[1:3]), "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+    delta = (datetime.now() - started).total_seconds()
+    return int(delta) if delta >= 0 else None
+
+
+def all_unit_details(cfg: dict) -> list:
+    units = cfg.get("units", []) or []
+    return [unit_details(u) for u in units]
+
+
+def newest_backup(cfg: dict) -> Optional[dict]:
+    """The most recent DB backup file, or None.
+
+    ⭐ SOURCE IS THE REAL ARTEFACT, ⛔ not a config entry: `config/cron_registry
+    .yaml` defines a `db_backup` job writing
+    `data_store/backups/trading_system-<date>.db`, and this reads the directory
+    that job writes. A configured-but-never-run backup therefore reports None
+    rather than looking healthy because the cron entry exists.
+    """
+    root = cfg.get("paths", {}).get("data_store")
+    if not root:
+        return None
+    d = os.path.join(root, "backups")
+    if not os.path.isdir(d):
+        return None
+    best = None
+    for name in os.listdir(d):
+        if not name.endswith(".db"):
+            continue
+        try:
+            st = os.stat(os.path.join(d, name))
+        except OSError:
+            continue
+        if best is None or st.st_mtime > best["mtime"]:
+            best = {"name": name, "mtime": st.st_mtime,
+                    "size_mb": round(st.st_size / 2**20, 2)}
+    return best
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # G2b-2 — M12 VM stats (platform-guarded; Windows dev → "unavailable") + M15
 # sentinel flags (read-only file presence).
 # ─────────────────────────────────────────────────────────────────────────────

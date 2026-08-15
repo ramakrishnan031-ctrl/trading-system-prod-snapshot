@@ -122,6 +122,12 @@ DDL = [
     """CREATE TABLE preflight_check_results (run_id TEXT, run_date TEXT, check_name TEXT,
         check_group TEXT, criticality TEXT, status TEXT, duration_ms INTEGER,
         details_json TEXT, fix_attempted INTEGER DEFAULT 0, fix_result TEXT)""",
+    # Screen-12: the auto-recovery audit trail. Exists in core/schema.sql:1201
+    # and was simply absent here; `result` is SUCCESS | FAILED, and a row with
+    # NEITHER is an attempt that has not resolved.
+    """CREATE TABLE preflight_autofix_log (log_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id TEXT, check_name TEXT, attempted_at TEXT, fix_action TEXT,
+        before_state TEXT, after_state TEXT, result TEXT, error_msg TEXT)""",
     """CREATE TABLE control_tower_findings (id INTEGER PRIMARY KEY AUTOINCREMENT,
         scan_time TEXT, category TEXT, severity TEXT, resource_type TEXT, resource_name TEXT,
         location TEXT, reason TEXT, recommended_action TEXT, status TEXT DEFAULT 'OPEN',
@@ -506,9 +512,38 @@ def _seed(conn: sqlite3.Connection, schema_version: int) -> None:
     c.execute("INSERT INTO preflight_runs(run_id,run_date,phase,started_at,completed_at,"
               "total_checks,passed,overall_status) VALUES(?,?,?,?,?,?,?,?)",
               ("pf_a_1", TODAY, "A", _ts("08:30:00"), _ts("08:31:00"), 12, 12, "READY"))
-    c.execute("INSERT INTO preflight_check_results(run_id,run_date,check_name,check_group,"
-              "criticality,status) VALUES(?,?,?,?,?,?)",
-              ("pf_a_1", TODAY, "vm_ram", "VM Health", "CRITICAL", "PASS"))
+    # Screen-12: checks spanning the FIVE readiness pillars. ⭐ `capital_deployment`
+    # is seeded WARN on purpose so the Capital pillar is WARNING while every other
+    # pillar is HEALTHY — with all five identical, a rollup that ignored one
+    # pillar would still look right. ⭐ And Capital is assembled from check NAMES
+    # (it has no group of its own), so this also proves that path.
+    for _cn, _cg, _crit, _st in (
+            ("vm_ram", "VM Health", "CRITICAL", "PASS"),
+            ("kite_token_file_exists", "Broker", "CRITICAL", "PASS"),
+            ("kite_token_fresh_today", "Broker", "CRITICAL", "PASS"),
+            ("kite_profile_call_ok", "Broker", "CRITICAL", "PASS"),
+            ("kite_orders_endpoint", "Broker", "WARN", "PASS"),
+            ("kite_funds_available", "Broker", "WARN", "PASS"),
+            ("db_file_exists", "Database", "CRITICAL", "PASS"),
+            ("db_writable", "Database", "CRITICAL", "PASS"),
+            ("app_health", "Engine", "CRITICAL", "PASS"),
+            ("fund_manager_balance", "Engine", "CRITICAL", "PASS"),
+            ("capital_deployment", "Engine", "WARN", "WARN"),
+            ("kill_switch_state", "State", "CRITICAL", "PASS"),
+            ("open_positions_at_start", "State", "WARN", "PASS")):
+        c.execute("INSERT INTO preflight_check_results(run_id,run_date,check_name,"
+                  "check_group,criticality,status) VALUES(?,?,?,?,?,?)",
+                  ("pf_a_1", TODAY, _cn, _cg, _crit, _st))
+    # Recovery lifecycle — one of EACH state, so TRIGGERED can never be mistaken
+    # for SUCCESS by a counter that only looks at row presence.
+    for _cn, _act, _res, _err in (
+            ("alert_backlog", "flush_alert_backlog", "SUCCESS", None),
+            ("today_log_writable", "chmod_log_dir", "FAILED", "permission denied"),
+            ("cron_marks_dir_writable", "mkdir_marks", None, None)):
+        c.execute("INSERT INTO preflight_autofix_log(run_id,check_name,attempted_at,"
+                  "fix_action,before_state,after_state,result,error_msg) "
+                  "VALUES(?,?,?,?,?,?,?,?)",
+                  ("pf_a_1", _cn, _ts("08:30:30"), _act, "bad", "good", _res, _err))
     c.execute("INSERT INTO control_tower_findings(scan_time,category,severity,resource_type,"
               "resource_name,reason,status,first_seen,last_seen) VALUES(?,?,?,?,?,?,?,?,?)",
               (_ts("17:05:00"), "disk", "HIGH", "mount", "/dev/sda1",
