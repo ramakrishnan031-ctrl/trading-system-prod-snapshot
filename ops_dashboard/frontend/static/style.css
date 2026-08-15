@@ -509,7 +509,7 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
    `--t-*`, `--card*` or `--ink` token is page-scoped to a screen the audit page
    is not (measured across the file), so on `.aud-page` these definitions stay
    inert until something references them. */
-.dash-page, .aud-page {
+.dash-page, .aud-page, .tlg-page {
   --t-blue: 56,139,253;  --t-green: 46,160,67;   --t-red: 218,54,51;
   --t-orange: 219,109,40; --t-purple: 163,113,247; --t-yellow: 210,153,34;
   --t-gray: 139,148,158;
@@ -750,11 +750,18 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
    global-search box carries `.sel` too and lives in the approved AUDIT EVENTS
    header, which this correction must not touch. ⛔ No value changed — Screens
    03/04/05 render byte-identically. */
+/* ⭐ Screen-14 joins unscoped (`.tlg-page .sel`, ⛔ not `.tlg-filters .sel`): it
+   is a NEW screen with no previously-approved control appearance to preserve,
+   so every control on it — filter, rail search, global search, rows-per-page —
+   takes the standard treatment from the start. Screen 13's narrower scope
+   exists only because its AUDIT EVENTS header was already approved. */
 .strat-page .flt-c, .sig-page .flt-c, .ord-page .flt-c,
-.aud-page .aud-filters .sel { height: 36px; padding: 0 10px; font-size: 13px; color: var(--text);
+.aud-page .aud-filters .sel,
+.tlg-page .sel { height: 36px; padding: 0 10px; font-size: 13px; color: var(--text);
   background: var(--card); border: 1px solid var(--card-bd); border-radius: 8px; font-family: inherit; }
 .strat-page .flt-c:focus, .sig-page .flt-c:focus, .ord-page .flt-c:focus,
-.aud-page .aud-filters .sel:focus { outline: none; border-color: var(--blue); }
+.aud-page .aud-filters .sel:focus,
+.tlg-page .sel:focus { outline: none; border-color: var(--blue); }
 .strat-page .flt-sm, .sig-page .flt-sm { height: 30px; padding: 0 8px; width: auto; min-width: 58px; }
 .strat-page .flt-actions, .sig-page .flt-actions, .ord-page .flt-actions { display: flex; gap: 10px; align-items: flex-end; margin-left: auto; }
 /* ⭐ Screen-13's two filter actions join the SAME pair, so they cannot drift from
@@ -771,16 +778,17 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 .strat-page .btn-ghost, .strat-page .btn-primary,
 .sig-page .btn-ghost, .sig-page .btn-primary,
 .ord-page .btn-ghost, .ord-page .btn-primary,
-.aud-page .btn-ghost, .aud-page .btn-primary { height: 36px; padding: 0 16px; font-size: 13px; font-weight: 600;
+.aud-page .btn-ghost, .aud-page .btn-primary,
+.tlg-page .btn-ghost, .tlg-page .btn-primary { height: 36px; padding: 0 16px; font-size: 13px; font-weight: 600;
   border-radius: 8px; cursor: pointer; font-family: inherit; }
 .strat-page .btn-ghost, .sig-page .btn-ghost, .ord-page .btn-ghost,
-.aud-page .btn-ghost { background: transparent; color: var(--muted); border: 1px solid var(--card-bd); }
+.aud-page .btn-ghost, .tlg-page .btn-ghost { background: transparent; color: var(--muted); border: 1px solid var(--card-bd); }
 .strat-page .btn-ghost:hover, .sig-page .btn-ghost:hover, .ord-page .btn-ghost:hover,
-.aud-page .btn-ghost:hover { color: var(--text); border-color: var(--blue); }
+.aud-page .btn-ghost:hover, .tlg-page .btn-ghost:hover { color: var(--text); border-color: var(--blue); }
 .strat-page .btn-primary, .sig-page .btn-primary, .ord-page .btn-primary,
-.aud-page .btn-primary { background: var(--blue); color: #fff; border: 1px solid var(--blue); }
+.aud-page .btn-primary, .tlg-page .btn-primary { background: var(--blue); color: #fff; border: 1px solid var(--blue); }
 .strat-page .btn-primary:hover, .sig-page .btn-primary:hover, .ord-page .btn-primary:hover,
-.aud-page .btn-primary:hover { filter: brightness(1.08); }
+.aud-page .btn-primary:hover, .tlg-page .btn-primary:hover { filter: brightness(1.08); }
 
 /* Strategy hierarchy */
 .strat-page .hier-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
@@ -2923,3 +2931,196 @@ table td.ctr { text-align: center !important; }
 .aud-page .aud-arc-Service        { stroke: #39c5cf; }
 .aud-page .aud-arc-Authentication { stroke: #8b95f5; }
 .aud-page .aud-arc-System         { stroke: var(--muted); }
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SCREEN 14 — TRADE LOGS  (.tlg-page)
+   Structure follows `gui/14. Trade_Logs.png` exactly: KPI deck (6) · filters ·
+   the event table + a right rail (event types / severity / search / retention) ·
+   timeline · event details · critical changes · auto-recovery · recent errors ·
+   export.
+   ⛔ Everything is scoped to `.tlg-page`, so no other screen can be repainted.
+   ⭐ Readability floor: the brief sets 13px. Every text rule here is >= 13px;
+   the drag grip stays at the project's established `.55rem` because it is a
+   DECORATIVE handle glyph, identical to `.aud-grip` / `.exec-grip` on the
+   approved screens, not readable text.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.tlg-page { display: flex; flex-direction: column; gap: 16px; }
+
+.tlg-page .tlg-head { display: flex; align-items: flex-start;
+  justify-content: space-between; gap: 16px; }
+.tlg-page .tlg-title { font-size: 1.5rem; font-weight: 800; margin: 0;
+  letter-spacing: .04em; }
+.tlg-page .tlg-sub { font-size: 13px; color: var(--muted); margin-top: 2px; }
+.tlg-page .tlg-lastcheck { display: flex; flex-direction: column; align-items: flex-end; }
+.tlg-page .tlg-lc-l { font-size: 13px; color: var(--dim); letter-spacing: .06em; }
+.tlg-page .tlg-lc-v { font-size: 13px; color: var(--muted); }
+
+/* main + rail. ⛔ `minmax(0, 1fr)`, NEVER a bare `1fr`: a grid item defaults to
+   `min-width:auto`, so the table's intrinsic width would refuse to shrink and
+   push the whole page into a horizontal scroll (measured on Screen 13). */
+.tlg-page .tlg-work { display: grid; gap: 16px; align-items: start;
+  grid-template-columns: minmax(0, 1fr) 330px; }
+@media (max-width: 1400px) { .tlg-page .tlg-work { grid-template-columns: minmax(0, 1fr); } }
+.tlg-page .tlg-left { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.tlg-page .tlg-rail { display: flex; flex-direction: column; gap: 16px; }
+.tlg-page .tlg-rail .panel, .tlg-page .tlg-left .panel { margin-bottom: 0; }
+
+/* KPI deck */
+.tlg-page .tlg-kpis { display: grid; gap: 12px; grid-template-columns: repeat(6, 1fr); }
+@media (max-width: 1500px) { .tlg-page .tlg-kpis { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 900px)  { .tlg-page .tlg-kpis { grid-template-columns: repeat(2, 1fr); } }
+.tlg-page .tlg-kpi { display: flex; flex-direction: column; gap: 4px; padding: 13px 14px; }
+.tlg-page .tlg-kpi-top { display: flex; align-items: center; gap: 9px; }
+.tlg-page .tlg-kpi-ico { width: 26px; height: 26px; border-radius: 7px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 13px; flex: none; }
+.tlg-page .tlg-ico-info { background: var(--accent-tint); color: var(--blue); }
+.tlg-page .tlg-ico-pos  { background: var(--pos-tint);    color: var(--pos); }
+.tlg-page .tlg-ico-warn { background: var(--warn-tint);   color: var(--yellow); }
+.tlg-page .tlg-ico-neg  { background: var(--neg-tint);    color: var(--neg); }
+.tlg-page .tlg-kpi-l { font-size: 13px; color: var(--muted); letter-spacing: .04em; }
+.tlg-page .tlg-kpi-v { font-size: 1.7rem; font-weight: 800; line-height: 1.1;
+  font-variant-numeric: tabular-nums; }
+.tlg-page .tlg-v-info, .tlg-page .tlg-v-pos, .tlg-page .tlg-v-warn { color: var(--text); }
+.tlg-page .tlg-v-neg { color: var(--neg); }
+.tlg-page .tlg-kpi-s { font-size: 13px; color: var(--dim); }
+.tlg-page .tlg-spark { width: 100%; height: 30px; margin-top: 2px; }
+.tlg-page .tlg-spk-info { stroke: var(--blue); }
+.tlg-page .tlg-spk-pos  { stroke: var(--pos); }
+.tlg-page .tlg-spk-warn { stroke: var(--yellow); }
+.tlg-page .tlg-spk-neg  { stroke: var(--neg); }
+
+/* filters */
+.tlg-page .tlg-frow { display: flex; flex-wrap: wrap; gap: 12px 14px; align-items: flex-end; }
+.tlg-page .tlg-f { display: flex; flex-direction: column; gap: 5px; min-width: 150px; }
+.tlg-page .tlg-f-dr { min-width: 300px; }
+.tlg-page .tlg-f-l { font-size: 13px; color: var(--muted); }
+.tlg-page .tlg-f-dates { display: flex; align-items: center; gap: 6px; }
+.tlg-page .tlg-date { font-size: 13px; }
+.tlg-page .tlg-f-to { color: var(--dim); font-size: 13px; }
+.tlg-page .tlg-fbtns { display: flex; gap: 10px; align-items: flex-end; margin-left: auto; }
+.tlg-page .tlg-x { padding: 3px 8px; }
+
+/* events table */
+.tlg-page .tlg-events { min-width: 0; }
+.tlg-page .tlg-panel-head { display: flex; align-items: center;
+  justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+.tlg-page .tlg-panel-head .panel-title { margin: 0; }
+.tlg-page .tlg-tools { display: flex; align-items: center; gap: 8px; }
+.tlg-page .tlg-search { display: flex; align-items: center; gap: 0; }
+.tlg-page .tlg-q { min-width: 250px;
+  border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.tlg-page .tlg-qgo { border-top-left-radius: 0; border-bottom-left-radius: 0;
+  margin-left: -1px; }
+.tlg-page .tlg-tbl-wrap { overflow-x: auto; }
+.tlg-page .tlg-tbl { width: 100%; min-width: 0; }
+/* Alignment by ROLE, the established rule: labels/text LEFT, status CENTRED.
+   ⛔ No blanket centring — this table has no numeric column to right-align. */
+.tlg-page .tlg-tbl th, .tlg-page .tlg-tbl td { text-align: left; }
+.tlg-page .tlg-tbl th.ctr, .tlg-page .tlg-tbl td.ctr { text-align: center; }
+.tlg-page .tlg-tbl th.rt, .tlg-page .tlg-tbl td.rt { text-align: right; }
+.tlg-page th { font-size: 13px; }
+.tlg-page .mono { font-size: 13px; }
+.tlg-page .rt-btn { font-size: 13px; }
+.tlg-page .panel-sub { font-size: 13px; }
+.tlg-page .tlg-th { cursor: grab; user-select: none; white-space: nowrap; }
+.tlg-page .tlg-th.is-drag { opacity: .5; }
+.tlg-page .tlg-th.is-over { box-shadow: inset 2px 0 0 var(--blue); }
+.tlg-page .tlg-grip { font-size: .55rem; color: var(--dim); margin-right: 5px; }
+.tlg-page .tlg-arrow { margin-left: 5px; color: var(--dim); }
+.tlg-page .tlg-tbl tbody tr { cursor: pointer; }
+.tlg-page .tlg-tbl tbody tr:hover { background: rgba(var(--t-blue), .07); }
+.tlg-page .tlg-sel { background: rgba(var(--t-blue), .14); }
+.tlg-page .tlg-msg { max-width: 340px; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }
+.tlg-page .tlg-empty { color: var(--dim); text-align: center; padding: 18px 0; }
+
+/* event-type chip */
+.tlg-page .tlg-ev { display: inline-block; padding: 2px 8px; border-radius: 5px;
+  font-size: 13px; font-weight: 600; white-space: nowrap; }
+.tlg-page .tlg-ev-pos    { background: var(--pos-tint);    color: var(--pos); }
+.tlg-page .tlg-ev-neg    { background: var(--neg-tint);    color: var(--neg); }
+.tlg-page .tlg-ev-warn   { background: var(--warn-tint);   color: var(--yellow); }
+.tlg-page .tlg-ev-info   { background: var(--accent-tint); color: var(--blue); }
+.tlg-page .tlg-ev-purple { background: var(--purple-tint); color: var(--purple); }
+.tlg-page .tlg-ev-dot, .tlg-page .tlg-sev-dot { display: inline-block; width: 8px;
+  height: 8px; border-radius: 50%; margin-right: 8px; background: currentColor; }
+.tlg-page .tlg-sv-info { color: var(--blue); }
+.tlg-page .tlg-sv-warning { color: var(--yellow); }
+.tlg-page .tlg-sv-error { color: var(--neg); }
+.tlg-page .tlg-sv-critical { color: var(--red); }
+
+/* pager / footer */
+.tlg-page .tlg-foot { display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap; margin-top: 12px; }
+.tlg-page .tlg-showing { font-size: 13px; color: var(--muted); }
+.tlg-page .tlg-pager { display: flex; align-items: center; gap: 4px; }
+.tlg-page .tlg-pg { min-width: 28px; }
+.tlg-page .tlg-rpp { display: flex; align-items: center; gap: 8px; font-size: 13px;
+  color: var(--muted); }
+.tlg-page .tlg-rpp .sel { height: 30px; padding: 0 8px; }
+
+/* rail panels */
+.tlg-page .tlg-mini td { padding: 5px 6px; font-size: 13px; }
+.tlg-page .tlg-mini2 th, .tlg-page .tlg-mini2 td { padding: 6px 8px; font-size: 13px; }
+.tlg-page .tlg-dim { color: var(--dim); }
+.tlg-page .tlg-ni { font-size: 13px; color: var(--dim); letter-spacing: .02em;
+  white-space: nowrap; }
+.tlg-page .tlg-note { font-size: 13px; color: var(--dim); margin: 10px 0 0; line-height: 1.5; }
+.tlg-page .tlg-sf { display: flex; flex-direction: column; gap: 9px; }
+.tlg-page .tlg-sf-r { display: flex; flex-direction: column; gap: 4px; }
+.tlg-page .tlg-sbtn { margin-top: 4px; }
+
+/* timeline / details / critical */
+/* TRADE TIMELINE + EVENT DETAILS live INSIDE the left column, directly under the
+   table, exactly as the approved PNG places them; CRITICAL CHANGES sits in the
+   right rail, also as the PNG places it. ⭐ Measured, not guessed: with all
+   three in a full-width row below, the left column ended ~450px above the rail
+   and the page carried a dead band that wide. */
+.tlg-page .tlg-row3 { display: grid; gap: 16px; align-items: start;
+  grid-template-columns: 1fr 1.7fr; }
+.tlg-page .tlg-row4 { display: grid; gap: 16px; align-items: start;
+  grid-template-columns: 1.3fr 1.6fr .8fr; }
+@media (max-width: 1400px) {
+  .tlg-page .tlg-row3, .tlg-page .tlg-row4 { grid-template-columns: 1fr; }
+}
+.tlg-page .tlg-row3 .panel, .tlg-page .tlg-row4 .panel { margin-bottom: 0; }
+/* ⭐ Measured: with a row SELECTED these two panels stand ~400px and the left
+   column balances the rail, exactly as the approved PNG shows. Empty, they
+   collapse to ~110px and leave a dead band. The floor keeps the default state
+   looking deliberate without changing the populated layout at all. */
+.tlg-page .tlg-row3 .panel { min-height: 330px; }
+.tlg-page .tlg-d-empty { color: var(--dim); font-size: 13px; padding: 10px 0; }
+.tlg-page .tlg-tl { list-style: none; margin: 0; padding: 0; }
+.tlg-page .tlg-tl li { display: grid; grid-template-columns: 14px 1fr auto;
+  gap: 4px 8px; align-items: baseline; padding: 6px 0; }
+.tlg-page .tlg-tl-dot { width: 9px; height: 9px; border-radius: 50%;
+  background: var(--gray); display: inline-block; }
+.tlg-page .tlg-tl li.is-on .tlg-tl-dot { background: var(--pos); }
+.tlg-page .tlg-tl-k { font-size: 13px; }
+.tlg-page .tlg-tl li.is-off .tlg-tl-k { color: var(--dim); }
+.tlg-page .tlg-tl-v { font-size: 13px; color: var(--blue); text-align: right; }
+.tlg-page .tlg-tl-why { grid-column: 2 / span 2; font-size: 13px; color: var(--dim);
+  line-height: 1.45; }
+.tlg-page .tlg-dhead { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.tlg-page .tlg-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+.tlg-page .tlg-kv td { padding: 5px 6px; font-size: 13px; vertical-align: top; }
+.tlg-page .tlg-kv-v { color: var(--text); word-break: break-word; }
+.tlg-page .tlg-raw { background: var(--panel2); border: 1px solid var(--border);
+  border-radius: 8px; padding: 10px; max-height: 260px; overflow: auto;
+  font-size: 13px; white-space: pre-wrap; word-break: break-word; }
+.tlg-page .tlg-replay { display: flex; align-items: center; gap: 12px;
+  flex-wrap: wrap; margin-top: 12px; }
+.tlg-page .tlg-replay .tlg-note { margin: 0; }
+.tlg-page .tlg-crit-list { list-style: none; margin: 0; padding: 0; }
+.tlg-page .tlg-crit-list li { padding: 7px 0; border-bottom: 1px solid var(--border); }
+.tlg-page .tlg-crit-list li:last-child { border-bottom: 0; }
+.tlg-page .tlg-crit-t { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.tlg-page .tlg-crit-t .mono { margin-left: auto; }
+.tlg-page .tlg-crit-v { display: block; font-size: 13px; color: var(--dim); margin-top: 3px; }
+.tlg-page .tlg-xbtn { display: inline-flex; align-items: center; justify-content: center;
+  text-decoration: none; margin-top: 6px; }
+.tlg-page .tlg-foot-note { font-size: 13px; color: var(--muted); line-height: 1.6; }
+.tlg-page .tlg-foot-note b { color: var(--dim); font-weight: 400; }
+.tlg-page .tlg-i { color: var(--blue); margin-right: 4px; }

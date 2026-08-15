@@ -3464,3 +3464,254 @@ def audit_retention_meta(cfg: dict) -> dict:
                 if cur is None or (val < cur if key == "oldest" else val > cur):
                     out[key] = val
     return out
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# SCREEN 14 — TRADE LOGS
+#
+# ⭐ THE WINDOWING RULE, and it is the whole reason these readers exist rather
+# than reusing the Screen-06/07 range readers: ONE trade spans several days.
+# A signal received on Monday can fill on Monday and exit on Wednesday, so a
+# reader that filtered `trades` by `created_at` alone would DROP Wednesday's
+# exit event from Wednesday's window and INVENT nothing to replace it.
+# Each reader therefore admits a row when ANY of its own event-bearing stamps
+# falls in the window; the SERVICE then filters the synthesised events by each
+# event's OWN timestamp. ⇒ every event lands in exactly one window, so the
+# population can neither double-count nor lose a row.
+#
+# ⛔ `signals.scanner` is NEVER selected here. KEEP STRATEGY / REMOVE SCANNER
+# is enforced at the READER, so no downstream template, export or search can
+# reintroduce it by accident.
+# ═════════════════════════════════════════════════════════════════════════════
+_TL_CAP = 8000
+
+
+def _tl_limit(limit: int) -> int:
+    return max(1, min(int(limit), _TL_CAP))
+
+
+def tradelog_signals_range(cfg: dict, start: str, end: str,
+                           limit: int = _TL_CAP) -> list:
+    """Signal rows whose `received_at` day falls in the window.
+
+    ⛔ No `scanner` column. `webhook_payload` is NOT selected either: it is an
+    unbounded third-party blob and nothing on the approved screen renders it.
+    """
+    with _ro(cfg) as conn:
+        try:
+            rows = conn.execute(
+                "SELECT signal_id, symbol, strategy, triggered_at, received_at, "
+                "status, rejection_reason, trade_id, trigger_price "
+                "FROM signals WHERE substr(received_at,1,10) BETWEEN ? AND ? "
+                "ORDER BY received_at DESC, signal_id DESC LIMIT ?",
+                (start, end, _tl_limit(limit)),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+    return [dict(r) for r in rows]
+
+
+def tradelog_screener(cfg: dict, signal_ids) -> dict:
+    """signal_id → the screener verdict that decided it.
+
+    ⭐ `ts` is the authoritative instant of the ACCEPT/REJECT decision, which is
+    what makes a "Signal Accepted" event a real timestamped event rather than
+    one borrowed from the signal's arrival. ⚠️ Read from `ts`, ⛔ never from the
+    fixture-only `created_at` column — production has no such column.
+    """
+    ids = [str(s) for s in (signal_ids or []) if s]
+    if not ids:
+        return {}
+    out: dict = {}
+    with _ro(cfg) as conn:
+        for chunk in (ids[i:i + 400] for i in range(0, len(ids), 400)):
+            try:
+                rows = conn.execute(
+                    "SELECT signal_id, score, eligible_score, tier, status, "
+                    "step_results, latencies, ts FROM screener_results "
+                    f"WHERE signal_id IN ({_in_clause(tuple(chunk))}) "
+                    "ORDER BY ts ASC", tuple(chunk),
+                ).fetchall()
+            except sqlite3.OperationalError:
+                return {}
+            for r in rows:
+                out[r["signal_id"]] = dict(r)   # last (newest) verdict wins
+    return out
+
+
+def tradelog_trades_range(cfg: dict, start: str, end: str,
+                          limit: int = _TL_CAP) -> list:
+    """Trades with ANY of created_at / entry_time / exit_time in the window."""
+    with _ro(cfg) as conn:
+        try:
+            rows = conn.execute(
+                "SELECT trade_id, signal_id, symbol, direction, strategy, status, "
+                "qty_planned, qty_filled, entry_target_price, entry_actual_price, "
+                "created_at, entry_time, exit_time, exit_price, exit_reason, "
+                "net_pnl, signal_to_order_ms, order_to_fill_ms, total_latency_ms, "
+                "binding_constraint "
+                "FROM trades WHERE substr(created_at,1,10) BETWEEN ? AND ? "
+                "   OR substr(COALESCE(entry_time,''),1,10) BETWEEN ? AND ? "
+                "   OR substr(COALESCE(exit_time,''),1,10) BETWEEN ? AND ? "
+                "ORDER BY created_at DESC, trade_id DESC LIMIT ?",
+                (start, end, start, end, start, end, _tl_limit(limit)),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+    return [dict(r) for r in rows]
+
+
+def tradelog_orders_range(cfg: dict, start: str, end: str,
+                          limit: int = _TL_CAP) -> list:
+    """Orders with placed_at or filled_at in the window (both are events)."""
+    with _ro(cfg) as conn:
+        try:
+            rows = conn.execute(
+                "SELECT o.order_id, o.trade_id, o.leg, o.status, o.qty_requested, "
+                "o.qty_filled, o.price, o.trigger_price, o.avg_fill_price, "
+                "o.placed_at, o.filled_at, o.rejection_reason, o.product, "
+                "t.symbol AS symbol, t.strategy AS strategy, t.direction AS direction "
+                "FROM orders o LEFT JOIN trades t ON t.trade_id = o.trade_id "
+                "WHERE substr(COALESCE(o.placed_at,''),1,10) BETWEEN ? AND ? "
+                "   OR substr(COALESCE(o.filled_at,''),1,10) BETWEEN ? AND ? "
+                "ORDER BY o.placed_at DESC, o.order_id DESC LIMIT ?",
+                (start, end, start, end, _tl_limit(limit)),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+    return [dict(r) for r in rows]
+
+
+def tradelog_execution_range(cfg: dict, start: str, end: str,
+                             limit: int = _TL_CAP) -> list:
+    """order_execution_log rows — the broker-side fill record.
+
+    ⚠️ `order_id` here is the INTERNAL id (`ord_<hex>`) while `orders.order_id`
+    is the BROKER id; they are DIFFERENT ID SPACES (measured on Screen 07). The
+    join key that works is `parent_trade_id`, and that is the only one used.
+    """
+    with _ro(cfg) as conn:
+        try:
+            rows = conn.execute(
+                "SELECT id, parent_trade_id, symbol, leg, side, status, qty, "
+                "filled_qty, actual_price, intended_price, slippage_rs, "
+                "order_timestamp, fill_timestamp, exchange_timestamp "
+                "FROM order_execution_log "
+                "WHERE substr(COALESCE(fill_timestamp, order_timestamp, created_at),1,10) "
+                "      BETWEEN ? AND ? "
+                "ORDER BY id DESC LIMIT ?",
+                (start, end, _tl_limit(limit)),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+    return [dict(r) for r in rows]
+
+
+def tradelog_recovery_range(cfg: dict, start: str, end: str,
+                            limit: int = 500) -> list:
+    """reconciliation_log for the AUTO-RECOVERY HISTORY panel.
+
+    ⛔ Not `audit_reconciliation_range`: that one omits `trade_id` and
+    `description`, which this screen needs to attribute a recovery to a trade.
+    """
+    with _ro(cfg) as conn:
+        try:
+            rows = conn.execute(
+                "SELECT id, ts, check_name, tier, symbol, trade_id, description, "
+                "action_taken, success FROM reconciliation_log "
+                "WHERE substr(ts,1,10) BETWEEN ? AND ? "
+                "ORDER BY ts DESC, id DESC LIMIT ?",
+                (start, end, _tl_limit(limit)),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+    return [dict(r) for r in rows]
+
+
+def tradelog_retention(cfg: dict) -> dict:
+    """Per-source record count and oldest/newest across the trade-log sources.
+
+    ⛔ Deliberately NOT range-filtered — a retention figure that shrank when the
+    operator narrowed a date filter would not be a retention figure (the rule
+    Screen 13 already established).
+    """
+    out: dict = {"per_source": {}, "records": 0, "oldest": None, "newest": None}
+    probes = (
+        ("signals", "MIN(received_at)", "MAX(received_at)"),
+        ("trades", "MIN(created_at)", "MAX(created_at)"),
+        ("orders", "MIN(placed_at)", "MAX(placed_at)"),
+        ("order_execution_log", "MIN(order_timestamp)", "MAX(order_timestamp)"),
+        ("reconciliation_log", "MIN(ts)", "MAX(ts)"),
+    )
+    with _ro(cfg) as conn:
+        for table, lo, hi in probes:
+            try:
+                r = conn.execute(
+                    "SELECT COUNT(*) AS n, %s AS lo, %s AS hi FROM %s" % (lo, hi, table)
+                ).fetchone()
+            except sqlite3.OperationalError:
+                continue
+            n = int(r["n"] or 0)
+            out["per_source"][table] = {"records": n, "oldest": r["lo"],
+                                        "newest": r["hi"]}
+            out["records"] += n
+            for key, val in (("oldest", r["lo"]), ("newest", r["hi"])):
+                if not val:
+                    continue
+                cur = out[key]
+                if cur is None or (val < cur if key == "oldest" else val > cur):
+                    out[key] = val
+    return out
+
+
+# ── Screen-14 detail lookups (TRADE TIMELINE / REPLAY / request-response) ────
+def tradelog_trades_by_id(cfg: dict, trade_ids) -> list:
+    ids = [str(t) for t in (trade_ids or []) if t]
+    if not ids:
+        return []
+    with _ro(cfg) as conn:
+        try:
+            rows = conn.execute(
+                "SELECT trade_id, signal_id, symbol, direction, strategy, status, "
+                "qty_planned, qty_filled, entry_target_price, entry_actual_price, "
+                "sl_initial, tgt_initial, created_at, entry_time, exit_time, "
+                "exit_price, exit_reason, net_pnl, signal_to_order_ms, "
+                "order_to_fill_ms, total_latency_ms, binding_constraint "
+                f"FROM trades WHERE trade_id IN ({_in_clause(tuple(ids))})",
+                tuple(ids),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+    return [dict(r) for r in rows]
+
+
+def tradelog_signals_by_id(cfg: dict, signal_ids) -> list:
+    """⛔ `scanner` is not selected — KEEP STRATEGY / REMOVE SCANNER."""
+    ids = [str(s) for s in (signal_ids or []) if s]
+    if not ids:
+        return []
+    with _ro(cfg) as conn:
+        try:
+            rows = conn.execute(
+                "SELECT signal_id, symbol, strategy, triggered_at, received_at, "
+                "status, rejection_reason, trade_id, trigger_price "
+                f"FROM signals WHERE signal_id IN ({_in_clause(tuple(ids))})",
+                tuple(ids),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+    return [dict(r) for r in rows]
+
+
+def tradelog_orders_of_trade(cfg: dict, trade_id: str) -> list:
+    with _ro(cfg) as conn:
+        try:
+            rows = conn.execute(
+                "SELECT order_id, trade_id, leg, status, qty_requested, qty_filled, "
+                "price, trigger_price, avg_fill_price, placed_at, filled_at, "
+                "rejection_reason, product FROM orders WHERE trade_id = ? "
+                "ORDER BY placed_at ASC, order_id ASC", (trade_id,),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+    return [dict(r) for r in rows]

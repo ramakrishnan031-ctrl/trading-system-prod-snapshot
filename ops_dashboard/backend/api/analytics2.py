@@ -25,7 +25,7 @@ from flask import Blueprint, current_app, jsonify, request, send_file
 
 from ..auth import login_required
 from ..services import (audit, analytics_period, execution_analytics,
-                        slippage_analytics, system_health)
+                        slippage_analytics, system_health, trade_logs)
 
 
 def _xlsx(sheets: list, download_name: str):
@@ -342,3 +342,63 @@ def export_audit_screen():
     return _xlsx(audit.export_sheets(payload),
                  "audit_%s_%s.xlsx" % (payload["range"]["start"],
                                        payload["range"]["end"]))
+
+
+# ── SCREEN 14 — TRADE LOGS ───────────────────────────────────────────────────
+# ⭐ ADDITIVE: the G5d `/api/trade-logs` endpoint is deliberately UNTOUCHED and
+# its contract test still passes. Screen 14 gets its own routes, exactly as
+# Screen 07 added `/api/trades/screen` beside the existing `/api/trades`.
+def _tradelog_kwargs() -> dict:
+    def _arg(name):
+        return (request.args.get(name) or "").strip() or None
+
+    return {"start": _arg("start"), "end": _arg("end"),
+            "trade_id": _arg("trade_id"), "order_id": _arg("order_id"),
+            "symbol": _arg("symbol"), "strategy": _arg("strategy"),
+            "trade_type": _arg("trade_type"), "direction": _arg("direction"),
+            "event_type": _arg("event_type"), "status": _arg("status"),
+            "q": _arg("q")}
+
+
+@analytics2_api.route("/api/trade-logs/screen", methods=["GET"])
+@login_required
+def get_trade_logs_screen():
+    """Screen 14. Read-only. ONE filtered population feeds the KPI deck, the
+    event table, the event-type and severity panels, the chart, Recent Errors
+    and the export — so no panel can describe a different set from the table
+    beside it."""
+    cfg = current_app.config["GUI_CONFIG"]
+    return jsonify(trade_logs.build_trade_logs_screen(cfg, **_tradelog_kwargs()))
+
+
+@analytics2_api.route("/api/trade-logs/detail", methods=["GET"])
+@login_required
+def get_trade_logs_detail():
+    """TRADE TIMELINE · REQUEST/DECISION/OUTPUT · REPLAY for one trade.
+
+    ⛔ Stages this system does not time come back unavailable WITH their reason;
+    the replay reconstructs the real lifecycle rather than simulating one.
+    """
+    cfg = current_app.config["GUI_CONFIG"]
+    trade_id = (request.args.get("trade_id") or "").strip() or None
+    signal_id = (request.args.get("signal_id") or "").strip() or None
+    rec = trade_logs.trade_detail(cfg, trade_id=trade_id, signal_id=signal_id)
+    if not rec.get("found"):
+        return jsonify({"error": "unknown trade or signal id",
+                        "trade_id": trade_id, "signal_id": signal_id}), 404
+    return jsonify(rec)
+
+
+@analytics2_api.route("/api/export/trade-logs", methods=["GET"])
+@login_required
+def export_trade_logs_screen():
+    """XLSX of the FILTERED view only (approved: "Export filtered results only").
+
+    ⭐ Same builder, same arguments ⇒ the exported rows ARE the table's rows.
+    ⛔ No Scanner column — a test asserts its absence in the generated file.
+    """
+    cfg = current_app.config["GUI_CONFIG"]
+    payload = trade_logs.build_trade_logs_screen(cfg, **_tradelog_kwargs())
+    rows = trade_logs.export_rows(payload)
+    return _xlsx([("Trade Log Events", rows[0], rows[1:])],
+                 "trade_logs_%s_%s.xlsx" % (payload["from"], payload["to"]))

@@ -1,78 +1,727 @@
 {% extends "base.html" %}
-{% from "components.html" import period_selector, filter_bar, data_table, export_button %}
 {% block title %}AlgoCore Systems — Trade Logs{% endblock %}
 {% block nav_trade_logs %}active{% endblock %}
 {% block content %}
-{# G5d: trade-centric forensic console. Trade rows (full attribution: strategy,
-   scanner, date/time, exit_reason, System Score) + the reconciler actions the
-   system took per trade (reconciliation_log). A ref_id search opens the raw log
-   lines via /api/logs (log_reader ref_id — UNTOUCHED). Distinct from System Logs. #}
-<div x-data="tradeLogsPage()" x-init="load(); $watch('pPeriod', () => load())" @ops-refresh.window="load()">
-  <h2 class="panel-title">Trade Logs
-    <span class="panel-sub" x-text="(data.count!=null?data.count+' trades · ':'') + (data.from ? (data.from+' → '+data.to) : '')"></span></h2>
+{#  SCREEN 14 — TRADE LOGS.  `gui/14. Trade_Logs.png` + `.txt` are BINDING for
+    structure: KPI deck (6) · filters (9 + reset/apply) · the event table with a
+    global search · the EVENT TYPES and SEVERITY LEVELS panels · Search ·
+    Retention Overview · Trade Timeline · Event Details with
+    DETAILS / INPUT-DECISION-OUTPUT / RAW and Replay · Critical Changes ·
+    Auto-Recovery History · Recent Errors · Export.
 
-  {{ period_selector() }}
-  {{ filter_bar([
-    {"key":"strategy","label":"Strategy"},
-    {"key":"scanner","label":"Scanner"},
-    {"key":"exit_reason","label":"Exit Reason"},
-  ]) }}
-  {{ export_button("Export Trade Logs") }}
+    ⛔ NO SCANNER ANYWHERE — no column, no filter, no detail row, no search
+       field, no export column. It is not even SELECTed in the readers, so it
+       cannot return through a template edit. Strategy is retained throughout.
 
-  {{ data_table("trade-logs", [
-    {"key":"trade_date","label":"Date","kind":"date"},
-    {"key":"trade_time","label":"Time"},
-    {"key":"trade_id","label":"Trade","kind":"mono"},
-    {"key":"strategy","label":"Strategy"},
-    {"key":"scanner","label":"Scanner"},
-    {"key":"symbol","label":"Symbol"},
-    {"key":"direction","label":"Dir"},
-    {"key":"system_score","label":"Score","kind":"num"},
-    {"key":"exit_reason","label":"Exit"},
-    {"key":"net","label":"Net","kind":"money"},
-    {"key":"recon_n","label":"Recon actions","kind":"num"},
-    {"key":"status","label":"Status"},
-  ], rows_expr="logRows()") }}
+    ⭐ EVENT-PER-ROW, not trade-per-row. The G5d screen this replaces listed one
+       row per trade; the approved design is a forensic event feed. The events
+       are DERIVED from real stored timestamps (see services/trade_logs.py) —
+       this system stores no trade-event table.
 
-  <!-- Raw log-line drill (reuses /api/logs ref_id) -->
-  <section class="panel">
-    <h3 class="panel-title">Raw log lines by reference id</h3>
-    <div class="filters">
-      <input class="flt" placeholder="trade / order / signal id" x-model="refId">
-      <select class="flt" x-model="logFile"><option value="">latest system log</option>
-        <template x-for="f in logFiles" :key="f.name"><option :value="f.name" x-text="f.name"></option></template></select>
-      <button class="rt-btn" @click="drill()">Show log lines</button>
+    ⛔ Risk Passed / Capital Passed render NOT INSTRUMENTED rather than 0. A
+       passing gate writes no row, so a zero would read as "nothing ever passed",
+       which is false. The same rule governs the Risk and Capital timeline
+       stages and the Error Code / Resolution columns.
+
+    ⛔ An Alpine x-for TEMPLATE placed inside an SVG element renders NOTHING —
+       the HTML parser turns it into an SVG node named "template". Every
+       repeated SVG child below is injected with `x-html` on a group node
+       instead, the pattern Screens 06/07/09/10/11/13 already use. The tag names
+       are spelled out in words ON PURPOSE: the Screen 10/11/12 scanners read
+       RAW source without stripping comments.  #}
+<div class="tlg-page" x-data="tradeLogsPage()" x-init="init()" @ops-refresh.window="load()">
+
+  <div class="tlg-head">
+    <div>
+      <h1 class="tlg-title">TRADE LOGS</h1>
+      <div class="tlg-sub">Forensic investigation console for trades</div>
     </div>
-    <table class="cap-table log-table" x-show="logLines.length" x-cloak>
-      <thead><tr><th>Time</th><th>Level</th><th>Logger</th><th>Message</th></tr></thead>
-      <tbody><template x-for="(r,i) in logLines" :key="i">
-        <tr><td class="ev-ts" x-text="r.ts||'—'"></td>
-          <td><span class="sev-chip" :class="lvl(r.level)" x-text="r.level||'raw'"></span></td>
-          <td class="mono" x-text="r.logger||''"></td><td class="logmsg" x-text="r.msg"></td></tr>
-      </template></tbody>
-    </table>
-    <p class="panel-sub" x-show="logLines.length===0 && refIdSearched" x-cloak>No log lines for that id in the selected file.</p>
-  </section>
+    <div class="tlg-lastcheck">
+      <span class="tlg-lc-l">LAST CHECKED</span>
+      <span class="tlg-lc-v mono" x-text="hhmmss(data.generated_at) || '—'"></span>
+    </div>
+  </div>
+
+  <div class="tlg-work">
+    <div class="tlg-left">
+
+      {# ── the six approved KPI, in the approved order ───────────────────── #}
+      <div class="tlg-kpis">
+        <template x-for="k in KPIS" :key="k.key">
+          <section class="panel tlg-kpi">
+            <div class="tlg-kpi-top">
+              <span class="tlg-kpi-ico" :class="'tlg-ico-' + k.tone" x-html="k.ico"></span>
+              <span class="tlg-kpi-l" x-text="k.label"></span>
+            </div>
+            <b class="tlg-kpi-v" :class="'tlg-v-' + k.tone" x-text="kpiValue(k.key)"></b>
+            <span class="tlg-kpi-s" x-text="kpiSub(k.key)"></span>
+            <svg class="tlg-spark" viewBox="0 0 120 30" preserveAspectRatio="none"
+                 aria-hidden="true" x-show="k.key !== 'last_event'">
+              <polyline :points="sparkPts(k.key)" :class="'tlg-spk-' + k.tone"
+                        fill="none" stroke-width="1.6"
+                        vector-effect="non-scaling-stroke"></polyline>
+            </svg>
+          </section>
+        </template>
+      </div>
+
+      {# ── FILTERS ───────────────────────────────────────────────────────── #}
+      <section class="panel tlg-filters">
+        <h3 class="panel-title">FILTERS</h3>
+        <div class="tlg-frow">
+          <label class="tlg-f tlg-f-dr">
+            <span class="tlg-f-l">Date Range</span>
+            <span class="tlg-f-dates">
+              <input type="date" class="sel tlg-date" x-model="f.start">
+              <span class="tlg-f-to">→</span>
+              <input type="date" class="sel tlg-date" x-model="f.end">
+              <button class="rt-btn tlg-x" type="button" title="Clear date range"
+                      @click="f.start=''; f.end=''">✕</button>
+            </span>
+          </label>
+          <label class="tlg-f">
+            <span class="tlg-f-l">Trade ID</span>
+            <input type="text" class="sel" placeholder="Enter Trade ID" x-model="f.trade_id">
+          </label>
+          <label class="tlg-f">
+            <span class="tlg-f-l">Order ID</span>
+            <input type="text" class="sel" placeholder="Enter Order ID" x-model="f.order_id">
+          </label>
+          <template x-for="s in SELECTS" :key="s.key">
+            <label class="tlg-f">
+              <span class="tlg-f-l" x-text="s.label"></span>
+              <select class="sel" x-model="f[s.key]">
+                <option value="" x-text="s.all"></option>
+                <template x-for="o in opts(s.key)" :key="o">
+                  <option :value="o" x-text="o"></option>
+                </template>
+              </select>
+            </label>
+          </template>
+          <span class="tlg-fbtns">
+            <button class="btn-ghost" type="button" @click="resetFilters()">Reset Filters</button>
+            <button class="btn-primary" type="button" @click="applyFilters()">▼ Apply Filters</button>
+          </span>
+        </div>
+      </section>
+
+      {# ── TRADE LOG EVENTS ──────────────────────────────────────────────── #}
+      <section class="panel tlg-events">
+        <div class="tlg-panel-head">
+          <h3 class="panel-title">TRADE LOG EVENTS
+            <span class="panel-sub" x-text="'(' + fmt(count()) + ' matching)'"></span>
+          </h3>
+          <span class="tlg-tools">
+            <span class="tlg-search">
+              <input type="search" class="sel tlg-q"
+                     placeholder="Search by message, trade ID, order ID…"
+                     x-model="f.q" @keyup.enter="applyFilters()">
+              <button class="rt-btn tlg-qgo" type="button" title="Search"
+                      @click="applyFilters()">⌕</button>
+            </span>
+            <a class="rt-btn tlg-exp" :href="exportUrl()">⇩ Export XLSX</a>
+            <button class="rt-btn" type="button" x-show="!isDefaultOrder()" x-cloak
+                    @click="resetCols()" title="Restore the approved column order">↺ Columns</button>
+          </span>
+        </div>
+
+        <div class="tlg-tbl-wrap">
+          <table class="cap-table tlg-tbl">
+            <thead><tr>
+              {# ⭐ ONE `cols` array drives the header AND the body, so a drag can
+                 never leave the two out of step. #}
+              <template x-for="c in cols" :key="c.key">
+                <th class="lbl tlg-th"
+                    :class="[dragKey === c.key ? 'is-drag' : '',
+                             overKey === c.key ? 'is-over' : '',
+                             c.num ? 'rt' : '', c.ctr ? 'ctr' : '']"
+                    draggable="true" role="button" tabindex="0"
+                    :title="c.label + ' · click to sort, drag to reorder'"
+                    @dragstart="onDragStart(c.key, $event)"
+                    @dragover.prevent="overKey = c.key"
+                    @dragleave="overKey === c.key && (overKey = '')"
+                    @drop.prevent="onDrop(c.key)"
+                    @dragend="onDragEnd()"
+                    @click="headClick(c.key)" @keyup.enter="tSort(c.key)">
+                  <span class="tlg-grip" aria-hidden="true">⠿</span><span
+                        x-text="c.label"></span><span class="tlg-arrow" x-text="tArrow(c.key)"></span>
+                </th>
+              </template>
+            </tr></thead>
+            <tbody>
+              <template x-for="r in tPaged(rows())" :key="r.ref_id">
+                <tr :class="sel && sel.ref_id === r.ref_id ? 'tlg-sel' : ''"
+                    @click="pick(r)" tabindex="0" @keyup.enter="pick(r)">
+                  <template x-for="c in cols" :key="c.key">
+                    <td :class="[c.num ? 'rt' : '', c.ctr ? 'ctr' : '',
+                                 c.key === 'message' ? 'tlg-msg' : '',
+                                 (c.key === 'trade_id' || c.key === 'order_id') ? 'mono' : '']">
+                      <template x-if="c.key === 'event_type'">
+                        <span class="tlg-ev" :class="evClass(r.event_type)" x-text="r.event_type"></span>
+                      </template>
+                      <template x-if="c.key === 'status'">
+                        <span class="pill" :class="statusPill(r.status)" x-text="r.status"></span>
+                      </template>
+                      <template x-if="c.key !== 'event_type' && c.key !== 'status'">
+                        <span x-text="cell(r, c.key)"></span>
+                      </template>
+                    </td>
+                  </template>
+                </tr>
+              </template>
+              <tr x-show="!rows().length" x-cloak>
+                <td :colspan="cols.length" class="tlg-empty">
+                  No trade log events match the current filters.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="tlg-foot">
+          <span class="tlg-showing" x-text="showing()"></span>
+          <span class="tlg-pager">
+            <button class="rt-btn" type="button" @click="tPage = Math.max(1, tPage - 1)"
+                    :disabled="tPage <= 1">‹</button>
+            <template x-for="p in pageList()" :key="p">
+              <button class="rt-btn tlg-pg" type="button"
+                      :class="p === tPage ? 'rt-active' : ''"
+                      :disabled="p === '…'"
+                      @click="p !== '…' && (tPage = p)" x-text="p"></button>
+            </template>
+            <button class="rt-btn" type="button"
+                    @click="tPage = Math.min(tPageCount(rows()), tPage + 1)"
+                    :disabled="tPage >= tPageCount(rows())">›</button>
+          </span>
+          <span class="tlg-rpp">Rows per page:
+            <select class="sel" x-model.number="tPageSize" @change="tPage = 1">
+              <template x-for="n in tPageSizes" :key="n">
+                <option :value="n" x-text="n"></option>
+              </template>
+            </select>
+          </span>
+        </div>
+      </section>
+  {# ── TRADE TIMELINE · EVENT DETAILS — kept in the LEFT column so the
+         page has no dead band beside a taller rail #}
+      <div class="tlg-row3">
+        <section class="panel tlg-timeline">
+      <h3 class="panel-title">TRADE TIMELINE
+        <span class="panel-sub" x-text="detail.found ? (detail.stages_measured + ' of ' + detail.stages_total + ' stages recorded') : ''"></span>
+      </h3>
+      <div class="tlg-d-empty" x-show="!detail.found" x-cloak>
+        Select an event with a Trade ID to reconstruct its lifecycle.
+      </div>
+      <ol class="tlg-tl" x-show="detail.found" x-cloak>
+        <template x-for="s in detail.timeline || []" :key="s.stage">
+          <li :class="s.measured ? 'is-on' : 'is-off'">
+            <i class="tlg-tl-dot"></i>
+            <span class="tlg-tl-k" x-text="s.stage"></span>
+            <span class="tlg-tl-v mono" x-show="s.measured" x-text="s.time"></span>
+            <span class="tlg-tl-v tlg-ni" x-show="!s.measured && s.gap" x-cloak>NOT INSTRUMENTED</span>
+            <span class="tlg-tl-v tlg-dim" x-show="!s.measured && !s.gap" x-cloak>—</span>
+            <span class="tlg-tl-why" x-show="s.gap" x-text="s.gap"></span>
+            <span class="tlg-tl-why" x-show="!s.gap && s.note" x-text="s.note"></span>
+          </li>
+        </template>
+      </ol>
+        </section>
+
+        <section class="panel tlg-detail">
+      <div class="tlg-panel-head">
+        <h3 class="panel-title">EVENT DETAILS</h3>
+        <span class="tlg-dhead" x-show="sel" x-cloak>
+          <b x-text="sel ? sel.event_type : ''"></b>
+          <span class="pill" :class="sel ? statusPill(sel.status) : ''" x-text="sel ? sel.status : ''"></span>
+          <button class="rt-btn tlg-x" type="button" @click="clearSel()" title="Close">✕</button>
+        </span>
+      </div>
+
+      <div class="tlg-d-empty" x-show="!sel" x-cloak>
+        Select an event row to see what the system recorded.
+      </div>
+
+      <div x-show="sel" x-cloak>
+        <div class="tlg-tabs">
+          <template x-for="t in TABS" :key="t.k">
+            <button class="rt-btn" type="button" :class="tab === t.k ? 'rt-active' : ''"
+                    @click="tab = t.k" x-text="t.l"></button>
+          </template>
+        </div>
+
+        <table class="cap-table tlg-kv" x-show="tab === 'details'"><tbody>
+          <template x-for="row in detailRows()" :key="row.k">
+            <tr><td class="lbl" x-text="row.k"></td>
+                <td class="tlg-kv-v" :class="row.gap ? 'tlg-ni' : ''" x-text="row.v"></td></tr>
+          </template>
+        </tbody></table>
+
+        <div x-show="tab === 'rdo'" x-cloak>
+          <table class="cap-table tlg-kv"><tbody>
+            <template x-for="row in rdoRows()" :key="row.k">
+              <tr><td class="lbl" x-text="row.k"></td>
+                  <td class="tlg-kv-v" :class="row.gap ? 'tlg-ni' : ''" x-text="row.v"></td></tr>
+            </template>
+          </tbody></table>
+          <p class="tlg-note" x-show="!detail.found" x-cloak>
+            This event has no Trade ID, so there is no screener verdict to show.</p>
+        </div>
+
+        {# RAW — the event's OWN stored fields. ⛔ Deliberately NOT the signal's
+           `webhook_payload`: that is an unbounded third-party blob and nothing
+           on the approved screen needs it. #}
+        <pre class="tlg-raw mono" x-show="tab === 'raw'" x-cloak x-text="rawJson()"></pre>
+
+        <div class="tlg-replay">
+          <button class="btn-primary" type="button" @click="replay()"
+                  :disabled="!sel || !sel.trade_id">▶ Replay Trade Lifecycle</button>
+          <span class="tlg-note">Reconstruct the real trade flow visually.
+            <b x-show="sel && !sel.trade_id" x-cloak>This event has no trade to replay.</b></span>
+        </div>
+      </div>
+        </section>
+
+      </div>
+    </div>
+
+    {# ── RIGHT RAIL ──────────────────────────────────────────────────────── #}
+    <aside class="tlg-rail">
+      <section class="panel tlg-types">
+        <h3 class="panel-title">EVENT TYPES</h3>
+        <table class="cap-table tlg-mini"><tbody>
+          <template x-for="t in data.event_types || []" :key="t">
+            <tr>
+              <td><span class="tlg-ev-dot" :class="evClass(t)"></span><span x-text="t"></span></td>
+              <td class="rt mono">
+                {# ⛔ NOT a zero: a passing gate writes no row, so the count is
+                   unmeasurable rather than nil. #}
+                <template x-if="(data.uninstrumented_events || []).includes(t)">
+                  <span class="tlg-ni" title="A passing gate writes no row anywhere in this system">NOT INSTRUMENTED</span>
+                </template>
+                <template x-if="!(data.uninstrumented_events || []).includes(t)">
+                  <span x-text="fmt((data.by_event_type || {})[t])"></span>
+                </template>
+              </td>
+            </tr>
+          </template>
+        </tbody></table>
+      </section>
+
+      <section class="panel tlg-sev">
+        <h3 class="panel-title">SEVERITY LEVELS</h3>
+        <table class="cap-table tlg-mini"><tbody>
+          <template x-for="s in data.severities || []" :key="s">
+            <tr>
+              <td><span class="tlg-sev-dot" :class="'tlg-sv-' + s.toLowerCase()"></span><span x-text="s"></span></td>
+              <td class="rt mono" x-text="fmt((data.by_severity || {})[s])"></td>
+              <td class="rt mono tlg-dim" x-text="sevPct(s)"></td>
+            </tr>
+          </template>
+        </tbody></table>
+      </section>
+
+      <section class="panel tlg-searchp">
+        <h3 class="panel-title">SEARCH</h3>
+        <div class="tlg-sf">
+          <label class="tlg-sf-r"><span class="tlg-f-l">Trade ID</span>
+            <input type="text" class="sel" placeholder="Enter Trade ID" x-model="f.trade_id"></label>
+          <label class="tlg-sf-r"><span class="tlg-f-l">Order ID</span>
+            <input type="text" class="sel" placeholder="Enter Order ID" x-model="f.order_id"></label>
+          <label class="tlg-sf-r"><span class="tlg-f-l">Symbol</span>
+            <input type="text" class="sel" placeholder="Enter Symbol" x-model="f.symbol"></label>
+          <label class="tlg-sf-r"><span class="tlg-f-l">Strategy</span>
+            <input type="text" class="sel" placeholder="Enter Strategy" x-model="f.strategy"></label>
+          <label class="tlg-sf-r"><span class="tlg-f-l">Message Text</span>
+            <input type="text" class="sel" placeholder="Enter keyword in message"
+                   x-model="f.q" @keyup.enter="applyFilters()"></label>
+          <button class="btn-primary tlg-sbtn" type="button" @click="applyFilters()">⌕ Search</button>
+        </div>
+      </section>
+
+      <section class="panel tlg-ret">
+        <h3 class="panel-title">RETENTION OVERVIEW</h3>
+        <table class="cap-table tlg-mini"><tbody>
+          <tr><td>Total Records</td>
+              <td class="rt mono" x-text="fmt((data.retention||{}).records)"></td></tr>
+          <tr><td>Oldest Record</td>
+              <td class="rt mono" x-text="tsFull((data.retention||{}).oldest)"></td></tr>
+          <tr><td>Newest Record</td>
+              <td class="rt mono" x-text="tsFull((data.retention||{}).newest)"></td></tr>
+          <tr><td>Retention Period</td>
+              <td class="rt"><span class="tlg-ni">NOT INSTRUMENTED</span></td></tr>
+        </tbody></table>
+        {# ⛔ No single retention number is invented. The trade tables have NO
+           configured policy; the ones that do are listed as they really are. #}
+        <p class="tlg-note" x-text="(data.gaps && data.gaps.retention_period) ? data.gaps.retention_period.reason : ''"></p>
+      </section>
+
+      <section class="panel tlg-crit">
+      <h3 class="panel-title">CRITICAL CHANGES
+        <span class="panel-sub" x-text="'(' + ((data.critical_changes||[]).length) + ' in range)'"></span>
+      </h3>
+      <div class="tlg-d-empty" x-show="!(data.critical_changes||[]).length" x-cloak>
+        No risk, capital, control or strategy setting changed in this window.
+      </div>
+      <ul class="tlg-crit-list">
+        <template x-for="c in data.critical_changes || []" :key="c.ref_id">
+          <li>
+            <span class="tlg-crit-t">
+              <i class="tlg-sev-dot tlg-sv-warning"></i>
+              <b x-text="c.title"></b>
+              <span class="mono tlg-dim" x-text="c.time"></span>
+            </span>
+            <span class="tlg-crit-v mono" x-text="c.field + ': ' + c.old_value + ' → ' + c.new_value"></span>
+          </li>
+        </template>
+      </ul>
+      </section>
+    </aside>
+  </div>
+
+
+  {# ── AUTO-RECOVERY · RECENT ERRORS · EXPORT ────────────────────────────── #}
+  <div class="tlg-row4">
+    <section class="panel tlg-recov">
+      <h3 class="panel-title">AUTO-RECOVERY HISTORY</h3>
+      <div class="tlg-tbl-wrap">
+        <table class="cap-table tlg-mini2">
+          <thead><tr><th class="lbl">Time</th><th class="lbl">Component</th>
+            <th class="lbl">Trigger</th><th class="lbl">Action</th>
+            <th class="lbl ctr">Status</th><th class="lbl ctr">Recovered In</th></tr></thead>
+          <tbody>
+            <template x-for="r in data.recovery || []" :key="r.ref_id">
+              <tr>
+                <td class="mono" x-text="r.time || '—'"></td>
+                <td x-text="r.component"></td>
+                <td x-text="r.trigger || '—'"></td>
+                <td x-text="r.action || '—'"></td>
+                <td class="ctr"><span class="pill" :class="statusPill(r.status)" x-text="r.status"></span></td>
+                {# ⛔ reconciliation_log stores ONE instant per action and no
+                   duration, so this column cannot be computed. #}
+                <td class="ctr"><span class="tlg-ni">NOT INSTRUMENTED</span></td>
+              </tr>
+            </template>
+            <tr x-show="!(data.recovery||[]).length" x-cloak>
+              <td colspan="6" class="tlg-empty">No recovery actions in this window.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel tlg-errs">
+      <h3 class="panel-title">RECENT ERRORS</h3>
+      <div class="tlg-tbl-wrap">
+        <table class="cap-table tlg-mini2">
+          <thead><tr><th class="lbl">Time</th><th class="lbl">Component</th>
+            <th class="lbl">Error Code</th><th class="lbl">Error Message</th>
+            <th class="lbl ctr">Resolution Status</th></tr></thead>
+          <tbody>
+            <template x-for="e in data.errors || []" :key="e.ref_id">
+              <tr>
+                <td class="mono" x-text="e.time || '—'"></td>
+                <td x-text="e.component || '—'"></td>
+                {# ⛔ No XXX-0000 scheme exists anywhere in this system, and no
+                   generic resolution state is stored. Both stay explicit gaps. #}
+                <td><span class="tlg-ni">NOT INSTRUMENTED</span></td>
+                <td class="tlg-msg" x-text="e.message"></td>
+                <td class="ctr"><span class="tlg-ni">NOT INSTRUMENTED</span></td>
+              </tr>
+            </template>
+            <tr x-show="!(data.errors||[]).length" x-cloak>
+              <td colspan="5" class="tlg-empty">No errors in this window.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel tlg-export">
+      <h3 class="panel-title">EXPORT</h3>
+      <p class="tlg-note">Export the filtered trade log events.</p>
+      <a class="btn-primary tlg-xbtn" :href="exportUrl()">⇩ Export to XLSX</a>
+    </section>
+  </div>
+
+  <div class="tlg-foot-note">
+    <span class="tlg-i">ⓘ</span>
+    All times are IST (Asia/Kolkata) exactly as stored. This page auto-updates on
+    the dashboard's own refresh cycle.
+    <b x-text="(data.gaps && data.gaps.signal_path_logs) ? data.gaps.signal_path_logs.reason : ''"></b>
+  </div>
 </div>
+
 <script>
 function tradeLogsPage() {
-  return Object.assign(pageBase("/api/trade-logs"), periodMixin("week"),
-    (typeof tableMixin === "function" ? tableMixin({defaultSize:100}) : {}),
-    (typeof filterMixin === "function" ? filterMixin([{key:"strategy"},{key:"scanner"},{key:"exit_reason"}]) : {}), {
-    refId: "", logFile: "", logFiles: [], logLines: [], refIdSearched: false,
-    qs() { const f = this.fQuery(); const p = this.pQuery(); return p + (f ? "&" + f.slice(1) : ""); },
-    logRows() { return (this.data.rows || []).map(r => Object.assign({}, r, {recon_n: (r.recon_actions || []).length})); },
-    async drill() {
-      this.refIdSearched = true;
-      const p = new URLSearchParams();
-      p.set("file", this.logFile || ("system_" + (this.data.to || "").slice(0,10) + ".log"));
-      if (this.refId) p.set("id", this.refId);
-      const r = await fetch("/api/logs?" + p.toString(), {credentials:"same-origin"});
-      const d = await r.json();
-      this.logFiles = d.files || this.logFiles;
-      this.logLines = d.rows || [];
+  return Object.assign(pageBase("/api/trade-logs/screen"),
+    (typeof tableMixin === "function" ? tableMixin({defaultSize: 10, pageSizes: [10, 25, 50, 100]}) : {}), {
+
+    KPIS: [
+      { key: "total_events", label: "TOTAL TRADE EVENTS", tone: "info",
+        ico: '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2" y="2" width="12" height="12" rx="2"/><path d="M5 6h6M5 9h4"/></svg>' },
+      { key: "successful", label: "SUCCESSFUL TRADES", tone: "pos",
+        ico: '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 8.5l3.2 3L13 5"/></svg>' },
+      { key: "failed", label: "FAILED TRADES", tone: "neg",
+        ico: '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 4l8 8M12 4l-8 8"/></svg>' },
+      { key: "warnings", label: "WARNINGS", tone: "warn",
+        ico: '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M8 2.5L14.5 13.5h-13z"/><path d="M8 6.5v3"/></svg>' },
+      { key: "errors", label: "ERRORS", tone: "neg",
+        ico: '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="8" r="6"/><path d="M8 5v4"/></svg>' },
+      { key: "last_event", label: "LAST EVENT TIME", tone: "info",
+        ico: '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="8" r="6"/><path d="M8 4.5V8l2.5 1.5"/></svg>' },
+    ],
+
+    /* ⛔ NO Scanner select. Strategy is retained. */
+    SELECTS: [
+      { key: "symbol",     label: "Symbol",     all: "All Symbols" },
+      { key: "strategy",   label: "Strategy",   all: "All Strategies" },
+      { key: "trade_type", label: "Trade Type", all: "All Types" },
+      { key: "direction",  label: "Direction",  all: "All Directions" },
+      { key: "event_type", label: "Event Type", all: "All Event Types" },
+      { key: "status",     label: "Status",     all: "All Statuses" },
+    ],
+
+    TABS: [{ k: "details", l: "DETAILS" }, { k: "rdo", l: "INPUT / DECISION / OUTPUT" },
+           { k: "raw", l: "RAW" }],
+
+    /* the approved 10 columns — ⛔ no Scanner; Component retained (it is in the
+       binding PNG and the logger/stage attribution is real) */
+    DEFAULT_COLS: [
+      { key: "date",       label: "Date" },
+      { key: "time",       label: "Time" },
+      { key: "trade_id",   label: "Trade ID" },
+      { key: "order_id",   label: "Order ID" },
+      { key: "symbol",     label: "Symbol" },
+      { key: "strategy",   label: "Strategy" },
+      { key: "event_type", label: "Event Type" },
+      { key: "status",     label: "Status", ctr: true },
+      { key: "message",    label: "Message" },
+      { key: "component",  label: "Component" },
+    ],
+    cols: [], dragKey: "", overKey: "", _dragEndAt: 0,
+    COLS_KEY: "screen14.tradelogs.colOrder.v1",
+
+    f: { start: "", end: "", trade_id: "", order_id: "", symbol: "", strategy: "",
+         trade_type: "", direction: "", event_type: "", status: "", q: "" },
+    sel: null,
+    tab: "details",
+    detail: { found: false },
+
+    init() {
+      this.initCols();
+      const today = new Date();
+      const back = new Date(today.getTime() - 6 * 86400000);
+      this.f.end = today.toISOString().slice(0, 10);
+      this.f.start = back.toISOString().slice(0, 10);
+      this.load();
     },
-    lvl(l) { return (l==="ERROR"||l==="CRITICAL")?"sev-CRITICAL":(l==="WARNING"?"sev-WARNING":(l==="INFO"?"sev-INFO":"")); },
+
+    qs() {
+      const p = new URLSearchParams();
+      Object.keys(this.f).forEach(k => { if (this.f[k]) p.set(k, this.f[k]); });
+      return "?" + p.toString();
+    },
+    applyFilters() {
+      this.tPage = 1;
+      this.clearSel();          /* a stale detail must not survive a refilter */
+      this.load();
+    },
+    resetFilters() {
+      Object.keys(this.f).forEach(k => { this.f[k] = ""; });
+      this.init();
+    },
+
+    rows() { return this.data.records || []; },
+    count() { return this.data.count || 0; },
+    opts(key) { return ((this.data.filters || {}).options || {})[key] || []; },
+
+    /* ── formatting ──────────────────────────────────────────────────────── */
+    fmt(n) { return (n === null || n === undefined) ? "—" : Number(n).toLocaleString("en-IN"); },
+    hhmmss(ts) { return ts ? String(ts).replace("T", " ").slice(11, 19) : ""; },
+    tsFull(ts) { return ts ? String(ts).replace("T", " ").slice(0, 19) : "—"; },
+    cell(r, k) { const v = r[k]; return (v === null || v === undefined || v === "") ? "—" : v; },
+
+    kpiValue(k) {
+      const d = this.data.kpi || {};
+      if (k === "last_event") return this.hhmmss(d.last_event_ts) || "—";
+      return this.fmt(d[k === "total_events" ? "total_events" : k]);
+    },
+    /* ⛔ EVERY PERCENTAGE CARRIES ITS OWN BASE. The two trade cards are a
+       percentage of the DISTINCT TRADES in view; the two event cards are a
+       percentage of EVENTS. Stating "%" alone would be two different numbers
+       wearing one label. */
+    kpiSub(k) {
+      const d = this.data.kpi || {};
+      if (k === "last_event") return (d.last_event_ts || "").slice(0, 10) || "—";
+      if (k === "total_events") return (this.data.from || "") + " → " + (this.data.to || "");
+      const p = d[k + "_pct"];
+      if (p === null || p === undefined) return "";
+      const trades = (k === "successful" || k === "failed");
+      const base = trades ? d.trades_in_view : d.total_events;
+      return p + "% of " + this.fmt(base) + (trades ? " trades" : " events");
+    },
+    sevPct(s) {
+      const n = this.count(), v = (this.data.by_severity || {})[s] || 0;
+      return n ? (Math.round(1000 * v / n) / 10) + "%" : "0%";
+    },
+    sparkPts(k) {
+      const s = (this.data.sparklines || {})[k === "total_events" ? "total_events" : k] || [];
+      if (!s.length) return "";
+      const max = Math.max.apply(null, s.concat([1]));
+      const step = s.length > 1 ? 120 / (s.length - 1) : 120;
+      return s.map((v, i) => (i * step).toFixed(1) + "," + (28 - 26 * (v / max)).toFixed(1)).join(" ");
+    },
+
+    statusPill(s) {
+      return s === "Success" ? "pill-ok" : (s === "Warning" ? "pill-warn" : "pill-err");
+    },
+    evClass(t) {
+      if (!t) return "";
+      if (t.indexOf("Rejected") >= 0) return "tlg-ev-neg";
+      if (t === "SL Hit") return "tlg-ev-warn";
+      if (t === "TGT Hit" || t.indexOf("Passed") >= 0) return "tlg-ev-pos";
+      if (t.indexOf("Order") === 0) return "tlg-ev-info";
+      return "tlg-ev-purple";
+    },
+
+    /* ── selection / detail ──────────────────────────────────────────────── */
+    async pick(r) {
+      if (Date.now() - this._dragEndAt < 250) return;
+      this.sel = r;
+      this.tab = "details";
+      this.detail = { found: false };
+      if (!r.trade_id) return;
+      const res = await fetch("/api/trade-logs/detail?trade_id=" + encodeURIComponent(r.trade_id),
+                              { credentials: "same-origin" });
+      if (res.ok) this.detail = await res.json();
+    },
+    clearSel() { this.sel = null; this.detail = { found: false }; },
+    replay() {
+      if (!this.sel || !this.sel.trade_id) return;
+      this.tab = "details";
+      const el = document.querySelector(".tlg-timeline");
+      if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+    },
+
+    detailRows() {
+      const s = this.sel; if (!s) return [];
+      const out = [
+        { k: "Trade ID", v: s.trade_id || "—" },
+        { k: "Order ID", v: s.order_id || "—" },
+        { k: "Symbol", v: s.symbol || "—" },
+        { k: "Strategy", v: s.strategy || "—" },
+        { k: "Event Type", v: s.event_type },
+        { k: "Status", v: s.status },
+        { k: "Severity", v: s.severity },
+        { k: "Component", v: s.component || "—" },
+        { k: "Message", v: s.message },
+        { k: "Reference ID", v: s.ref_id },
+        { k: "Timestamp", v: this.tsFull(s.ts) },
+      ];
+      const lat = (this.detail.request_response || {}).latency || {};
+      out.push({ k: "Latency", v: lat.total_latency_ms != null ? lat.total_latency_ms + " ms" : "NOT INSTRUMENTED",
+                 gap: lat.total_latency_ms == null });
+      /* ⛔ Error Code, Resolution and User have no source in this system. */
+      out.push({ k: "Error Code", v: "NOT INSTRUMENTED", gap: true });
+      out.push({ k: "Resolution Status", v: "NOT INSTRUMENTED", gap: true });
+      out.push({ k: "User", v: "NOT INSTRUMENTED", gap: true });
+      return out;
+    },
+    rdoRows() {
+      const d = this.detail.request_response;
+      if (!d) return [{ k: "Input", v: "NOT INSTRUMENTED", gap: true }];
+      const i = d.input || {}, dec = d.decision || {}, o = d.output || {};
+      const na = v => (v === null || v === undefined || v === "") ? "—" : v;
+      return [
+        /* ⛔ L8: the ACHIEVED score is labelled SYSTEM SCORE and the eligibility
+           bar is the SCORE THRESHOLD — two genuinely different real columns,
+           never one printed twice. The older per-signal label was retired
+           project-wide and a tree-wide guard fails on it.
+           ⚠️ That guard reads RAW source and does NOT strip comments, so the
+           retired words are deliberately NOT written out here — spelling them
+           while explaining the rule is how this same trap has bitten before. */
+        { k: "Input · System Score", v: na(i.system_score) },
+        { k: "Input · Score Threshold", v: na(i.eligible_score) },
+        { k: "Input · Trigger Price", v: na(i.trigger_price) },
+        { k: "Decision", v: na(dec.verdict) },
+        { k: "Decision · Signal Status", v: na(dec.signal_status) },
+        { k: "Decision · Rejection Reason", v: na(dec.rejection_reason) },
+        { k: "Decision · Binding Constraint", v: na(dec.binding_constraint) },
+        { k: "Output", v: na(o.result) },
+        { k: "Output · Qty (planned / filled)", v: na(o.qty_planned) + " / " + na(o.qty_filled) },
+        { k: "Output · Entry Price", v: na(o.entry_price) },
+        { k: "Output · Exit Price", v: na(o.exit_price) },
+        { k: "Output · Net P&L", v: na(o.net_pnl) },
+      ];
+    },
+    rawJson() { return this.sel ? JSON.stringify(this.sel, null, 2) : ""; },
+
+    exportUrl() { return "/api/export/trade-logs" + this.qs(); },
+
+    showing() {
+      const n = this.rows().length;
+      if (!n) return "Showing 0 to 0 of 0 entries";
+      const a = (this.tPage - 1) * this.tPageSize + 1;
+      const b = Math.min(n, this.tPage * this.tPageSize);
+      return "Showing " + a + " to " + b + " of " + this.fmt(n) + " entries";
+    },
+    pageList() {
+      const t = this.tPageCount(this.rows()), c = this.tPage, out = [];
+      if (t <= 7) { for (let i = 1; i <= t; i++) out.push(i); return out; }
+      out.push(1);
+      if (c > 3) out.push("…");
+      for (let i = Math.max(2, c - 1); i <= Math.min(t - 1, c + 1); i++) out.push(i);
+      if (c < t - 2) out.push("…");
+      out.push(t);
+      return out;
+    },
+
+    /* ── column order: the Screens 04/05/07/11/12/13 convention, reused ───── */
+    initCols() {
+      this.cols = this.DEFAULT_COLS.slice();
+      let saved = null;
+      try { saved = JSON.parse(window.localStorage.getItem(this.COLS_KEY) || "null"); }
+      catch (e) { saved = null; }
+      if (!Array.isArray(saved) || !saved.length) return;
+      const byKey = {};
+      this.DEFAULT_COLS.forEach(c => { byKey[c.key] = c; });
+      const next = [];
+      saved.forEach(k => { if (byKey[k] && next.indexOf(byKey[k]) === -1) next.push(byKey[k]); });
+      this.DEFAULT_COLS.forEach(c => { if (next.indexOf(c) === -1) next.push(c); });
+      if (next.length === this.DEFAULT_COLS.length) this.cols = next;
+    },
+    saveCols() {
+      try { window.localStorage.setItem(this.COLS_KEY, JSON.stringify(this.cols.map(c => c.key))); }
+      catch (e) {}
+    },
+    isDefaultOrder() {
+      return this.cols.length === this.DEFAULT_COLS.length
+             && this.cols.every((c, i) => c.key === this.DEFAULT_COLS[i].key);
+    },
+    resetCols() {
+      this.cols = this.DEFAULT_COLS.slice();
+      try { window.localStorage.removeItem(this.COLS_KEY); } catch (e) {}
+    },
+    onDragStart(key, ev) {
+      this.dragKey = key;
+      if (ev && ev.dataTransfer) {
+        ev.dataTransfer.effectAllowed = "move";
+        try { ev.dataTransfer.setData("text/plain", key); } catch (e) {}
+      }
+    },
+    onDrop(targetKey) {
+      const from = this.cols.findIndex(c => c.key === this.dragKey);
+      const to = this.cols.findIndex(c => c.key === targetKey);
+      this.overKey = "";
+      if (from < 0 || to < 0 || from === to) return;
+      const next = this.cols.slice();
+      next.splice(to, 0, next.splice(from, 1)[0]);
+      this.cols = next;
+      this.saveCols();
+      this._dragEndAt = Date.now();
+    },
+    onDragEnd() { this.dragKey = ""; this.overKey = ""; this._dragEndAt = Date.now(); },
+    headClick(key) {
+      if (Date.now() - this._dragEndAt < 250) return;   /* drag, not a sort click */
+      this.tSort(key);
+    },
   });
 }
 </script>
