@@ -22,7 +22,9 @@ explicit gap — ⛔ never as 0, and ⛔ never as green.
   ✅ last DB backup                                       data_store/backups/
   ✅ disk %                                               shutil (all platforms)
   ✅ RAM available + system load                          /proc + getloadavg (LINUX ONLY)
-  ✅ readiness + per-group checks                         preflight_runs / _check_results
+  ✅ readiness = LIVE required-service state × preflight   services × preflight_runs
+  ✅ preflight per-group checks (HISTORICAL)              preflight_runs / _check_results
+  ✅ disk % THROUGH DAY                                   analytics.system_metrics
   ✅ auto-recovery lifecycle                              preflight_autofix_log
   ✅ service events                                       system_events
   ✅ alerts                                               telegram_alerts · control_tower · sentinels
@@ -101,6 +103,36 @@ _PILLARS = (
 _CHECK_STATUS = {"PASS": HEALTHY, "AUTOFIXED": WARNING, "WARN": WARNING,
                  "FAIL": FAILED, "SKIPPED": UNKNOWN}
 
+# ─────────────────────────────────────────────────────────────────────────────
+# WHICH SERVICES GATE TRADING SAFETY *RIGHT NOW*
+#
+# ⛔ This is NOT a new safety policy invented in the GUI. It names the same
+# components preflight itself gates on — its Broker / Database / Engine pillars
+# — plus the systemd unit that IS the trader. Everything else (the watchers, the
+# cron timer, this dashboard) can be degraded without making an OPEN position
+# unsafe: they colour Overall Status but ⛔ do not force NOT READY.
+#
+# ⚠️ `security-watcher.service` is DELIBERATELY ABSENT. `activating/auto-restart`
+# is its DESIGNED `RestartSec=60` heartbeat, so requiring it would fire a
+# permanent false NOT READY — the exact "do not 'fix' the watcher" trap.
+#
+# ⚠️ `token-watcher.service` is absent for a different reason: it gates the NEXT
+# 08:15 boot, ⛔ not the safety of a position open right now. Its failure is a
+# real WARNING on the service table; it is not a live trading blocker.
+_REQUIRED_UNITS = ("trading-system.service",)
+_REQUIRED_KINDS = ("engine", "engine-component", "database")
+
+
+def _is_required(row: dict) -> bool:
+    """Does this service gate trading safety RIGHT NOW?
+
+    ⭐ Broker connectivity is covered ⛔ not by a unit row but by preflight's
+    Broker pillar and by the engine's own `/health` component checks, both of
+    which already feed the verdict — so there is no separate broker row to flag.
+    """
+    return (row.get("service") in _REQUIRED_UNITS
+            or row.get("kind") in _REQUIRED_KINDS)
+
 
 def _worst(statuses) -> str:
     """Worst-wins rollup. Empty ⇒ UNKNOWN, ⛔ never HEALTHY."""
@@ -123,12 +155,28 @@ def _fmt_uptime(sec: Optional[float]) -> Optional[str]:
 
 
 def _gap(reason: str) -> dict:
-    """An un-instrumented metric. ⛔ No value, ⛔ no status that could read green."""
-    return {"measured": False, "value": None, "status": UNKNOWN, "reason": reason}
+    """NOT INSTRUMENTED — the system never records this. ⛔ No value, ⛔ no status
+    that could read green. More waiting will never fill it in."""
+    return {"measured": False, "instrumented": False, "value": None,
+            "status": UNKNOWN, "reason": reason}
+
+
+def _nodata(reason: str) -> dict:
+    """NO DATA — the metric IS real and IS collected; nothing has been recorded
+    here yet (an empty table, or a host where the source is unavailable).
+
+    ⛔ NOT the same as `_gap`, and the difference is not cosmetic: labelling a
+    metric the system genuinely measures as "NOT INSTRUMENTED" UNDER-reports the
+    system, exactly as charting a -1.0 sentinel would over-report it. The reason
+    string carries the specifics.
+    """
+    return {"measured": False, "instrumented": True, "value": None,
+            "status": UNKNOWN, "reason": reason}
 
 
 def _val(value, status=HEALTHY, unit=None) -> dict:
-    return {"measured": True, "value": value, "status": status, "unit": unit}
+    return {"measured": True, "instrumented": True, "value": value,
+            "status": status, "unit": unit}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -261,16 +309,22 @@ def _vm_health(cfg: dict) -> dict:
                         "absent from the VM venv (capture_metrics_baseline.py:121-126)"),
         "ram_pct": _gap("no RAM percentage exists: /proc/meminfo MemTotal is not "
                         "read, so a denominator would have to be invented"),
+        # ⭐ RAM-available and load ARE instrumented — they are read straight from
+        # /proc and getloadavg on the Linux VM this system runs on. Absent here
+        # only because this host is Windows, so they are NO DATA, ⛔ never
+        # "NOT INSTRUMENTED": the production system genuinely reports both.
         "ram_available_mb": (_val(round(mem_kb / 1024.0, 1), HEALTHY, "MB")
                              if mem_kb is not None
-                             else _gap("/proc/meminfo is Linux-only; unavailable here")),
+                             else _nodata("/proc/meminfo is Linux-only — read on "
+                                          "the VM, unavailable on this host")),
         "disk_pct": (_val(disk_pct, disk_status, "%") if disk_pct is not None
-                     else _gap("disk usage could not be read")),
+                     else _nodata("disk usage could not be read on this host")),
         "disk_detail": disk,
         "network": _gap("no network/bandwidth metric is collected anywhere in "
                         "the system — there is nothing to read"),
         "system_load": (_val(round(load, 2), HEALTHY) if load is not None
-                        else _gap("os.getloadavg() is Linux-only; unavailable here")),
+                        else _nodata("os.getloadavg() is Linux-only — read on the "
+                                     "VM, unavailable on this host")),
     }
 
 
@@ -303,9 +357,12 @@ def _broker_health(cfg: dict, pf: Optional[dict]) -> dict:
         "funds_available": _st("kite_funds_available"),
         "last_api_call": _gap("no per-call broker API timestamp is recorded; the "
                               "closest real evidence is the last successful order"),
+        # ⭐ INSTRUMENTED — `orders.filled_at` is written on every fill. An empty
+        # result is NO DATA (nothing has filled), ⛔ not an instrumentation gap.
         "last_successful_order": (
             _val(order.get("filled_at"), HEALTHY) if order
-            else _gap("no order has ever filled in this database")),
+            else _nodata("no order has ever filled in this database — the fill "
+                         "timestamp itself IS recorded (orders.filled_at)")),
         "checked_at": (pf or {}).get("completed_at") or (pf or {}).get("started_at"),
     }
 
@@ -354,15 +411,18 @@ def _dependencies(cfg: dict, pf: Optional[dict], units: list, dbh: dict,
 # ─────────────────────────────────────────────────────────────────────────────
 # Readiness · recovery · events · alerts
 # ─────────────────────────────────────────────────────────────────────────────
-def _readiness(pf: Optional[dict]) -> dict:
-    """Trading readiness from the SYSTEM'S OWN preflight verdict.
+def _preflight_verdict(pf: Optional[dict]) -> dict:
+    """GATE ① — the morning's go/no-go, read from the SYSTEM'S OWN preflight run.
 
-    ⛔ NOT a re-derivation, and ⛔ NOT a copy of Overall Status: the reference is
-    explicit that a non-critical warning may still permit READY, and preflight
-    already encodes exactly that as `READY_WITH_WARNINGS`. Mapping Overall Status
-    onto readiness would make a degraded-but-safe system look untradeable, and —
-    far worse — could make a system with a failed BROKER look ready because most
-    services happened to be up.
+    ⚠️⚠️ THIS IS HISTORY, ⛔ NOT THE CURRENT ANSWER. It is a point-in-time
+    judgement stamped 08:30 / 09:14; a service can die at 11:00. The screen's
+    authoritative verdict is `_live_readiness()` below, which uses this as ONE of
+    its two gates. ⛔ Do not render this object as the headline readiness state —
+    doing exactly that is the defect Rama rejected on 15-Aug.
+
+    ⛔ NOT a copy of Overall Status: the reference is explicit that a
+    non-critical warning may still permit trading, and preflight already encodes
+    that as `READY_WITH_WARNINGS`.
     """
     if not pf:
         return {"ready": None, "verdict": UNKNOWN,
@@ -426,12 +486,108 @@ def _readiness(pf: Optional[dict]) -> dict:
     if blockers:
         reason += " · blocking: " + "; ".join(sorted(set(blockers))[:5])
     return {"ready": ready, "verdict": verdict, "reason": reason,
+            # ⛔ READY_WITH_WARNINGS must NOT collapse to a bare "READY" — the
+            # warnings are the reason an operator looks at this block at all.
+            "label": ("READY (WITH WARNINGS)" if overall == "READY_WITH_WARNINGS"
+                      else "READY" if ready
+                      else "NOT READY" if ready is False else "NOT EVALUATED"),
             "corroborated": corroborated, "checks_evaluated": evaluated,
             "overall_status": pf.get("overall_status"), "phase": pf.get("phase"),
             "evaluated_at": pf.get("completed_at") or pf.get("started_at"),
             "failed_critical": pf.get("failed_critical"),
             "warnings": pf.get("warnings"), "total_checks": pf.get("total_checks"),
             "pillars": pillars, "blockers": sorted(set(blockers))}
+
+
+def _live_readiness(pfv: dict, services: list) -> dict:
+    """THE AUTHORITATIVE CURRENT VERDICT — computed from the LIVE state.
+
+    ⚠️⚠️ THE DEFECT THIS REPLACES (Rama, 15-Aug, blocking): the first build made
+    preflight's MORNING verdict the headline answer and merely printed a warning
+    underneath when live state contradicted it. The screen therefore rendered
+    **"Trading Readiness: READY" beside "Trading Engine: FAILED"** — it answered
+    its own headline question, *"is trading safe right now?"*, with a stale yes.
+    His ruling, quoted: *"Make the live readiness verdict authoritative … A stale
+    preflight READY result must never remain the main current READY state after a
+    required live service has failed."*
+
+    ⭐ I had argued the GUI should not overrule preflight. That was wrong in the
+    way that matters: displaying a stale READY as the CURRENT verdict is itself
+    the unsafe act, and applying preflight's OWN rule (a required component down
+    is unsafe) to live data is ⛔ not a new policy — it is the same policy, read
+    against a fresher clock.
+
+    TWO GATES, BOTH MUST PASS — ⛔ neither re-derives the other:
+      ① PREFLIGHT — the morning go/no-go. A `CRITICAL_FAILURE` is ⛔ NOT cured by
+         services being up now: a missing holiday calendar stays missing.
+      ② LIVE — every service that gates trading safety must be up NOW. A morning
+         PASS is ⛔ NOT evidence about 11:00.
+    ⇒ READY only when BOTH permit. Worst-wins, the same rollup as everywhere else.
+
+    ⛔ UNKNOWN NEVER READS AS READY. If a required service cannot be evaluated
+    (no `systemctl`, engine unreachable) the verdict is NOT CONFIRMED — ⛔ not
+    READY (an unearned all-clear) and ⛔ not NOT READY (a fabricated incident).
+    """
+    req = [s for s in services if s.get("required")]
+    live = _worst([s["status"] for s in req])          # ⛔ empty ⇒ UNKNOWN
+    failed = [s["service"] for s in req if s["status"] == FAILED]
+    unknown = [s["service"] for s in req if s["status"] == UNKNOWN]
+
+    pf_ready = pfv.get("ready")                        # True / False / None
+    blockers = list(pfv.get("blockers") or [])
+    blockers += ["live — %s is FAILED" % s for s in failed]
+
+    if live == FAILED:
+        ready, verdict = False, FAILED
+        reason = ("%d service(s) that trading depends on are FAILED right now: %s"
+                  % (len(failed), ", ".join(failed[:4])))
+        if pf_ready:
+            reason += (" — preflight judged the system %s at %s, but that verdict "
+                       "is older than this failure"
+                       % (pfv.get("overall_status") or "READY",
+                          pfv.get("evaluated_at") or "an earlier time"))
+    elif pf_ready is False:
+        ready, verdict = False, FAILED
+        reason = ("preflight blocked trading (%s) and no live signal can clear a "
+                  "failed critical pre-check" % (pfv.get("overall_status") or "?"))
+    elif live == UNKNOWN:
+        ready, verdict = None, UNKNOWN
+        reason = ("trading readiness could not be confirmed — %d required "
+                  "service(s) could not be evaluated: %s"
+                  % (len(unknown), ", ".join(unknown[:4]) or "none reported"))
+    elif pf_ready is None:
+        ready, verdict = None, UNKNOWN
+        reason = (pfv.get("reason")
+                  or "no preflight verdict exists for today, so readiness is "
+                     "unconfirmed — ⛔ absence of a verdict is not a READY verdict")
+    else:
+        ready = True
+        degraded = live == WARNING or pfv.get("verdict") == WARNING
+        verdict = WARNING if degraded else HEALTHY
+        reason = ("every service trading depends on is up now, and preflight "
+                  "permitted trading at %s" % (pfv.get("evaluated_at") or "boot"))
+        if degraded:
+            reason += " — degraded, but no critical dependency has failed"
+
+    return {
+        "ready": ready, "verdict": verdict, "reason": reason,
+        "label": ("READY" if ready else
+                  "NOT READY" if ready is False else "NOT CONFIRMED"),
+        "as_of": "now",
+        "live_status": live,
+        "failed_required": failed,
+        "unknown_required": unknown,
+        "blockers": sorted(set(blockers)),
+        # ⭐ AUDITABLE: the operator can see WHICH services were allowed to gate
+        # the verdict, so the policy is inspectable rather than buried in code.
+        "required_services": [{"service": s["service"], "kind": s["kind"],
+                               "status": s["status"]} for s in req],
+        "basis": ("BOTH gates must permit: ① preflight's morning verdict and "
+                  "② the live status of every service trading depends on. ⛔ The "
+                  "morning verdict alone cannot make this READY."),
+        # Preflight travels as clearly-labelled HISTORY, ⛔ never as the answer.
+        "preflight": pfv,
+    }
 
 
 def _recovery(cfg: dict, today: str) -> dict:
@@ -542,26 +698,46 @@ def _alerts(cfg: dict, today: str, limit: int = 25) -> list:
 
 
 def _trends(cfg: dict) -> dict:
-    """Health trends. ⛔ TWO OF THE THREE THE REFERENCE ASKS FOR DO NOT EXIST."""
+    """Health trends over the day.
+
+    ⛔ THREE DISTINCT REASONS A PANEL CAN BE EMPTY, AND THEY MUST NOT BE MERGED:
+      ① NOT INSTRUMENTED — the collector never records a real value. CPU and RAM:
+        `system_metrics.cpu_pct`/`memory_mb` are `-1.0` SENTINELS because psutil
+        is absent from the VM venv (`capture_metrics_baseline.py:121-126`). More
+        history will never help; this needs psutil ON THE VM.
+      ② NOT PERSISTED — the value IS measured live but nothing stores a series.
+        Response time: every probe is timed, none is written to any table.
+      ③ NO DATA ON THIS HOST — instrumented, real, simply not collected here.
+        Disk: `disk_used_pct` is genuine (shutil, since 29-Jun) and the VM writes
+        ~75 snapshots/day, but a dev PC that never ran the collector has none.
+
+    ⭐ ③ IS NOT A GAP IN THE SYSTEM — saying "NOT INSTRUMENTED" over a metric the
+    VM really collects would under-report the system, exactly as charting a
+    `-1.0` sentinel would over-report it.
+    """
     disk = db_reader.system_metrics_disk_history(cfg, limit=60)
+    series = [{"ts": d.get("timestamp"), "value": d.get("disk_used_pct")}
+              for d in disk
+              if d.get("disk_used_pct") is not None and d.get("disk_used_pct") >= 0]
     return {
-        "cpu": {"measured": False, "series": [],
+        "cpu": {"measured": False, "instrumented": False, "series": [],
                 "reason": "system_metrics.cpu_pct is a -1.0 sentinel — psutil is "
                           "absent from the VM venv, so no CPU series was ever "
                           "collected (capture_metrics_baseline.py:121-126)"},
-        "ram": {"measured": False, "series": [],
+        "ram": {"measured": False, "instrumented": False, "series": [],
                 "reason": "system_metrics.memory_mb is the same -1.0 sentinel"},
-        "response_time": {"measured": False, "series": [],
+        "response_time": {"measured": False, "instrumented": False, "series": [],
                           "reason": "the health-endpoint round trip is measured "
                                     "live but never persisted, so there is no "
                                     "series to plot"},
-        # ⭐ The ONE real series, offered in place of the three that are not —
-        # labelled as a substitution rather than passed off as the others.
-        "disk": {"measured": bool(disk),
-                 "series": [{"ts": d.get("ts"), "value": d.get("disk_used_pct")}
-                            for d in disk if d.get("disk_used_pct") is not None
-                            and d.get("disk_used_pct") >= 0],
-                 "unit": "%",
+        # ⭐ The one REAL series. `instrumented` stays True even with no rows, so
+        # an empty dev-PC chart cannot be misread as a hole in the system.
+        "disk": {"measured": bool(series), "instrumented": True,
+                 "series": series, "unit": "%",
+                 "reason": (None if series else
+                            "disk usage IS collected (real, shutil-based) but "
+                            "this host has recorded no snapshots — the 5-minute "
+                            "collector runs on the VM"),
                  "note": "disk is the only host metric with a real history — "
                          "shown because it exists, ⛔ not as a stand-in for CPU"},
     }
@@ -591,6 +767,9 @@ def build_system_health(cfg, status_filter=None, kind_filter=None) -> dict:
     t0 = time.perf_counter()
     services = _unit_rows(cfg) + _engine_rows(trader) + [_db_row(dbh)]
     services.append(_dashboard_row(round((time.perf_counter() - t0) * 1000.0, 2)))
+    # Which of these gate trading safety RIGHT NOW — see `_is_required`.
+    for s in services:
+        s["required"] = _is_required(s)
 
     options = {"status": list(_STATUSES),
                "kind": sorted({s["kind"] for s in services})}
@@ -611,31 +790,24 @@ def build_system_health(cfg, status_filter=None, kind_filter=None) -> dict:
     up_sec = ((trader.get("health") or {}).get("uptime_seconds")
               if trader.get("trader_alive") else None)
 
-    readiness = _readiness(pf)
+    # ⚠️⚠️ THE HEADLINE QUESTION OF THIS SCREEN — "is trading safe RIGHT NOW?" —
+    # is answered by the LIVE verdict, ⛔ never by preflight's morning stamp.
+    pfv = _preflight_verdict(pf)
+    readiness = _live_readiness(pfv, services)
 
-    # ⚠️⚠️ THE MOST IMPORTANT LINE ON THIS SCREEN. Preflight's verdict is a
-    # POINT-IN-TIME judgement made at 08:30 / 09:14; a service can die at 11:00.
-    # Showing "READY" beside a dead trading engine would answer the screen's
-    # headline question — "is trading safe to continue?" — with a stale yes.
-    #
-    # ⛔ The preflight verdict is NOT overwritten (it is the system's own, and
-    # inventing a NOT READY here would be the GUI making a safety call it is not
-    # the authority for). Instead the CONTRADICTION is stated, with the two
-    # timestamps, so the operator sees both facts and their ages.
-    failed_now = [s["service"] for s in services if s["status"] == FAILED]
-    contradiction = None
-    if readiness.get("ready") and failed_now:
-        contradiction = {
-            "severity": FAILED,
-            "message": ("preflight judged the system READY at %s, but %d "
-                        "service(s) are FAILED right now: %s"
-                        % (readiness.get("evaluated_at") or "an earlier time",
-                           len(failed_now), ", ".join(failed_now[:4]))),
-            "failed_services": failed_now,
-            "note": "readiness is a point-in-time verdict; live service state is "
-                    "now. ⛔ Neither figure is adjusted to agree with the other",
+    # Preflight is retained as HISTORY. When the live verdict disagrees with it,
+    # say so ON the historical block, so the operator can see that the morning's
+    # answer has been overtaken rather than silently dropped. ⛔ This is context,
+    # ⛔ not the verdict — the verdict above already accounts for it.
+    if pfv.get("ready") and readiness.get("ready") is not True:
+        pfv["superseded"] = {
+            "by": readiness["label"],
+            "message": ("this verdict is SUPERSEDED: preflight judged the system "
+                        "%s at %s, but the live state now reads %s"
+                        % (pfv.get("overall_status") or "READY",
+                           pfv.get("evaluated_at") or "an earlier time",
+                           readiness["label"])),
         }
-    readiness["live_contradiction"] = contradiction
 
     return {
         "today": today,
@@ -660,7 +832,7 @@ def build_system_health(cfg, status_filter=None, kind_filter=None) -> dict:
                                    "reports no uptime")},
         "last_health_check": {
             "trader": (trader.get("health") or {}).get("timestamp"),
-            "preflight": readiness.get("evaluated_at"),
+            "preflight": pfv.get("evaluated_at"),
             "dashboard": freshness.ist_now().isoformat(),
             "note": "three independent clocks — the engine's own health stamp, "
                     "the last preflight run, and this page's build time",
@@ -701,6 +873,9 @@ def build_system_health(cfg, status_filter=None, kind_filter=None) -> dict:
 # not attribution.
 EXPORT_COLS = [
     ("Service", "service"), ("Kind", "kind"), ("Status", "status"),
+    # ⭐ Whether this service gates the live readiness verdict — the reader can
+    # then see WHY a NOT READY was produced, ⛔ not just that it was.
+    ("Gates Trading", "required"),
     ("Raw State", "raw_state"), ("Sub State", "sub_state"),
     ("Started At", "started_at"), ("Uptime", "uptime"),
     ("Uptime (sec)", "uptime_sec"), ("Restarts", "restarts"),
@@ -714,12 +889,20 @@ def export_sheets(payload: dict) -> list:
     served, so no sheet can disagree with the page."""
     ov, rd, vm = payload["overall"], payload["readiness"], payload["vm"]
     db, bk = payload["database"], payload["broker"]
+    _pf = rd.get("preflight") or {}          # historical verdict, ⛔ not current
 
     def _m(d):
-        """Render a measured/gap dict for a spreadsheet cell."""
+        """Render a measured/gap dict for a spreadsheet cell.
+
+        ⛔ Never a blank — a spreadsheet reader takes an empty cell for zero. And
+        ⛔ never "NOT INSTRUMENTED" for something the system does measure: NO DATA
+        says the metric is real but nothing has been recorded.
+        """
         if not isinstance(d, dict):
             return d
-        return d.get("value") if d.get("measured") else "NOT INSTRUMENTED"
+        if d.get("measured"):
+            return d.get("value")
+        return "NO DATA" if d.get("instrumented") else "NOT INSTRUMENTED"
 
     def _why(d):
         return "" if not isinstance(d, dict) else (d.get("reason") or "")
@@ -733,11 +916,20 @@ def export_sheets(payload: dict) -> list:
         ("Uptime", payload["uptime"]["text"] or "NOT AVAILABLE"),
         ("Uptime source", payload["uptime"]["source"]),
         ("", ""),
-        ("TRADING READINESS", "READY" if rd["ready"] else
-         ("NOT READY" if rd["ready"] is False else "NOT EVALUATED")),
+        # ⚠️ The CURRENT verdict, from live state. Preflight follows it as
+        # clearly-labelled history so the spreadsheet cannot imply a stale READY.
+        ("TRADING READINESS (NOW)", rd["label"]),
         ("Readiness verdict", rd["verdict"]), ("Readiness reason", rd["reason"]),
-        ("Preflight overall_status", rd["overall_status"]),
-        ("Preflight phase", rd["phase"]), ("Evaluated at", rd["evaluated_at"]),
+        ("Readiness basis", rd["basis"]),
+        ("Live status of required services", rd["live_status"]),
+        ("Required services FAILED now", ", ".join(rd["failed_required"]) or "none"),
+        ("Required services UNKNOWN now", ", ".join(rd["unknown_required"]) or "none"),
+        ("Blocking", "; ".join(rd["blockers"]) or "nothing"),
+        ("PREFLIGHT VERDICT (HISTORICAL)", _pf.get("label")),
+        ("Preflight overall_status", _pf.get("overall_status")),
+        ("Preflight phase", _pf.get("phase")),
+        ("Preflight evaluated at", _pf.get("evaluated_at")),
+        ("Preflight superseded", (_pf.get("superseded") or {}).get("message") or "no"),
         ("", ""),
         ("CPU %", _m(vm["cpu_pct"])), ("CPU % why", _why(vm["cpu_pct"])),
         ("RAM %", _m(vm["ram_pct"])), ("RAM % why", _why(vm["ram_pct"])),
@@ -766,7 +958,7 @@ def export_sheets(payload: dict) -> list:
          [[r.get(k) for _h, k in EXPORT_COLS] for r in payload["services"]]),
         ("Readiness", ["Pillar", "Status", "Checks", "Failed checks", "Note"],
          [[p["pillar"], p["status"], p["checks"], ", ".join(p["failed"]),
-           p.get("note") or ""] for p in rd["pillars"]]),
+           p.get("note") or ""] for p in _pf.get("pillars") or []]),
         ("Dependencies", ["Dependency", "Status", "Measured", "Source"],
          [[d["name"], d["status"], d["measured"], d["source"]]
           for d in payload["dependencies"]]),

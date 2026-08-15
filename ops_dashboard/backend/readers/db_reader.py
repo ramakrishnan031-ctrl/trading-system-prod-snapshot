@@ -1572,12 +1572,29 @@ def system_metrics_disk_history(cfg: dict, limit: int = 60) -> list:
 
     cpu/mem columns are -1.0 sentinels on the VM (psutil absent) — only disk is
     real; callers state that gap, never chart the sentinels.
+
+    ⚠️⚠️ FIXED 15-Aug — THIS QUERY COULD NEVER HAVE RETURNED A ROW IN PRODUCTION.
+    It selected `ts` and ordered by `id`, but `core/analytics_schema.sql:51`
+    declares the columns as `timestamp … disk_used_pct` with ⛔ NO `id` at all.
+    Against the real analytics.db it raised `OperationalError: no such column:
+    ts`, which the `except` below swallowed into `[]` ⇒ the Health Trends disk
+    series was STRUCTURALLY EMPTY and rendered as "NOT INSTRUMENTED" — a real,
+    collected metric reported as a gap.
+
+    ⭐ IT LOOKED CORRECT because the test fixture invented `id`+`ts` columns that
+    production does not have: the fixture asserted what its own data could not
+    support, so a wrong reader read green. The fixture now mirrors the shipped
+    schema. ⛔ Check a fixture against PRODUCTION SHAPE, not against the reader.
+
+    ⭐ `timestamp` is also the correct ORDER BY on its own merits — it is what
+    the row is stamped with and what the caller plots, so the ordering can no
+    longer disagree with the axis.
     """
     with _ro(cfg) as conn:
         try:
             rows = conn.execute(
-                "SELECT ts, disk_used_pct FROM system_metrics "
-                "ORDER BY id DESC LIMIT ?", (int(limit),),
+                "SELECT timestamp, disk_used_pct FROM system_metrics "
+                "ORDER BY timestamp DESC LIMIT ?", (int(limit),),
             ).fetchall()
         except sqlite3.OperationalError:
             return []

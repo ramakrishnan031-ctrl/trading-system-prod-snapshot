@@ -133,9 +133,120 @@ def test_trends_declare_which_series_do_not_exist(client):
     tr = _h(client)["trends"]
     for k in ("cpu", "ram", "response_time"):
         assert tr[k]["measured"] is False, k
+        assert tr[k]["instrumented"] is False, k     # ⛔ never merely "no data"
         assert tr[k]["series"] == [], k
         assert tr[k]["reason"], k
     assert "sentinel" in tr["cpu"]["reason"]
+
+
+def test_the_disk_series_is_real_and_is_not_labelled_not_instrumented(client):
+    """⚠️⚠️ REGRESSION PIN. The shipped reader selected `ts` and ordered by `id`,
+    but production `system_metrics` (core/analytics_schema.sql:51) has neither —
+    it has `timestamp` and NO `id`. Against the real DB the query raised
+    `OperationalError: no such column: ts`, which was swallowed into `[]`, so a
+    metric the VM genuinely collects rendered as "NOT INSTRUMENTED".
+
+    ⛔ It passed its tests anyway because the FIXTURE invented `id`+`ts`. The
+    fixture now mirrors the shipped schema, so this test could not pass against
+    the old reader."""
+    disk = _h(client)["trends"]["disk"]
+    assert disk["instrumented"] is True          # ⛔ NOT an instrumentation gap
+    assert disk["measured"] is True
+    assert len(disk["series"]) == 6
+    assert all(p["ts"] and p["value"] is not None for p in disk["series"])
+    # oldest → newest, so the chart's x-axis cannot run backwards
+    assert [p["ts"] for p in disk["series"]] == sorted(p["ts"] for p in disk["series"])
+    # ⛔ and the -1.0 psutil sentinels seeded alongside are NEVER plotted
+    assert all(p["value"] >= 0 for p in disk["series"])
+
+
+def test_not_instrumented_and_no_data_are_different_states_everywhere(client):
+    """⛔ A metric the system DOES measure must never be labelled NOT
+    INSTRUMENTED just because this host has recorded nothing. Under-reporting
+    the system is as wrong as over-reporting it."""
+    d = _h(client)
+    vm, bk = d["vm"], d["broker"]
+    # genuinely uninstrumented — no collector exists
+    for k in ("cpu_pct", "ram_pct", "network"):
+        assert vm[k]["instrumented"] is False, k
+    assert bk["last_api_call"]["instrumented"] is False
+    # instrumented, simply not recorded on THIS host
+    for k in ("ram_available_mb", "system_load"):
+        assert vm[k]["instrumented"] is True, k
+        assert "VM" in vm[k]["reason"], k
+    assert bk["last_successful_order"]["instrumented"] is True
+    assert "orders.filled_at" in bk["last_successful_order"]["reason"]
+    # ⛔ neither ever produces a number or a green status
+    for m in (vm["cpu_pct"], vm["system_load"], bk["last_successful_order"]):
+        assert m["value"] is None and m["status"] == "UNKNOWN"
+
+
+def test_the_export_spells_out_which_kind_of_empty_each_cell_is(client):
+    """⛔ A blank spreadsheet cell reads as zero; a wrong label reads as a gap in
+    the system. The XLSX must say which."""
+    payload = _h(client)
+    sheets = {name: (hdr, rows) for name, hdr, rows in sh.export_sheets(payload)}
+    summary = dict(sheets["Summary"][1])
+    assert summary["CPU %"] == "NOT INSTRUMENTED"
+    assert summary["Network"] == "NOT INSTRUMENTED"
+    assert summary["System Load"] == "NO DATA"
+    assert summary["Last successful order"] == "NO DATA"
+    assert summary["TRADING READINESS (NOW)"] == "NOT READY"
+    assert summary["PREFLIGHT VERDICT (HISTORICAL)"] == "READY"
+    assert "SUPERSEDED" in summary["Preflight superseded"]
+
+
+def test_ready_with_warnings_never_collapses_to_a_bare_ready():
+    """⛔ The warnings are the whole reason an operator reads that block, so the
+    label must carry them even though `ready` is True either way."""
+    warned = sh._preflight_verdict({"overall_status": "READY_WITH_WARNINGS",
+                                    "phase": "B", "started_at": "2026-08-15T09:14:00",
+                                    "checks": [{"check_name": "x", "check_group": "Broker",
+                                                "criticality": "LOW", "status": "WARN"}]})
+    assert warned["ready"] is True
+    assert warned["label"] == "READY (WITH WARNINGS)"
+    assert warned["verdict"] == "WARNING"
+    clean = sh._preflight_verdict(_PF_READY)
+    assert clean["label"] == "READY" and clean["verdict"] == "HEALTHY"
+
+
+def test_the_frontend_renders_both_emptiness_labels(client):
+    body = _shipped(client)
+    assert "NOT INSTRUMENTED" in body and "NO DATA" in body
+    # the instrumented-but-empty case is amber, not the grey unknown treatment
+    assert "d.instrumented" in body
+    assert '"num-warn" title=\'' in body or "num-warn" in body
+
+
+def test_the_disk_reader_queries_the_columns_production_actually_has():
+    """⭐ The narrow guard on the exact defect: a source-level assertion that the
+    reader can never drift back to the fixture-only column names."""
+    import inspect
+    from backend.readers import db_reader
+    src = inspect.getsource(db_reader.system_metrics_disk_history)
+    # ⛔ Slice AFTER the docstring — it quotes the old broken SQL while explaining
+    # the fix, so scanning the whole source would match the very thing it forbids.
+    body = src[src.index("with _ro(cfg)"):]
+    assert "SELECT timestamp, disk_used_pct" in body
+    assert "ORDER BY timestamp DESC" in body
+    assert "SELECT ts," not in body and "ORDER BY id" not in body
+
+
+def test_an_instrumented_metric_with_no_rows_says_no_data_not_not_instrumented(tmp_path):
+    """⭐ THE THIRD EMPTINESS. A dev host that never ran the 5-minute collector
+    has no disk rows — that is ⛔ NOT the same as the metric not existing, and
+    conflating the two under-reports the system exactly as a sentinel chart
+    would over-report it."""
+    empty = tmp_path / "analytics_empty.db"
+    import sqlite3
+    c = sqlite3.connect(str(empty))
+    c.execute("CREATE TABLE system_metrics (timestamp TEXT, disk_used_pct REAL)")
+    c.commit()
+    c.close()
+    out = sh._trends({"paths": {"main_db": str(empty), "analytics_db": str(empty)}})
+    assert out["disk"]["instrumented"] is True       # ⛔ not a gap in the system
+    assert out["disk"]["measured"] is False
+    assert "no snapshots" in out["disk"]["reason"]
 
 
 # ── SEMANTIC ALERT COLOUR — the approved requirement ────────────────────────
@@ -210,33 +321,141 @@ def test_status_colours_are_the_projects_own(client):
 
 
 # ── TRADING READINESS ───────────────────────────────────────────────────────
-def test_readiness_comes_from_preflight_not_from_overall_status(client):
-    """⛔ Readiness is NOT a copy of Overall Status. In this fixture the two
-    genuinely DISAGREE — preflight said READY this morning, the engine is down
-    now — and that is precisely why they must be separate."""
+# ⚠️⚠️ THE BLOCKING DEFECT RAMA REJECTED ON 15-Aug: the screen showed
+#     Overall Status = FAILED · Trading Engine = FAILED · Trading Readiness = READY
+# because preflight's MORNING verdict was rendered as the CURRENT answer. His
+# ruling: "Make the live readiness verdict authoritative … a stale preflight
+# READY result must never remain the main current READY state after a required
+# live service has failed." These tests hold that line.
+
+def _svc(name, status, kind="systemd"):
+    return {"service": name, "kind": kind, "status": status,
+            "required": sh._is_required({"service": name, "kind": kind})}
+
+
+_PF_READY = {"overall_status": "READY", "phase": "A",
+             "started_at": "2026-08-15T08:30:00",
+             "checks": [{"check_name": "kite_token_fresh_today",
+                         "check_group": "Broker", "criticality": "CRITICAL",
+                         "status": "PASS"}]}
+
+
+def test_a_failed_required_service_forces_not_ready_even_when_preflight_said_ready():
+    """⛔⛔ THE REGRESSION GUARD FOR THE REJECTED BUILD. A live FAILED trading
+    engine must produce NOT READY, ⛔ never a READY carrying a warning."""
+    out = sh._live_readiness(sh._preflight_verdict(_PF_READY),
+                             [_svc("Trading Engine", "FAILED", "engine"),
+                              _svc("Database", "HEALTHY", "database")])
+    assert out["ready"] is False
+    assert out["label"] == "NOT READY"
+    assert out["verdict"] == "FAILED"
+    assert "Trading Engine" in out["failed_required"]
+    # ⭐ and it SAYS the morning verdict is older than the failure
+    assert "older than this failure" in out["reason"]
+
+
+def test_the_live_screen_no_longer_shows_ready_beside_a_dead_engine(client):
+    """The END-TO-END form of the same rule, on the real payload: this fixture
+    has preflight READY and a dead engine — exactly the rejected combination."""
     d = _h(client)
     assert d["overall"]["status"] == "FAILED"
-    assert d["readiness"]["ready"] is True
-    assert d["readiness"]["overall_status"] == "READY"
+    assert d["readiness"]["ready"] is False          # ⛔ was True in the rejected build
+    assert d["readiness"]["label"] == "NOT READY"
+    assert "Trading Engine" in d["readiness"]["failed_required"]
 
 
-def test_a_stale_ready_beside_a_dead_service_is_flagged(client):
-    """⚠️ The screen's headline question is "is trading safe to continue?".
-    A READY badge over a failed service must not answer it silently."""
+def test_preflight_is_retained_as_history_and_marked_superseded(client):
+    """⛔ Rama: "If historical preflight readiness is retained, show it separately
+    as historical context, not as the current READY verdict.\""""
+    pf = _h(client)["readiness"]["preflight"]
+    assert pf["ready"] is True                       # the morning verdict SURVIVES
+    assert pf["overall_status"] == "READY"
+    assert pf["label"] == "READY"
+    assert pf["evaluated_at"]                        # ...carrying its own timestamp
+    assert pf["superseded"]["by"] == "NOT READY"
+    assert "SUPERSEDED" in pf["superseded"]["message"]
+
+
+def test_a_failed_NON_required_service_does_not_force_not_ready():
+    """⭐ THE OTHER HALF, and it is what keeps the rule from being a blunt copy of
+    Overall Status: a dead ALERT watcher is a real problem but it does ⛔ NOT make
+    an open position unsafe. Colour Overall Status, ⛔ do not block trading."""
+    out = sh._live_readiness(sh._preflight_verdict(_PF_READY),
+                             [_svc("Trading Engine", "HEALTHY", "engine"),
+                              _svc("Database", "HEALTHY", "database"),
+                              _svc("alert-watcher.service", "FAILED")])
+    assert out["ready"] is True
+    assert out["label"] == "READY"
+    assert out["failed_required"] == []
+
+
+def test_security_watcher_activating_is_never_a_readiness_blocker():
+    """⚠️ `activating/auto-restart` is security-watcher's DESIGNED RestartSec=60
+    heartbeat. Requiring it would fire a permanent FALSE NOT READY."""
+    assert sh._is_required({"service": "security-watcher.service",
+                            "kind": "systemd"}) is False
+    assert sh._is_required({"service": "token-watcher.service",
+                            "kind": "systemd"}) is False
+    assert sh._is_required({"service": "Dashboard API", "kind": "dashboard"}) is False
+    assert sh._is_required({"service": "trading-system.service",
+                            "kind": "systemd"}) is True
+
+
+def test_an_unknown_required_service_is_not_confirmed_never_ready():
+    """⛔ UNKNOWN is never silently treated as HEALTHY — but it is also not a
+    fabricated incident. It is its own third state."""
+    out = sh._live_readiness(sh._preflight_verdict(_PF_READY),
+                             [_svc("Trading Engine", "UNKNOWN", "engine")])
+    assert out["ready"] is None
+    assert out["label"] == "NOT CONFIRMED"
+    assert out["verdict"] == "UNKNOWN"
+    assert "could not be confirmed" in out["reason"]
+
+
+def test_a_critical_preflight_failure_is_not_cured_by_healthy_services():
+    """⭐ THE GATE RUNS BOTH WAYS. A missing holiday calendar stays missing no
+    matter how many services are up — live health cannot clear a failed
+    critical pre-check."""
+    pfv = sh._preflight_verdict({
+        "overall_status": "CRITICAL_FAILURE", "phase": "B",
+        "started_at": "2026-08-15T09:14:00",
+        "checks": [{"check_name": "kite_token_fresh_today", "check_group": "Broker",
+                    "criticality": "CRITICAL", "status": "FAIL"}]})
+    out = sh._live_readiness(pfv, [_svc("Trading Engine", "HEALTHY", "engine"),
+                                   _svc("Database", "HEALTHY", "database")])
+    assert out["ready"] is False and out["label"] == "NOT READY"
+    assert "kite_token_fresh_today" in " ".join(out["blockers"])
+
+
+def test_readiness_transitions_across_the_live_lifecycle():
+    """Rama's §15 transition list, driven end to end through ONE verdict fn."""
+    pfv = sh._preflight_verdict(_PF_READY)
+
+    def verdict(engine_status):
+        return sh._live_readiness(pfv, [_svc("Trading Engine", engine_status, "engine"),
+                                        _svc("Database", "HEALTHY", "database")])
+
+    assert verdict("HEALTHY")["label"] == "READY"
+    warned = verdict("WARNING")
+    assert warned["label"] == "READY" and warned["verdict"] == "WARNING"  # degraded ≠ blocked
+    assert verdict("FAILED")["label"] == "NOT READY"
+    assert verdict("UNKNOWN")["label"] == "NOT CONFIRMED"
+    assert verdict("HEALTHY")["label"] == "READY"                        # recovered
+
+
+def test_the_required_set_is_published_so_the_verdict_is_auditable(client):
+    """⛔ A verdict whose basis is buried in code cannot be checked by an operator."""
     rd = _h(client)["readiness"]
-    c = rd["live_contradiction"]
-    assert c is not None
-    assert c["severity"] == "FAILED"
-    assert "Trading Engine" in c["failed_services"]
-    assert "READY" in c["message"]
-    # ⛔ and the verdict itself is NOT rewritten — both facts survive
-    assert rd["ready"] is True
+    named = {r["service"] for r in rd["required_services"]}
+    assert "Trading Engine" in named and "Database" in named
+    assert "Dashboard API" not in named      # the GUI never gates trading
+    assert rd["basis"] and "BOTH gates" in rd["basis"]
 
 
 def test_the_five_pillars_are_evaluated_from_real_checks(client):
     """Broker/Database/Engine/State come from `check_group`; Capital has NO group
     of its own and is assembled from named checks — so it proves both paths."""
-    rd = _h(client)["readiness"]
+    rd = _h(client)["readiness"]["preflight"]
     by = {p["pillar"]: p for p in rd["pillars"]}
     assert set(by) == {"Broker", "Database", "Core Services", "Capital", "Risk"}
     assert by["Broker"]["status"] == "HEALTHY" and by["Broker"]["checks"] == 5
@@ -251,26 +470,32 @@ def test_the_five_pillars_are_evaluated_from_real_checks(client):
 
 def test_readiness_without_a_preflight_run_is_not_ready_by_default(client):
     """⛔ Absence of a verdict is not a READY verdict."""
-    out = sh._readiness(None)
+    out = sh._preflight_verdict(None)
     assert out["ready"] is None
     assert out["verdict"] == "UNKNOWN"
     assert "absence of a verdict is not a READY verdict" in out["reason"]
     assert all(p["status"] == "UNKNOWN" for p in out["pillars"])
+    # ...and it stays NOT CONFIRMED once the live gate is applied
+    live = sh._live_readiness(out, [_svc("Trading Engine", "HEALTHY", "engine")])
+    assert live["ready"] is None and live["label"] == "NOT CONFIRMED"
 
 
 def test_a_ready_verdict_with_no_checks_is_degraded_not_trusted():
     """⭐ A verdict nothing could have contradicted is not evidence. The system's
     own status is still reported, but the badge is degraded and says why."""
-    out = sh._readiness({"overall_status": "READY", "checks": [],
-                         "started_at": "2026-08-15T08:30:00", "phase": "A"})
+    out = sh._preflight_verdict({"overall_status": "READY", "checks": [],
+                                 "started_at": "2026-08-15T08:30:00", "phase": "A"})
     assert out["ready"] is True                 # ⛔ not rewritten to False
     assert out["verdict"] == "WARNING"          # but not shown as a clean pass
     assert out["corroborated"] is False
     assert "could not be corroborated" in out["reason"]
+    # ⭐ and the uncorroborated warning survives INTO the live verdict
+    live = sh._live_readiness(out, [_svc("Trading Engine", "HEALTHY", "engine")])
+    assert live["ready"] is True and live["verdict"] == "WARNING"
 
 
 def test_a_critical_failure_makes_it_not_ready():
-    out = sh._readiness({
+    out = sh._preflight_verdict({
         "overall_status": "CRITICAL_FAILURE", "phase": "B",
         "started_at": "2026-08-15T09:14:00",
         "checks": [{"check_name": "kite_token_fresh_today", "check_group": "Broker",

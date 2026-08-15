@@ -2517,16 +2517,34 @@ table td.ctr { text-align: center !important; }
 /* -- BOTTOM ANALYTICS ZONE — one continuous band, ⛔ not two tiers -------- */
 .sysh-page .sysh-zone { display: flex; flex-direction: column; gap: 16px;
   margin-top: 16px; }
-.sysh-page .sysh-zone-row { display: grid; gap: 16px; align-items: stretch; }
+/* ⚠️ `start`, ⛔ NOT `stretch`. When Trading Readiness grew (live verdict +
+   blockers + the historical preflight block) the row height followed it and
+   stretched the SHORT Auto-Recovery card to match — 408px of empty card, which
+   reads as "recovery data is missing" rather than as spare layout. Sizing each
+   card to its content puts the slack on the page background instead, where it
+   is legible as empty space. ⛔ Do not restore `stretch`. */
+.sysh-page .sysh-zone-row { display: grid; gap: 16px; align-items: start; }
 /* FIVE panels: dependencies moved out of the rail so the rail (VM only)
    is shorter than the service table — that is what closes the gap that
    otherwise opens UNDER THE WIDE TABLE rather than beside the narrow rail. */
 .sysh-page .sysh-zone-a { grid-template-columns: .85fr 1fr 1.15fr 1fr 1.05fr; }
 .sysh-page .sysh-zone-b { grid-template-columns: 2fr 1fr; }
-@media (max-width: 1700px) { .sysh-page .sysh-zone-a { grid-template-columns: 1fr 1fr 1fr; } }
-@media (max-width: 1250px) { .sysh-page .sysh-zone-a { grid-template-columns: 1fr 1fr; } }
+/* ⚠️ 5 panels into 3 columns leaves the second line one cell SHORT — an empty
+   third of the row beside Trading Readiness. The readiness panel takes that
+   cell: it is the tallest and the most important, and the extra width lets its
+   text wrap less, which lowers the whole row. Same reasoning at 2 columns. */
+@media (max-width: 1700px) {
+  .sysh-page .sysh-zone-a { grid-template-columns: 1fr 1fr 1fr; }
+  .sysh-page .sysh-zone-a .sysh-ready { grid-column: span 2; }
+}
+@media (max-width: 1250px) {
+  .sysh-page .sysh-zone-a { grid-template-columns: 1fr 1fr; }
+  .sysh-page .sysh-zone-a .sysh-ready { grid-column: span 2; }
+}
 @media (max-width: 1100px) {
   .sysh-page .sysh-zone-a, .sysh-page .sysh-zone-b { grid-template-columns: 1fr; }
+  /* ⛔ A 2-column span in a 1-column grid overflows the page. */
+  .sysh-page .sysh-zone-a .sysh-ready { grid-column: auto; }
 }
 
 /* -- events · alerts · recovery lists ------------------------------------ */
@@ -2551,9 +2569,24 @@ table td.ctr { text-align: center !important; }
 .sysh-page .sysh-ready { display: flex; flex-direction: column; gap: 6px; }
 .sysh-page .sysh-ready-v { font-size: 1.6rem; font-weight: 800; letter-spacing: .02em; }
 .sysh-page .sysh-ready-r { font-size: 12px; line-height: 1.45; }
-.sysh-page .sysh-contra { display: flex; flex-direction: column; gap: 3px;
+.sysh-page .sysh-ready-now { font-size: 10.5px; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--dim); margin-top: -4px; }
+.sysh-page .sysh-blockers { list-style: none; margin: 2px 0 0; padding: 8px 10px;
+  display: flex; flex-direction: column; gap: 3px;
   background: var(--neg-tint); border: 1px solid rgba(248,81,73,.45);
-  border-radius: 7px; padding: 8px 10px; font-size: 11.5px; line-height: 1.45; }
+  border-radius: 7px; font-size: 11.5px; line-height: 1.45; }
+/* Preflight = HISTORY. Recessed and tagged so it can never be mistaken for the
+   current verdict above it — that mistake is the defect this panel was fixed for. */
+.sysh-page .sysh-hist { margin-top: 8px; padding-top: 8px;
+  border-top: 1px dashed var(--border); opacity: .92; }
+.sysh-page .sysh-hist-h { display: flex; align-items: center; gap: 7px;
+  flex-wrap: wrap; font-size: 11.5px; color: var(--dim); }
+.sysh-page .sysh-hist-tag { font-size: 9.5px; font-weight: 700; letter-spacing: .07em;
+  padding: 2px 6px; border-radius: 4px;
+  background: var(--muted-tint); color: var(--dim); border: 1px solid var(--border); }
+.sysh-page .sysh-supersede { margin-top: 5px; padding: 6px 9px; border-radius: 6px;
+  background: var(--warn-tint); border: 1px solid rgba(210,153,34,.4);
+  font-size: 11.5px; line-height: 1.45; }
 .sysh-page .sysh-pillars { margin-top: 6px; }
 .sysh-page .sysh-pillars td { cursor: help; }
 .sysh-page .sysh-pill-n { color: var(--dim); font-size: 11px; margin-left: 4px; }

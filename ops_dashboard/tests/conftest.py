@@ -645,11 +645,31 @@ def _build_db(path: str, schema_version: int) -> None:
 
 
 def _build_analytics(path: str) -> None:
+    """analytics.db — MIRRORS `core/analytics_schema.sql:51`.
+
+    ⚠️⚠️ THIS FIXTURE USED TO INVENT `id INTEGER PRIMARY KEY` + `ts`, NEITHER OF
+    WHICH EXISTS IN PRODUCTION (the real columns are `timestamp … disk_used_pct`,
+    with no `id`). A reader written against the fixture therefore passed its
+    tests while raising `no such column: ts` against the real database — the
+    Health Trends disk series was structurally empty in production and displayed
+    as "NOT INSTRUMENTED". ⛔ A FIXTURE MUST MATCH PRODUCTION SHAPE, or it makes a
+    wrong reader look right.
+
+    Rows are REAL disk percentages with the -1.0 psutil sentinels left in place
+    for cpu/memory, because a caller that charts a sentinel must fail a test.
+    """
     conn = sqlite3.connect(path)
     try:
         conn.execute(
-            "CREATE TABLE system_metrics (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, "
-            "cpu_pct REAL, memory_mb REAL, disk_used_pct REAL)"
+            "CREATE TABLE system_metrics (timestamp TEXT NOT NULL, cpu_pct REAL, "
+            "memory_mb REAL, db_size_mb REAL, log_size_mb REAL, open_fds INTEGER, "
+            "thread_count INTEGER, disk_used_pct REAL)"
+        )
+        conn.executemany(
+            "INSERT INTO system_metrics (timestamp, cpu_pct, memory_mb, "
+            "disk_used_pct) VALUES (?,?,?,?)",
+            [("2026-08-15 09:%02d:00" % m, -1.0, -1.0, 41.0 + m / 60.0)
+             for m in (15, 20, 25, 30, 35, 40)],
         )
         conn.commit()
     finally:

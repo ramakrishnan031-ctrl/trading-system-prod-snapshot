@@ -283,31 +283,49 @@
         <div class="sysh-note" x-text="rec('note')"></div>
       </section>
 
+      <!-- ⚠️⚠️ THE HEADLINE IS THE *CURRENT* VERDICT, COMPUTED FROM LIVE STATE.
+           An earlier build showed preflight's MORNING verdict here and merely
+           printed a warning underneath when live state disagreed — so the panel
+           read "READY" beside a FAILED Trading Engine. Preflight is now history
+           and sits below, labelled as such. -->
       <section class="panel sysh-ready" :class="'sysh-bg-' + rd('verdict')">
         <h3 class="panel-title">Trading Readiness</h3>
-        <b class="sysh-ready-v" :class="rd('ready') ? 'num-pos' : (rd('ready') === false ? 'num-neg' : 'sysh-unknown')"
-           x-text="rd('ready') ? 'READY' : (rd('ready') === false ? 'NOT READY' : 'NOT EVALUATED')"></b>
+        <b class="sysh-ready-v" :class="txt(rd('verdict'))"
+           x-text="rd('label') || 'NOT CONFIRMED'"></b>
+        <span class="sysh-ready-now">as of now</span>
         <div class="sysh-ready-r" :class="txt(rd('verdict'))" x-text="rd('reason') || ''"></div>
-        <!-- ⚠️ A stale READY beside a dead service is the failure this screen
-             exists to prevent. Both facts, both timestamps, neither adjusted. -->
-        <div class="sysh-contra" x-show="rd('live_contradiction')" x-cloak>
-          <b class="num-neg">⚠ CONTRADICTED BY LIVE STATE</b>
-          <span class="num-neg" x-text="(rd('live_contradiction')||{}).message"></span>
-          <span class="sysh-note" x-text="(rd('live_contradiction')||{}).note"></span>
-        </div>
-        <table class="cap-table sysh-kv sysh-pillars"><tbody>
-          <template x-for="p in (rd('pillars') || [])" :key="p.pillar">
-            <tr :title="p.note || ''">
-              <td class="lbl"><i class="dot" :class="'sysh-dot-' + p.status"></i>
-                <span x-text="p.pillar"></span>
-                <span class="sysh-pill-n" x-text="p.checks ? '(' + p.checks + ')' : '(0)'"></span></td>
-              <td class="ctr" :class="txt(p.status)" x-text="p.status"></td>
-            </tr>
+
+        <!-- What is blocking, named — ⛔ never just a colour. -->
+        <ul class="sysh-blockers" x-show="(rd('blockers') || []).length" x-cloak>
+          <template x-for="(b, i) in (rd('blockers') || [])" :key="i">
+            <li class="num-neg" x-text="b"></li>
           </template>
-        </tbody></table>
-        <div class="sysh-note" x-text="'Evaluated ' + (hhmmss(rd('evaluated_at')) || '—')
-             + ' · preflight phase ' + (rd('phase') || '—')
-             + ' · ' + (rd('checks_evaluated') || 0) + ' checks'"></div>
+        </ul>
+        <div class="sysh-note" x-text="rd('basis') || ''"></div>
+
+        <!-- PREFLIGHT = HISTORICAL CONTEXT, ⛔ NOT THE CURRENT ANSWER. -->
+        <div class="sysh-hist">
+          <div class="sysh-hist-h">
+            <span class="sysh-hist-tag">HISTORICAL</span>
+            <span>Preflight verdict</span>
+            <b :class="txt(pfv().verdict)" x-text="pfv().label || '—'"></b>
+            <span class="sysh-ts mono" x-text="hhmmss(pfv().evaluated_at) || '—'"></span>
+          </div>
+          <div class="sysh-supersede num-warn" x-show="pfv().superseded" x-cloak
+               x-text="(pfv().superseded || {}).message"></div>
+          <table class="cap-table sysh-kv sysh-pillars"><tbody>
+            <template x-for="p in (pfv().pillars || [])" :key="p.pillar">
+              <tr :title="p.note || ''">
+                <td class="lbl"><i class="dot" :class="'sysh-dot-' + p.status"></i>
+                  <span x-text="p.pillar"></span>
+                  <span class="sysh-pill-n" x-text="p.checks ? '(' + p.checks + ')' : '(0)'"></span></td>
+                <td class="ctr" :class="txt(p.status)" x-text="p.status"></td>
+              </tr>
+            </template>
+          </tbody></table>
+          <div class="sysh-note" x-text="'preflight phase ' + (pfv().phase || '—')
+               + ' · ' + (pfv().checks_evaluated || 0) + ' checks'"></div>
+        </div>
       </section>
     </div>
 
@@ -320,12 +338,18 @@
                     @click="trend=t.k" x-text="t.l"></button>
           </template>
         </div>
-        <!-- ⛔ Two of the three trends the reference asks for DO NOT EXIST. The
-             tab renders the gap and its reason rather than an empty axis that
-             would read as "measured, and it was flat". -->
+        <!-- ⛔ THREE DIFFERENT EMPTINESSES, AND THEY MUST NOT LOOK ALIKE:
+             NOT INSTRUMENTED = the collector never records a real value (CPU/RAM
+             are -1.0 sentinels; response time is never persisted) — more waiting
+             will not help. NO DATA YET = the metric is real and collected on the
+             VM, this host simply has no snapshots. Rendering an empty axis
+             instead would read as "measured, and it was flat". -->
         <template x-if="!tr().measured">
           <div class="sysh-gapbox sysh-trend-gap">
-            <b class="sysh-unknown">NOT INSTRUMENTED</b>
+            <b class="sysh-unknown" x-show="tr().instrumented === false"
+               x-text="'NOT INSTRUMENTED'"></b>
+            <b class="num-warn" x-show="tr().instrumented" x-cloak
+               x-text="'NO DATA YET'"></b>
             <span x-text="tr().reason"></span>
           </div>
         </template>
@@ -483,6 +507,8 @@ function systemHealthPage() {
     db(k) { const d = this.data.database || {}; return d[k] === undefined ? null : d[k]; },
     bk(k) { return (this.data.broker || {})[k]; },
     rd(k) { return (this.data.readiness || {})[k]; },
+    // Preflight = HISTORY. ⛔ Never the headline verdict — see the panel comment.
+    pfv() { return (this.data.readiness || {}).preflight || {}; },
     rec(k) { return (this.data.recovery || {})[k]; },
     recEvents() { return (this.data.recovery || {}).events || []; },
     lhc(k) { return (this.data.last_health_check || {})[k]; },
@@ -516,8 +542,14 @@ function systemHealthPage() {
     gapCell(d) {
       if (!d || typeof d !== "object") return "—";
       if (!d.measured) {
-        return '<span class="sysh-unknown" title="' + this.esc(d.reason)
-               + '">NOT INSTRUMENTED</span>';
+        // ⛔ TWO DIFFERENT EMPTINESSES. "NOT INSTRUMENTED" (grey) = the system
+        // never records this. "NO DATA" (amber) = it does, and nothing has been
+        // recorded here yet. Calling the second one uninstrumented UNDER-reports
+        // the system just as badly as charting a sentinel would over-report it.
+        return d.instrumented
+          ? '<span class="num-warn" title="' + this.esc(d.reason) + '">NO DATA</span>'
+          : '<span class="sysh-unknown" title="' + this.esc(d.reason)
+            + '">NOT INSTRUMENTED</span>';
       }
       const unit = d.unit ? " " + this.esc(d.unit) : "";
       return '<span class="' + this.txt(d.status) + '">' + this.esc(d.value) + unit + "</span>";
