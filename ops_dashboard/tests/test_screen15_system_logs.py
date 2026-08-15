@@ -485,6 +485,36 @@ def test_a_stored_order_can_permute_but_never_change_the_column_set():
     assert "next.length === this.DEFAULT_COLS.length" in body
 
 
+def test_the_rail_holds_only_the_three_panels_the_png_places_there():
+    """🔴 THE LAYOUT DEFECT, PINNED. Stacking SEARCH and EVENT TYPES into the
+    rail made it overshoot the left column by ~780px (measured off the render),
+    so everything below waited for the grid to close and a dead band opened
+    under the table. The binding PNG's rail is Services / Severity / Trading
+    Impact — three panels, ending level with the table."""
+    tpl = _tpl()
+    rail = tpl[tpl.index('<aside class="slg-rail"'):tpl.index("</aside>")]
+    panels = re.findall(r'class="panel slg-([a-z-]+)"', rail)
+    assert panels == ["svcs", "sev-p", "impact"], panels
+    # ⭐ and the two the PNG never places are still on the page, below
+    assert 'class="slg-rowx"' in tpl
+    for cls in ("slg-searchp", "slg-etypes"):
+        assert cls in tpl[tpl.index('class="slg-rowx"'):]
+
+
+def test_no_artificial_height_device_closes_a_gap():
+    """⛔ A min-height / fixed height / stretch would HIDE a layout imbalance
+    rather than fix it. The columns are balanced by what is IN them."""
+    css = _css()
+    start = css.index("SCREEN 15 — SYSTEM LOGS")
+    nxt = re.search(r"SCREEN \d+ [—-]", css[start + 20:])
+    block = css[start: start + 20 + nxt.start()] if nxt else css[start:]
+    for rule in re.findall(r"^\.slg-page[^{]*\{[^}]*\}", block, re.M | re.S):
+        if ".slg-row" in rule.split("{")[0] or ".panel" in rule.split("{")[0]:
+            assert "min-height" not in rule, rule
+            assert "height:" not in rule, rule
+    assert "align-items: start" in block      # ⛔ never `stretch` on these rows
+
+
 def test_alignment_is_by_role_and_not_blanket_centred():
     css = _css()
     start = css.index("SCREEN 15 — SYSTEM LOGS")

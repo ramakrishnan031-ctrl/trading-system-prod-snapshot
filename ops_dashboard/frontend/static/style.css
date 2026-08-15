@@ -3300,8 +3300,23 @@ table td.ctr { text-align: center !important; }
   grid-template-columns: 1.1fr 1.4fr 1fr .8fr; }
 @media (max-width: 1500px) { .slg-page .slg-row4 { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 900px)  { .slg-page .slg-row4 { grid-template-columns: 1fr; } }
-.slg-page .slg-row3 .panel, .slg-page .slg-row4 .panel { margin-bottom: 0; }
-.slg-page .slg-row3 .panel { min-height: 230px; }
+.slg-page .slg-row3 .panel, .slg-page .slg-row4 .panel,
+.slg-page .slg-rowx .panel { margin-bottom: 0; }
+/* ⛔ NO min-height and ⛔ no stretch anywhere below the table. A 230px floor was
+   here and it was the wrong tool: the real cause of the dead band was that the
+   RAIL had grown to five panels and overshot the table by ~780px (measured off
+   the render), so everything under the left column waited for the grid to close.
+   The rail is back to the PNG's THREE panels — Services / Severity / Trading
+   Impact — which is what makes it end level with the table, and the rows below
+   run full width exactly as the PNG draws them. */
+
+/* SEARCH · EVENT TYPES — the two panels the binding PNG never places. The TXT
+   lists SEARCH right here, after Recovery Tracking and before Retention. SEARCH
+   keeps the rail width its five stacked inputs are designed for; EVENT TYPES
+   takes the remainder. */
+.slg-page .slg-rowx { display: grid; gap: 16px; align-items: start;
+  grid-template-columns: 330px minmax(0, 1fr); }
+@media (max-width: 900px) { .slg-page .slg-rowx { grid-template-columns: 1fr; } }
 .slg-page .slg-d-empty { color: var(--dim); font-size: 13px; padding: 10px 0; }
 .slg-page .slg-kv td { padding: 5px 6px; font-size: 13px; vertical-align: top; }
 .slg-page .slg-kv-v { color: var(--text); word-break: break-word; }
