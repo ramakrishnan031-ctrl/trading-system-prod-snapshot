@@ -510,7 +510,17 @@ function tradeLogsPage() {
       { key: "component",  label: "Component" },
     ],
     cols: [], dragKey: "", overKey: "", _dragEndAt: 0,
-    COLS_KEY: "screen14.tradelogs.colOrder.v1",
+    /* ⚠️ v1 → v2 ON PURPOSE, and this is the whole fix for the reported
+       "Strategy before Symbol". The DEFAULT order was never wrong — proven by
+       running this very `initCols()` against a planted saved order: with no
+       saved entry it returns the approved order, and with a saved entry where
+       Strategy had been dragged left it returns exactly the reported order.
+       A browser that had EVER been dragged kept replaying that order, and since
+       the Columns reset button was removed (the binding PNG has none) there was
+       no way left to clear it. Bumping the key retires every stored v1 order so
+       the approved default is restored everywhere — the same remedy Screen-06
+       used when its column set changed. ⛔ Do NOT reuse a retired key. */
+    COLS_KEY: "screen14.tradelogs.colOrder.v2",
 
     f: { start: "", end: "", trade_id: "", order_id: "", symbol: "", strategy: "",
          trade_type: "", direction: "", event_type: "", status: "", q: "" },

@@ -406,8 +406,22 @@ def test_column_drag_reuses_the_established_convention():
     for hook in ("onDragStart", "onDrop", "onDragEnd", "initCols", "saveCols",
                  "resetCols", "isDefaultOrder", "localStorage"):
         assert hook in tpl, hook
-    assert "screen14.tradelogs.colOrder.v1" in tpl
+    assert "screen14.tradelogs.colOrder.v2" in tpl
+    assert "screen14.tradelogs.colOrder.v1" not in tpl   # ⛔ retired, never reused
     assert "next.length === this.DEFAULT_COLS.length" in tpl
+
+
+def test_a_restored_column_order_can_never_change_the_column_SET():
+    """⭐ A saved order may permute the columns; it must never add, drop or
+    rename one. `initCols` rebuilds ONLY from DEFAULT_COLS by key and refuses
+    the result unless the length still matches — which is also why a stale
+    saved order survives a pure REORDER and had to be retired by a key bump
+    rather than by hoping it would self-correct."""
+    tpl = _tpl()
+    body = re.search(r"initCols\(\)\s*\{(.*?)\n    \},", tpl, re.S).group(1)
+    assert "byKey[k]" in body                       # only known keys admitted
+    assert "next.indexOf(byKey[k]) === -1" in body  # no duplicates
+    assert "next.length === this.DEFAULT_COLS.length" in body
 
 
 def test_a_drag_cannot_reintroduce_scanner():
