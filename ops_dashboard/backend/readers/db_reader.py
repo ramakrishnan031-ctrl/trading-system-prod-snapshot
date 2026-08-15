@@ -1542,6 +1542,81 @@ def slippage_trend_today(cfg: dict, today: str) -> list:
              "n": int(r["n"])} for r in rows if r["hh"]]
 
 
+# Columns `trade_slippage_log` owns outright. Split out because the trades-side
+# enrichment below is retried without its two newest columns on an older DB.
+_TSL_COLS = (
+    "s.trade_id, s.trade_date, s.symbol, s.strategy_name, s.side, s.qty, "
+    "s.price_band, s.entry_signal_price, s.entry_fill_price, "
+    "s.entry_slippage_rs, s.entry_slippage_pct, s.sl_slippage_rs, "
+    "s.tgt_slippage_rs, s.planned_sl_distance, s.planned_rr, s.actual_rr, "
+    "s.rr_damage_pct, s.trade_result, s.exit_reason"
+)
+
+
+def slippage_rows_range(cfg: dict, from_date: str, to_date: str,
+                        limit: Optional[int] = None) -> list:
+    """Screen-10 spine: one row per completed trade whose TRADE DAY falls in
+    [from_date, to_date], enriched with everything the screen needs.
+
+    ⛔ NO DEFAULT ROW CAP, for the same reason `closed_trades_range` has none
+    (Screen-09 §12, Rama): a silent truncation would let the KPI deck, the table,
+    the rankings and the buckets describe DIFFERENT populations with nothing on
+    screen saying so. A caller may still pass an explicit int and the service
+    reports whether a cap was in force.
+
+    `trade_date` is written from the trade's `created_at` day (slippage_recorder
+    .build_trade_slippage_row), so it is the trade's OWN day — ⛔ not the exit
+    day `closed_trades_range` keys on. The two screens therefore answer slightly
+    different questions on a trade that spans midnight, which is correct: Screen
+    09 asks "what did I realize today", Screen 10 asks "how did today's orders
+    fill".
+
+    ENRICHMENT, and every piece of it is read from its AUTHORITATIVE home:
+      * entry_time / exit_time / signal_id / gross_pnl / net_pnl — `trades`,
+        LEFT JOIN on the PRIMARY KEY, so the join cannot fan out.
+      * tolerance_fraction_used / tolerance_source — `trades`. This is the
+        fraction the ORDER PATH actually resolved for this trade through the
+        symbol > strategy > band > global override hierarchy, so the screen can
+        state the allowed slippage that was really in force rather than
+        re-deriving it from today's config and hoping they agree.
+      * product (Trade Type) — `orders`, ENTRY leg, via a CORRELATED SUBQUERY.
+        ⛔ NOT a LEFT JOIN: a trade with more than one ENTRY order row would fan
+        out and double-count it. There is no `trades.product` column.
+
+    ⚠️ `tolerance_fraction_used` / `tolerance_source` are v-later columns. On an
+    older DB the SELECT is retried without them and both come back None — the
+    service then falls back to the configured global fraction and SAYS SO.
+    Nothing is fabricated.
+    """
+    product = ("(SELECT o.product FROM orders o WHERE o.trade_id = s.trade_id "
+               " AND o.leg='ENTRY' ORDER BY o.placed_at LIMIT 1) AS product")
+    trade_cols = ("t.signal_id, t.entry_time, t.exit_time, "
+                  "COALESCE(t.gross_pnl,0) AS gross_pnl, "
+                  "COALESCE(t.net_pnl,0) AS net_pnl")
+    tail = ("FROM trade_slippage_log s LEFT JOIN trades t ON t.trade_id = s.trade_id "
+            "WHERE s.trade_date BETWEEN ? AND ? "
+            "ORDER BY s.trade_date DESC, s.id DESC")
+    params: list = [from_date, to_date]
+    if limit is not None:
+        tail += " LIMIT ?"
+        params.append(int(limit))
+
+    def _run(conn, tol_cols: str):
+        sql = "SELECT " + _TSL_COLS + ", " + trade_cols + tol_cols + ", " + product + " " + tail
+        return conn.execute(sql, tuple(params)).fetchall()
+
+    with _ro(cfg) as conn:
+        try:
+            rows = _run(conn, ", t.tolerance_fraction_used, t.tolerance_source")
+        except sqlite3.OperationalError:
+            try:
+                rows = _run(conn, ", NULL AS tolerance_fraction_used, "
+                                  "NULL AS tolerance_source")
+            except sqlite3.OperationalError:
+                return []
+    return [dict(r) for r in rows]
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # G5c — multi-period readers (date-range scoped) + trade-story + System Score.
 # All read-only; map to EXISTING tables; NO schema change. `from_date`/`to_date`

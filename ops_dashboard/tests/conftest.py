@@ -78,7 +78,12 @@ DDL = [
         -- column a reader touches. `tgt_risk_reward_applied` is the PLANNED R:R
         -- "frozen at placement" (schema.sql:230) — which is why the Explorer
         -- reads it rather than today's strategy YAML.
-        tgt_risk_reward_applied REAL, binding_constraint TEXT, mode TEXT)""",
+        tgt_risk_reward_applied REAL, binding_constraint TEXT, mode TEXT,
+        -- Screen-10: both exist in core/schema.sql:207-208 and were simply
+        -- absent here. They are the fraction the ORDER PATH actually resolved
+        -- for this trade (symbol > strategy > band > global) and which rule
+        -- won. Screen 10 reads them, so the fixture's contract requires them.
+        tolerance_fraction_used REAL, tolerance_source TEXT)""",
     """CREATE TABLE fm_ledger (ledger_id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL,
         entry_type TEXT NOT NULL, amount REAL, bucket TEXT, balance_before REAL, balance_after REAL,
         signal_id TEXT, reservation_id TEXT, reason TEXT, session_id TEXT, direction TEXT,
@@ -369,7 +374,7 @@ def _seed(conn: sqlite3.Connection, schema_version: int) -> None:
     # (within trailing-7) + TENDAYS (trailing-30 only). created_at+exit_time dated
     # that day ⇒ invisible to today-scoped counts; ALL older than today's 14:50 win
     # ⇒ loss-streak assertions (global + per-strategy) are unmoved.
-    def _mkclosed(tid, day, reason, net, hh="14:00:00"):
+    def _mkclosed(tid, day, reason, net, hh="14:00:00", sym="AAA"):
         ts = f"{day}T{hh}+05:30"
         c.execute(
             "INSERT INTO trades(trade_id,signal_id,symbol,direction,strategy,sector,qty_planned,"
@@ -377,15 +382,18 @@ def _seed(conn: sqlite3.Connection, schema_version: int) -> None:
             "risk_amount,created_at,entry_time,exit_time,exit_reason,exit_price,charges,gross_pnl,"
             "net_pnl,status,actual_position_value_rs,signal_to_order_ms,order_to_fill_ms,total_latency_ms) "
             "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (tid, f"sig_{tid}", "AAA", "LONG", "gap_fade_long", "IT", 10, 10, 1000.0, 1001.0,
+            (tid, f"sig_{tid}", sym, "LONG", "gap_fade_long", "IT", 10, 10, 1000.0, 1001.0,
              990.0, 1015.0, 5000.0, 100.0, ts, ts, ts, reason, 1001.0 + net / 10.0, 5.0,
              net + 5, net, "CLOSED", 10000.0, 120, 850, 970))
         c.execute("INSERT INTO signals(signal_id,symbol,scanner,strategy,received_at,status) "
                   "VALUES(?,?,?,?,?,?)",
-                  (f"sig_{tid}", "AAA", "gap_fade_long", "gap_fade_long", ts, "TRADED"))
-    _mkclosed("trd_w1", YDAY, "SL_HIT", -30.0)
-    _mkclosed("trd_w2", YDAY, "TGT_HIT", 80.0)
-    _mkclosed("trd_m1", TENDAYS, "TGT_HIT", 50.0)
+                  (f"sig_{tid}", sym, "gap_fade_long", "gap_fade_long", ts, "TRADED"))
+    # Screen-10 needs several SYMBOLS to rank and several PRICE BUCKETS to fill,
+    # so these three carry distinct symbols. `sym` defaults to "AAA", so every
+    # pre-existing caller and assertion is byte-unchanged.
+    _mkclosed("trd_w1", YDAY, "SL_HIT", -30.0, sym="BBB")
+    _mkclosed("trd_w2", YDAY, "TGT_HIT", 80.0, sym="CCC")
+    _mkclosed("trd_m1", TENDAYS, "TGT_HIT", 50.0, sym="DDD")
 
     # ── fm_ledger: INIT total=100000; realized losses 450 + one win 200 ──
     # 25-Jul-2026: this used to seed TWO INIT rows split by bucket (intraday
@@ -475,6 +483,38 @@ def _seed(conn: sqlite3.Connection, schema_version: int) -> None:
               "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
               ("trd_c4", TODAY, "AAA", "gap_fade_long", "LONG", 10, "200-300",
                1000.0, 1000.5, 0.5, 10.0, 1.5, 1.45, 4.0, "WIN", "TGT_HIT"))
+    # ── SCREEN 10 (15-Aug-2026) ────────────────────────────────────────────────
+    # (a) trd_c1 carries the fraction the ORDER PATH actually resolved (0.15 via a
+    #     by_symbol override) while trd_c4 carries NONE. The two are seeded
+    #     DIFFERENTLY ON PURPOSE and neither equals the global 0.22, so a reader
+    #     that ignored the persisted value and always used the config global would
+    #     produce allowed=2.2 for both and FAIL — the fixture can tell the two
+    #     code paths apart. ⛔ A fixture where both paths give the same number
+    #     proves nothing.
+    #     trd_c1: min(10 × 0.15, 5) = 1.50  ⇒ actual 3.0 = 200% ⇒ EXCEEDED
+    #     trd_c4: min(10 × 0.22, 5) = 2.20  ⇒ actual 0.5 =  23% ⇒ WITHIN_LIMIT
+    #     The today-scoped /api/slippage endpoint does NOT read these columns, so
+    #     its tolerance_rs == 2.2 assertions are untouched.
+    c.execute("UPDATE trades SET tolerance_fraction_used=?, tolerance_source=? "
+              "WHERE trade_id=?", (0.15, "symbol:AAA", "trd_c1"))
+    # (b) Multi-day slippage rows so the RANGE layer, the five price buckets and
+    #     all four statuses are exercised. All are dated BEFORE today, so every
+    #     today-scoped assertion on /api/slippage (count == 2) is unmoved.
+    #       BBB @ 85    → bucket 0-100    · 0.30 vs min(5×0.22,5)=1.10 = 27% → WITHIN
+    #       CCC @ 450   → bucket 200-500  · 1.55 vs min(10×0.22,5)=2.20 = 70% → NEAR
+    #       DDD @ 150   → bucket 100-200  · slippage NULL            → UNMEASURED
+    #     ⭐ Bucket 500-1000 is deliberately left EMPTY: the panel must render all
+    #     five and show the empty one as unobserved, ⛔ never as a measured ₹0.00.
+    for tid, sym, band, px, fill, slip, dist, prr, arr, dmg, res, reason in (
+            ("trd_w1", "BBB", "0-100", 85.0, 85.3, 0.30, 5.0, 2.0, 1.7, 6.0, "LOSS", "SL_HIT"),
+            ("trd_w2", "CCC", "300-500", 450.0, 451.55, 1.55, 10.0, 2.0, 1.5, 15.5, "WIN", "TGT_HIT"),
+            ("trd_m1", "DDD", "100-200", 150.0, None, None, None, None, None, None, "WIN", "TGT_HIT")):
+        c.execute("INSERT INTO trade_slippage_log(trade_id,trade_date,symbol,strategy_name,side,qty,"
+                  "price_band,entry_signal_price,entry_fill_price,entry_slippage_rs,"
+                  "planned_sl_distance,planned_rr,actual_rr,rr_damage_pct,trade_result,exit_reason) "
+                  "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                  (tid, (YDAY if tid != "trd_m1" else TENDAYS), sym, "gap_fade_long",
+                   "LONG", 10, band, px, fill, slip, dist, prr, arr, dmg, res, reason))
     for oid, leg, slip in (("ord_e_0", "ENTRY", 1.0), ("ord_sl_0", "SL", 0.2)):
         c.execute("INSERT INTO order_execution_log(order_id,parent_trade_id,symbol,strategy_name,"
                   "leg,side,intended_price,actual_price,slippage_rs,qty,filled_qty,status,"

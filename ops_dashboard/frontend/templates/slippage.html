@@ -1,124 +1,654 @@
 {% extends "base.html" %}
-{% from "components.html" import kpi_row, kpi_card, period_selector, export_button %}
+{% from "components.html" import kpi_row, kpi_card %}
 {% block title %}AlgoCore Systems — Slippage Analytics{% endblock %}
 {% block nav_slippage %}active{% endblock %}
 {% block content %}
-{# G5b: Slippage Analytics. Today's rows + the existing breach model UNCHANGED;
-   scanner / symbol / price-bucket rankings + through-day trend are NEW additive
-   keys. Multi-day (Week/Month) arrives with the G5c P&L date-range layer — the
-   PeriodSelector emits but is not wired here (honest: shows Today only). #}
-<div x-data="slippagePage()" x-init="load()" @ops-refresh.window="load()">
+{# ═══════════════════════════════════════════════════════════════════════════
+   SCREEN 10 — SLIPPAGE ANALYTICS.  Built to gui/10. Slippage_Analytics.png and
+   gui/10. Slippage_Analytics.txt, with the standing project rulings applied:
 
-  {% call kpi_row() %}
-    {{ kpi_card("Total Orders", "data.count || 0", tone="info") }}
-    {{ kpi_card("Breaches", "breaches()", tone="neg") }}
-    {{ kpi_card("Avg Entry Slip ₹", "avgSlip()", tone="warn") }}
-    {{ kpi_card("Worst Slip ₹", "(data.worst && data.worst.length) ? dash(data.worst[0].entry_slippage_rs) : '—'", tone="neg") }}
-  {% endcall %}
+   1. SCANNER IS GONE — filter, column and the whole SCANNER SLIPPAGE RANKING
+      panel the reference design carried. "Strategy and Scanner represent the
+      same source identity in this system" (Rama, 14-Aug; measured on Screen 07:
+      signals.scanner EQUALS trades.strategy on all 603 trades and all 127,246
+      signals). ⛔ Do not reintroduce any of the three. /scanner-attribution is
+      untouched and keeps the dimension for the question it actually answers.
 
-  <section class="panel">
-    <h2 class="panel-title">Slippage Analytics
-      <span class="panel-sub" x-text="(data.today || '') + (data.model ? (' · model ' + data.model.mode + ' (' + data.model.max_slippage_fraction + '×SL, cap ₹' + data.model.absolute_cap_rs + ')') : '')"></span>
-    </h2>
+   2. THE RETIRED SECOND-SCORE LABEL IS NOT A COLUMN. The reference common-column
+      standard asks for two score columns, but the second label was RETIRED
+      system-wide on 13-Aug: system_score = the ACHIEVED screener score,
+      score_threshold = the minimum it had to reach, and "⛔ a threshold is never
+      presented as a score under any name". This screen therefore carries System
+      Score + Score Threshold, exactly as Screens 04/05/06/07 do.
+      ⚠️ FLAGGED FOR RAMA — a deliberate divergence from the handoff's column
+      list, not an omission.
+      ⛔ The retired label is not spelled out anywhere in this file ON PURPOSE:
+      `assert_signal_score_label_is_retired` walks the WHOLE frontend tree for
+      it, comments included, and it is right to. Naming it even to explain its
+      absence would be the label being present.
 
-    {{ period_selector() }}
-    <div class="filters">
-      {{ export_button("Export Slippage") }}
-      <span class="panel-sub" x-show="pPeriod !== 'today'" x-cloak>Week/Month arrive with the G5c date-range layer — showing Today.</span>
+   3. ALIGNMENT BY COLUMN ROLE (Screens 08/09): row/side labels LEFT, data
+      columns CENTER under their own headings. ⛔ Never a blanket center, never
+      an unscoped rule. Label headings carry `.lbl`; data cells carry `.ctr`.
+
+   Every panel reads ONE filtered population: the endpoint applies the filters
+   server-side and returns totals, rows, buckets, rankings, RR, trend, donut and
+   impact already derived from it — and the XLSX export calls the SAME builder
+   with the SAME arguments, so no panel and no sheet can describe a different
+   set.
+   ═══════════════════════════════════════════════════════════════════════════ #}
+<div class="dash-page slp-page" x-data="slippagePage()" x-init="boot()"
+     @ops-refresh.window="refresh()">
+
+  <div class="slp-head">
+    <div>
+      <h2 class="panel-title slp-h1">Slippage Analytics</h2>
+      <div class="slp-sub">Execution quality, slippage patterns and business impact</div>
     </div>
+    <span class="slp-model" x-show="data.model" x-cloak>
+      <span class="slp-model-k">Budget</span>
+      <b x-text="modelLine()"></b>
+    </span>
+  </div>
 
-    <h3 class="panel-title">Per-trade decomposition (today)</h3>
-    <div class="tbl-scroll">
-    <table class="cap-table">
-      <thead><tr><th>Symbol</th><th>Strategy</th><th>Side</th><th>Entry slip ₹</th>
-        <th>SL slip ₹</th><th>TGT slip ₹</th><th>Tolerance ₹</th><th>Breach</th>
-        <th>Planned RR</th><th>Actual RR</th><th>RR damage %</th><th>Result</th></tr></thead>
-      <tbody>
-        <template x-for="(r, i) in data.rows || []" :key="i">
-          <tr :class="r.breach ? 'st-BREACH' : ''">
-            <td x-text="r.symbol"></td><td x-text="r.strategy_name"></td><td x-text="r.side"></td>
-            <td class="cap-num" x-text="dash(r.entry_slippage_rs)"></td>
-            <td class="cap-num" x-text="dash(r.sl_slippage_rs)"></td>
-            <td class="cap-num" x-text="dash(r.tgt_slippage_rs)"></td>
-            <td class="cap-num" x-text="dash(r.tolerance_rs)"></td>
-            <td><span x-show="r.breach" x-cloak class="fam-pill famp-rejected">BREACH</span></td>
-            <td class="cap-num" x-text="dash(r.planned_rr)"></td>
-            <td class="cap-num" x-text="dash(r.actual_rr)"></td>
-            <td class="cap-num" x-text="dash(r.rr_damage_pct)"></td>
-            <td x-text="dash(r.trade_result)"></td>
-          </tr>
-        </template>
-        <tr x-show="!data.rows || data.rows.length === 0" x-cloak>
-          <td colspan="12" class="ev-empty">No slippage rows today.</td></tr>
-      </tbody>
-    </table>
-    </div>
+  <!-- PERIOD. "Yesterday" is a one-day CUSTOM range so it goes through the SAME
+       IST resolver as everything else rather than a second date path. -->
+  <div class="period-sel" role="tablist" aria-label="Period">
+    <template x-for="p in PERIODS" :key="p.k">
+      <button class="ps-btn" type="button" :class="isPeriod(p.k) ? 'ps-active' : ''"
+              @click="setPeriod(p.k)" x-text="p.l"></button>
+    </template>
+    <span class="ps-range" x-show="pPeriod==='custom'" x-cloak>
+      <input class="flt" type="date" x-model="pFrom" @change="reload()" aria-label="From">
+      <span class="ps-arrow">→</span>
+      <input class="flt" type="date" x-model="pTo" @change="reload()" aria-label="To">
+    </span>
+    <span class="slp-range" x-text="data.from ? (data.from + ' → ' + data.to) : ''"></span>
+  </div>
 
-    <div class="two-col" style="margin-top:14px">
-      <div>
-        <h3 class="panel-title">Per strategy</h3>
-        <table class="cap-table"><thead><tr><th>Strategy</th><th>Trades</th><th>Entry slip ₹</th><th>Breaches</th><th>Avg RR dmg %</th></tr></thead><tbody>
-          <template x-for="a in data.per_strategy || []" :key="a.strategy">
-            <tr><td x-text="a.strategy"></td><td class="cap-num" x-text="a.trades"></td>
-              <td class="cap-num" x-text="a.entry_slip_rs"></td>
-              <td class="cap-num" :class="a.breaches ? 'num-neg' : ''" x-text="a.breaches"></td>
-              <td class="cap-num" x-text="dash(a.avg_rr_damage_pct)"></td></tr>
-          </template>
-        </tbody></table>
-      </div>
-      <div>
-        <h3 class="panel-title">Per scanner <span class="panel-sub">(attribution via signals.scanner)</span></h3>
-        <table class="cap-table"><thead><tr><th>Scanner</th><th>Trades</th><th>Avg slip ₹</th><th>Worst ₹</th><th>Breaches</th></tr></thead><tbody>
-          <template x-for="a in data.per_scanner || []" :key="a.scanner">
-            <tr><td x-text="a.scanner"></td><td class="cap-num" x-text="a.trades"></td>
-              <td class="cap-num" x-text="a.avg_slip_rs"></td>
-              <td class="cap-num" x-text="a.worst_rs"></td>
-              <td class="cap-num" :class="a.breaches ? 'num-neg' : ''" x-text="a.breaches"></td></tr>
-          </template>
-          <tr x-show="!(data.per_scanner || []).length" x-cloak><td colspan="5" class="ev-empty">No scanner-attributed trades.</td></tr>
-        </tbody></table>
-      </div>
-    </div>
+  <div class="slp-grid">
+  <div class="slp-main">
 
-    <div class="two-col" style="margin-top:14px">
-      <div>
-        <h3 class="panel-title">Per symbol</h3>
-        <table class="cap-table"><thead><tr><th>Symbol</th><th>Trades</th><th>Avg slip ₹</th><th>Worst ₹</th><th>Breaches</th></tr></thead><tbody>
-          <template x-for="a in data.per_symbol || []" :key="a.symbol">
-            <tr><td x-text="a.symbol"></td><td class="cap-num" x-text="a.trades"></td>
-              <td class="cap-num" x-text="a.avg_slip_rs"></td><td class="cap-num" x-text="a.worst_rs"></td>
-              <td class="cap-num" :class="a.breaches ? 'num-neg' : ''" x-text="a.breaches"></td></tr>
-          </template>
-        </tbody></table>
-      </div>
-      <div>
-        <h3 class="panel-title">Price-band buckets</h3>
-        <table class="cap-table"><thead><tr><th>Band</th><th>Orders</th><th>Avg slip ₹</th><th>Worst ₹</th><th>Exceeded</th></tr></thead><tbody>
-          <template x-for="a in data.price_buckets || []" :key="a.band">
-            <tr><td x-text="a.band"></td><td class="cap-num" x-text="a.trades"></td>
-              <td class="cap-num" x-text="a.avg_slip_rs"></td><td class="cap-num" x-text="a.worst_rs"></td>
-              <td class="cap-num" :class="a.breaches ? 'num-neg' : ''" x-text="a.breaches"></td></tr>
-          </template>
-        </tbody></table>
-      </div>
-    </div>
-
-    <h3 class="panel-title" style="margin-top:14px">Through-day trend (avg entry slip by hour)</h3>
-    <table class="cap-table" style="max-width:520px"><thead><tr><th>Hour (IST)</th><th>Orders</th><th>Avg slip ₹</th></tr></thead><tbody>
-      <template x-for="t in data.trend || []" :key="t.hour">
-        <tr><td x-text="t.hour + ':00'"></td><td class="cap-num" x-text="t.n"></td><td class="cap-num" x-text="t.avg_slippage"></td></tr>
+    {% call kpi_row() %}
+      {{ kpi_card("Total Orders",         "dash(t('total_orders'))",       tone="info") }}
+      {{ kpi_card("Orders Within Limit",  "dash(t('within_limit'))",       tone="pos")  }}
+      {{ kpi_card("Orders Near Limit",    "dash(t('near_limit'))",         tone="warn") }}
+      {{ kpi_card("Orders Exceeded Limit","dash(t('exceeded'))",           tone="neg")  }}
+      {{ kpi_card("Average Slippage",     "rs(t('avg_slippage_rs'))",      tone="info") }}
+      {{ kpi_card("Worst Slippage",       "rs(t('worst_slippage_rs'))",    tone="neg")  }}
+    {% endcall %}
+    <div class="slp-kpi-note">
+      <span x-text="pctLine()"></span>
+      <span class="slp-dot">·</span>
+      <span x-text="'average over ' + dash(t('measured')) + ' measured of ' + dash(t('total_orders')) + ' orders'"></span>
+      <!-- ⛔ An order with no measured slippage is NEVER counted as a pass. It is
+           reported here so the four KPI counts visibly add up to the total. -->
+      <template x-if="t('unmeasured')">
+        <span><span class="slp-dot">·</span><span class="slp-warn"
+              x-text="t('unmeasured') + ' unmeasured (no signal price, fill price or tolerance)'"></span></span>
       </template>
-      <tr x-show="!(data.trend || []).length" x-cloak><td colspan="3" class="ev-empty">No timestamped slippage rows.</td></tr>
-    </tbody></table>
-  </section>
+    </div>
+
+    <!-- FILTERS. ⛔ Scanner is deliberately absent (ruling 1). -->
+    <section class="panel slp-filter-panel">
+      <h3 class="panel-title slp-flt-title">Filters</h3>
+      <div class="filters slp-filters">
+        <label class="slp-f"><span>Date Range</span>
+          <span class="slp-dates">
+            <input class="flt" type="date" x-model="pFrom" aria-label="From">
+            <span class="ps-arrow">–</span>
+            <input class="flt" type="date" x-model="pTo" aria-label="To">
+          </span>
+        </label>
+        <label class="slp-f"><span>Strategy</span>
+          <select class="flt" x-model="f.strategy">
+            <option value="">All Strategies</option>
+            <template x-for="o in opt('strategy')" :key="o"><option :value="o" x-text="o"></option></template>
+          </select></label>
+        <label class="slp-f"><span>Symbol</span>
+          <select class="flt" x-model="f.symbol">
+            <option value="">All Symbols</option>
+            <template x-for="o in opt('symbol')" :key="o"><option :value="o" x-text="o"></option></template>
+          </select></label>
+        <label class="slp-f"><span>Trade Type</span>
+          <select class="flt" x-model="f.trade_type">
+            <option value="">All Types</option>
+            <template x-for="o in opt('trade_type')" :key="o"><option :value="o" x-text="o"></option></template>
+          </select></label>
+        <label class="slp-f"><span>Direction</span>
+          <select class="flt" x-model="f.direction">
+            <option value="">All Directions</option>
+            <template x-for="o in opt('direction')" :key="o"><option :value="o" x-text="o"></option></template>
+          </select></label>
+        <label class="slp-f"><span>Price Range (System Price)</span>
+          <select class="flt" x-model="f.price_bucket">
+            <option value="">All Ranges</option>
+            <template x-for="o in opt('price_bucket')" :key="o"><option :value="o" x-text="'₹' + o"></option></template>
+          </select></label>
+        <label class="slp-f"><span>Slippage Status</span>
+          <select class="flt" x-model="f.status">
+            <option value="">All Statuses</option>
+            <template x-for="o in opt('status')" :key="o">
+              <option :value="o" x-text="stLabel(o)"></option></template>
+          </select></label>
+        <span class="slp-fbtns">
+          <button class="rt-btn" type="button" @click="resetFilters()">Reset Filters</button>
+          <button class="rt-btn rt-active" type="button" @click="applyFilters()">Apply Filters</button>
+        </span>
+      </div>
+      <div class="slp-filter-state" x-show="isFiltered()" x-cloak>
+        Filtered — <b x-text="data.order_count"></b> of
+        <b x-text="data.order_count_unfiltered"></b> orders in range.
+        Every panel below, and the XLSX export, reflect this filtered set.
+      </div>
+    </section>
+
+    <!-- SLIPPAGE DETAILS.
+         Column order is the approved common standard — Trading Date, Time,
+         Strategy, Symbol, Trade Type, Direction, then the scores — followed by
+         the slippage block. ⛔ No Scanner. ⛔ Symbol appears ONCE (the reference
+         design repeated it at the head of the slippage block).
+         Row labels LEFT (`.lbl`); every data column CENTER (`.ctr`). -->
+    <section class="panel">
+      <div class="slp-panel-head">
+        <h3 class="panel-title">Slippage Details</h3>
+        <button class="btn-export" type="button" @click="exportXlsx()">⭳ Export XLSX</button>
+      </div>
+      <div class="slp-tbl-wrap">
+        <table class="cap-table slp-tbl">
+          <thead><tr>
+            <template x-for="c in COLS" :key="c.key">
+              <th :class="(c.lbl ? 'lbl ' : '') + 'slp-th'" role="button" tabindex="0"
+                  :title="c.title || ''"
+                  @click="tSort(c.key)" @keyup.enter="tSort(c.key)">
+                <span x-text="c.label"></span><span class="slp-arrow" x-text="tArrow(c.key)"></span>
+              </th>
+            </template>
+          </tr></thead>
+          <tbody>
+            <template x-for="r in tPaged(rows())" :key="rowKey(r)">
+              <tr>
+                <td x-text="r.date"></td>
+                <td class="ctr" x-text="dash(r.time)"></td>
+                <td x-text="dash(r.strategy)"></td>
+                <td class="ctr" x-text="dash(r.symbol)"></td>
+                <td class="ctr" x-text="dash(r.trade_type)"></td>
+                <td class="ctr" :class="dirCls(r.direction)" x-text="dash(r.direction)"></td>
+                <td class="ctr" x-text="dash(r.system_score)"></td>
+                <td class="ctr" x-text="dash(r.score_threshold)"></td>
+                <td class="ctr" x-text="rs(r.entry_price_system)"></td>
+                <td class="ctr" x-text="rs(r.entry_price_filled)"></td>
+                <td class="ctr" x-text="rs(r.allowed_slippage_rs)"></td>
+                <td class="ctr" :class="stNum(r.status)" x-text="rs(r.actual_slippage_rs)"></td>
+                <td class="ctr" x-text="pct(r.slippage_pct)"></td>
+                <td class="ctr">
+                  <span class="slp-badge" :class="'slp-' + r.status"
+                        :title="r.status_ratio_pct === null ? 'not measurable'
+                                : (r.status_ratio_pct + '% of the allowed slippage')"
+                        x-text="stLabel(r.status)"></span>
+                </td>
+              </tr>
+            </template>
+            <tr x-show="!rows().length" x-cloak>
+              <td :colspan="COLS.length" class="slp-empty">No slippage rows for the current filters.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="slp-pager" x-show="rows().length" x-cloak>
+        <span class="slp-pg-lbl">Rows per page:</span>
+        <template x-for="n in tPageSizes" :key="n">
+          <button class="rt-btn" type="button" :class="tPageSize===n?'rt-active':''"
+                  @click="tPageSize=n; tPage=1" x-text="n"></button>
+        </template>
+        <span class="slp-pg-of" x-text="pageLabel()"></span>
+        <button class="rt-btn" type="button" @click="tPage=Math.max(1,tPage-1)" :disabled="tPage<=1">‹</button>
+        <button class="rt-btn" type="button"
+                @click="tPage=Math.min(tPageCount(rows()),tPage+1)"
+                :disabled="tPage>=tPageCount(rows())">›</button>
+      </div>
+      <div class="slp-note" x-text="data.score_note || ''"></div>
+    </section>
+  </div><!-- /slp-main -->
+
+  <!-- RIGHT RAIL. ⛔ Scanner Slippage Ranking removed (ruling 1). -->
+  <aside class="slp-rail">
+    <section class="panel">
+      <div class="slp-panel-head"><h3 class="panel-title">Strategy Slippage Ranking</h3>
+        <button class="btn-export" type="button" @click="exportXlsx()">⭳ Export XLSX</button></div>
+      <table class="cap-table"><thead><tr>
+        <th class="lbl">Strategy</th><th>Avg Slippage</th><th>Worst Slippage</th><th>Exceeded</th>
+      </tr></thead><tbody>
+        <template x-for="r in (data.per_strategy || [])" :key="r.strategy">
+          <tr><td x-text="r.strategy"></td>
+            <td class="ctr" x-text="rs(r.avg_slippage_rs)"></td>
+            <td class="ctr num-neg" x-text="rs(r.worst_slippage_rs)"></td>
+            <td class="ctr" :class="r.exceeded ? 'num-neg' : ''" x-text="r.exceeded"></td></tr>
+        </template>
+        <tr x-show="!(data.per_strategy||[]).length" x-cloak>
+          <td colspan="4" class="slp-empty">No orders.</td></tr>
+      </tbody></table>
+    </section>
+
+    <section class="panel">
+      <div class="slp-panel-head"><h3 class="panel-title">Symbol Slippage Ranking</h3>
+        <button class="btn-export" type="button" @click="exportXlsx()">⭳ Export XLSX</button></div>
+      <table class="cap-table"><thead><tr>
+        <th class="lbl">Symbol</th><th>Avg Slippage</th><th>Worst Slippage</th><th>Exceeded</th>
+      </tr></thead><tbody>
+        <template x-for="r in (data.per_symbol || [])" :key="r.symbol">
+          <tr><td x-text="r.symbol"></td>
+            <td class="ctr" x-text="rs(r.avg_slippage_rs)"></td>
+            <td class="ctr num-neg" x-text="rs(r.worst_slippage_rs)"></td>
+            <td class="ctr" :class="r.exceeded ? 'num-neg' : ''" x-text="r.exceeded"></td></tr>
+        </template>
+        <tr x-show="!(data.per_symbol||[]).length" x-cloak>
+          <td colspan="4" class="slp-empty">No orders.</td></tr>
+      </tbody></table>
+      <div class="slp-note">Scanner ranking omitted — strategy is the scanner
+        identity on this system.</div>
+    </section>
+  </aside>
+  </div><!-- /slp-grid -->
+
+  <!-- ANALYTICS ROWS — FULL WIDTH, deliberately OUTSIDE the main+rail grid.
+       ⚠️ They were inside `.slp-main` in the first version, which left a tall
+       empty column under the rail and squeezed the trend chart to ~285px, where
+       its axis labels scaled down to roughly 4px. The reference layout also runs
+       these rows the full width beneath the rankings. -->
+  <!-- PRICE BUCKETS · THROUGH-DAY TREND · RR DAMAGE -->
+    <div class="slp-row3">
+      <section class="panel">
+        <h3 class="panel-title">Price Bucket Analysis</h3>
+        <table class="cap-table slp-bkt"><thead><tr>
+          <th class="lbl">Price Range<span class="slp-th-sub">(System Price)</span></th>
+          <th>Orders</th><th>Avg Slippage</th><th>Worst Slippage</th>
+          <th>Exceeded</th><th>Exceeded %</th>
+        </tr></thead><tbody>
+          <!-- ALL FIVE buckets always render. One with no orders shows dashes and
+               `observed:false` — ⛔ never a ₹0.00, which would read as measured. -->
+          <template x-for="b in (data.price_buckets || [])" :key="b.bucket">
+            <tr :class="b.observed ? '' : 'slp-unobserved'">
+              <td x-text="b.bucket"></td>
+              <td class="ctr" x-text="b.orders"></td>
+              <td class="ctr" x-text="rs(b.avg_slippage_rs)"></td>
+              <td class="ctr" x-text="rs(b.worst_slippage_rs)"></td>
+              <td class="ctr" :class="b.exceeded ? 'num-neg' : ''" x-text="b.observed ? b.exceeded : '—'"></td>
+              <td class="ctr" :class="excCls(b.exceeded_pct)" x-text="pct(b.exceeded_pct)"></td>
+            </tr>
+          </template>
+        </tbody>
+        <tfoot x-show="rows().length" x-cloak><tr class="slp-total">
+          <td>TOTAL</td>
+          <td class="ctr" x-text="t('total_orders')"></td>
+          <td class="ctr" x-text="rs(t('avg_slippage_rs'))"></td>
+          <td class="ctr" x-text="rs(t('worst_slippage_rs'))"></td>
+          <td class="ctr" :class="t('exceeded') ? 'num-neg' : ''" x-text="t('exceeded')"></td>
+          <td class="ctr" :class="excCls(t('exceeded_pct'))" x-text="pct(t('exceeded_pct'))"></td>
+        </tr></tfoot>
+        </table>
+        <div class="slp-note" x-text="data.bucket_note || ''"></div>
+      </section>
+
+      <section class="panel">
+        <div class="slp-panel-head">
+          <h3 class="panel-title">Slippage Trend Through Day</h3>
+          <span class="slp-toggle">
+            <button class="rt-btn" type="button" :class="trendKey==='rs'?'rt-active':''"
+                    @click="trendKey='rs'">Average Slippage (₹)</button>
+            <button class="rt-btn" type="button" :class="trendKey==='pct'?'rt-active':''"
+                    @click="trendKey='pct'">Average Slippage %</button>
+          </span>
+        </div>
+        <div class="curve-wrap slp-curve-wrap">
+          <!-- ⚠️ ONE `x-html` group, ⛔ NOT `<template x-for>` children.
+               A `<template>` written inside `<svg>` is parsed as an SVG element
+               named "template" in the SVG namespace, not as an HTMLTemplateElement,
+               so Alpine never sees a template to repeat and the chart renders as an
+               EMPTY BOX. Found by looking at the page — every Screen-10 test was
+               green while the panel was blank, which is the Screen-09 donut lesson
+               again. `x-html` on a <g> is the pattern Screens 06/07/09 already use
+               for their pie arcs, and it works because innerHTML on an SVG node
+               parses in the SVG namespace. -->
+          <!-- viewBox is sized to the panel's ACTUAL rendered width (~460px at
+               1600px) so the scale factor is ~1:1 and the label font-sizes below
+               are the sizes the operator really sees. ⚠️ A 600-wide viewBox in a
+               285px panel scaled 9.5px text down to about 4px — the numbers were
+               on the page and unreadable. -->
+          <svg class="curve-svg slp-curve" viewBox="0 0 460 200" aria-hidden="true">
+            <g x-html="chartMarkup()"></g>
+          </svg>
+        </div>
+        <div class="slp-note" x-text="data.trend_note || ''"></div>
+      </section>
+
+      <section class="panel">
+        <h3 class="panel-title">RR Damage Analysis</h3>
+        <table class="cap-table slp-rr"><tbody>
+          <tr><td class="slp-rr-k">Expected RR (Avg)</td>
+            <td class="ctr" x-text="rr('expected_rr_avg') === null ? '—' : ('1 : ' + Number(rr('expected_rr_avg')).toFixed(2))"></td></tr>
+          <tr><td class="slp-rr-k">Actual RR (Avg)</td>
+            <td class="ctr" x-text="rr('actual_rr_avg') === null ? '—' : ('1 : ' + Number(rr('actual_rr_avg')).toFixed(2))"></td></tr>
+        </tbody></table>
+        <!-- TWO DIFFERENT quantities, each under its own name and its own base.
+             ⛔ Neither is presented as the other — one label, one meaning. -->
+        <div class="slp-rrbox">
+          <div class="slp-rrbox-c">
+            <span class="slp-rrbox-l">RR Damage % (Avg)</span>
+            <b class="num-neg" x-text="pct(rr('rr_damage_pct_avg'))"></b>
+            <span class="slp-rrbox-s" x-text="dataRR().rr_damage_basis || ''"></span>
+          </div>
+          <div class="slp-rrbox-c">
+            <span class="slp-rrbox-l">RR Degradation % (Avg)</span>
+            <b class="num-warn" x-text="pct(rr('rr_degradation_pct_avg'))"></b>
+            <span class="slp-rrbox-s" x-text="dataRR().rr_degradation_basis || ''"></span>
+          </div>
+        </div>
+        <div class="slp-rrfoot">
+          <div class="slp-rrf-c"><span class="slp-rrf-l">Trades Impacted</span>
+            <b x-text="dash(rr('trades_impacted'))"></b></div>
+          <div class="slp-rrf-c"><span class="slp-rrf-l">Total Trades</span>
+            <b x-text="dash(rr('total_trades'))"></b></div>
+          <div class="slp-rrf-c"><span class="slp-rrf-l">Impact on P&amp;L</span>
+            <b class="num-neg" x-text="money(-(imp('pnl_lost_to_slippage') || 0))"></b></div>
+        </div>
+      </section>
+    </div>
+
+    <!-- IMPACT · STATUS DONUT · STATUS GUIDE -->
+    <div class="slp-row3">
+      <section class="panel">
+        <h3 class="panel-title">Slippage Impact on P&amp;L</h3>
+        <table class="cap-table slp-imp"><thead><tr>
+          <th class="lbl">Measure</th><th>Value</th>
+        </tr></thead><tbody>
+          <!-- ⚠️ Potential P&L is explicitly a COUNTERFACTUAL — the same trades
+               filled at their system price. ⛔ Not a claim about the market. -->
+          <tr><td>Potential P&amp;L <span class="slp-imp-s">(if filled at system price)</span></td>
+            <td class="ctr" :class="toneCls(imp('potential_pnl'))" x-text="money(imp('potential_pnl'))"></td></tr>
+          <tr><td>Actual P&amp;L <span class="slp-imp-s">(realised, with slippage)</span></td>
+            <td class="ctr" :class="toneCls(imp('actual_pnl'))" x-text="money(imp('actual_pnl'))"></td></tr>
+          <tr><td>P&amp;L Lost to Slippage</td>
+            <td class="ctr num-neg" x-text="money(imp('pnl_lost_to_slippage'))"></td></tr>
+          <tr><td>% Impact on P&amp;L</td>
+            <td class="ctr num-neg" x-text="pct(imp('impact_pct'))"></td></tr>
+        </tbody></table>
+        <div class="slp-note">
+          <span x-text="dataImp().note || ''"></span>
+          <span x-show="dataImp().impact_pct_basis" x-cloak>
+            · <span x-text="dataImp().impact_pct_basis"></span></span>
+          <span x-show="dataImp().costed_rows !== dataImp().total_rows" x-cloak>
+            · costed on <b x-text="dataImp().costed_rows"></b> of
+            <b x-text="dataImp().total_rows"></b> rows carrying both a slippage and a qty</span>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h3 class="panel-title">Status Distribution</h3>
+        <div class="pos-donut-wrap slp-donut-wrap">
+          <svg class="pos-donut slp-donut" viewBox="0 0 42 42" aria-hidden="true">
+            <circle class="pd-track" cx="21" cy="21" r="15.9155"></circle>
+            <g x-html="pieMarkup()"></g>
+          </svg>
+          <div class="ord-legend pos-legend slp-legend">
+            <template x-for="s in pieSegs()" :key="s.status">
+              <div><span class="dot" :class="'slp-dot-' + s.status"></span>
+                <span x-text="s.label"></span>
+                <b x-text="s.count + ' (' + (s.pct === null ? '—' : s.pct.toFixed(2) + '%') + ')'"></b></div>
+            </template>
+            <div x-show="!pieSegs().length" x-cloak class="slp-empty">No orders in range.</div>
+          </div>
+        </div>
+        <div class="slp-note" x-text="dataTot().pct_basis || ''"></div>
+      </section>
+
+      <section class="panel">
+        <h3 class="panel-title">Slippage Status Guide</h3>
+        <ul class="slp-guide">
+          <template x-for="g in (data.status_guide || [])" :key="g.status">
+            <li><span class="slp-badge" :class="'slp-' + g.status" x-text="g.label"></span>
+              <span class="slp-guide-r" x-text="g.rule"></span></li>
+          </template>
+        </ul>
+        <div class="slp-note">Every threshold is a share of the <b>allowed slippage</b>
+          for that order — ⛔ not of its price.</div>
+      </section>
+    </div>
+
+    <div class="slp-foot">
+      <span>ℹ</span> All values are read-only and auto-update with the page.
+      <span x-show="data.row_cap_applied" x-cloak class="slp-cap-warn">
+        ⚠ Row cap in force — totals may be truncated.</span>
+      <span class="slp-err" x-show="loadError" x-cloak x-text="loadError"></span>
+  </div>
 </div>
+
 <script>
 function slippagePage() {
-  return Object.assign(pageBase("/api/slippage"), periodMixin("today"), {
-    breaches() { return (this.data.rows || []).filter(r => r.breach).length; },
-    avgSlip() {
-      const rs = (this.data.rows || []).map(r => Number(r.entry_slippage_rs || 0));
-      return rs.length ? (rs.reduce((a, b) => a + b, 0) / rs.length).toFixed(2) : "—";
+  return Object.assign(
+    pageBase("/api/analytics/slippage"),
+    tableMixin({ defaultSize: 100, pageSizes: [50, 100, 200, 500] }),
+    {
+    PERIODS: [{k:"today",l:"Today"},{k:"yesterday",l:"Yesterday"},
+              {k:"week",l:"This Week"},{k:"month",l:"This Month"},
+              {k:"custom",l:"Custom Range"}],
+
+    /* Column ROLES, stated in one place. `lbl` = a row/side label heading, which
+       stays LEFT; every other heading sits over its own data and is CENTRED by
+       `.slp-page .cap-table th`. ⛔ Not a positional guess — Strategy is the
+       third heading, so `th:first-child` could not express this. */
+    COLS: [
+      { key:"date",                label:"Trading Date", lbl:true },
+      { key:"time",                label:"Time",     title:"Entry time (IST)" },
+      { key:"strategy",            label:"Strategy", lbl:true },
+      { key:"symbol",              label:"Symbol" },
+      { key:"trade_type",          label:"Trade Type", title:"Product on the ENTRY order; UNKNOWN when the trade has no ENTRY order row" },
+      { key:"direction",           label:"Direction" },
+      { key:"system_score",        label:"System Score",    title:"The ACHIEVED screener score" },
+      { key:"score_threshold",     label:"Score Threshold", title:"The minimum the signal had to reach" },
+      { key:"entry_price_system",  label:"Entry Price (System)" },
+      { key:"entry_price_filled",  label:"Entry Price (Filled)" },
+      { key:"allowed_slippage_rs", label:"Allowed Slippage", title:"The tolerance the order path actually applied to this trade" },
+      { key:"actual_slippage_rs",  label:"Actual Slippage",  title:"Adverse entry slippage (₹)" },
+      { key:"slippage_pct",        label:"Slippage %",       title:"Share of the SYSTEM price" },
+      { key:"status",              label:"Status" },
+    ],
+
+    ST_LABEL: { WITHIN_LIMIT:"Within Limit", NEAR_LIMIT:"Near Limit",
+                EXCEEDED:"Exceeded", UNMEASURED:"Unmeasured" },
+
+    pPeriod: "today", pFrom: "", pTo: "", pick: "today",
+    f: { strategy:"", symbol:"", trade_type:"", direction:"", price_bucket:"", status:"" },
+    applied: { strategy:"", symbol:"", trade_type:"", direction:"", price_bucket:"", status:"" },
+    trendKey: "rs",
+
+    boot() { this.load(); },
+    /* THE POLL PATH (ops-refresh). ⛔ Must not reset the pager, the sort or the
+       filters — the operator is looking at the page while it refreshes. */
+    refresh() { this.load(); },
+    reload() { this.tPage = 1; this.load(); },
+
+    isPeriod(k) { return this.pick === k; },
+    setPeriod(k) {
+      this.pick = k;
+      if (k === "yesterday") {
+        const d = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+        this.pPeriod = "custom"; this.pFrom = d; this.pTo = d;
+      } else if (k === "custom") {
+        this.pPeriod = "custom";
+      } else {
+        this.pPeriod = k; this.pFrom = ""; this.pTo = "";
+      }
+      this.reload();
+    },
+
+    /* ONE query builder — the fetch and the export both use it, so the sheet
+       cannot be built from a different filter set than the screen shows. */
+    params() {
+      const p = new URLSearchParams();
+      p.set("period", this.pPeriod);
+      if (this.pPeriod === "custom") {
+        if (this.pFrom) p.set("from", this.pFrom);
+        if (this.pTo) p.set("to", this.pTo);
+      }
+      Object.keys(this.applied).forEach(k => {
+        if (this.applied[k]) p.set(k, this.applied[k]);
+      });
+      return p;
+    },
+    qs() { return "?" + this.params().toString(); },
+    exportXlsx() { window.location = "/api/export/slippage?" + this.params().toString(); },
+
+    applyFilters() { this.applied = Object.assign({}, this.f); this.reload(); },
+    resetFilters() {
+      this.f = { strategy:"", symbol:"", trade_type:"", direction:"", price_bucket:"", status:"" };
+      this.applied = Object.assign({}, this.f); this.reload();
+    },
+    isFiltered() { return Object.keys(this.applied).some(k => this.applied[k]); },
+    opt(k) { return (this.data.filters && this.data.filters.options
+                     && this.data.filters.options[k]) || []; },
+
+    /* ── formatters. A missing value is a DASH, ⛔ never 0.00 ── */
+    t(k) { return this.data.totals ? this.data.totals[k] : null; },
+    dataTot() { return this.data.totals || {}; },
+    dataRR() { return this.data.rr || {}; },
+    dataImp() { return this.data.impact || {}; },
+    rr(k) { const v = this.dataRR()[k]; return (v === undefined) ? null : v; },
+    imp(k) { const v = this.dataImp()[k]; return (v === undefined) ? null : v; },
+    rs(v) { return (v === null || v === undefined) ? "—" : "₹" + Number(v).toFixed(2); },
+    pct(v) { return (v === null || v === undefined) ? "—" : Number(v).toFixed(2) + "%"; },
+    toneCls(v) { const n = Number(v); return (v===null||v===undefined||isNaN(n)) ? ""
+                        : (n > 0 ? "num-pos" : (n < 0 ? "num-neg" : "")); },
+    dirCls(d) { return d === "LONG" ? "num-pos" : (d === "SHORT" ? "num-neg" : ""); },
+    excCls(v) { return (v === null || v === undefined) ? "" : (Number(v) > 0 ? "num-neg" : ""); },
+    stLabel(s) { return this.ST_LABEL[s] || s; },
+    stNum(s) { return s === "EXCEEDED" ? "num-neg" : (s === "NEAR_LIMIT" ? "num-warn" : ""); },
+    modelLine() {
+      const m = this.data.model; if (!m) return "";
+      return m.mode + " · " + m.max_slippage_fraction + "×SL, cap ₹"
+             + Number(m.absolute_cap_rs).toFixed(2) + ", ceiling ₹"
+             + Number(m.hard_max_slippage_rs).toFixed(2) + " · near ≥ "
+             + m.near_limit_floor_pct + "% · " + m.source;
+    },
+    pctLine() {
+      const w = this.t("within_pct"), n = this.t("near_pct"), e = this.t("exceeded_pct");
+      if (w === null || w === undefined) return "";
+      return this.pct(w) + " within · " + this.pct(n) + " near · " + this.pct(e) + " exceeded";
+    },
+
+    rows() { return this.data.rows || []; },
+    rowKey(r) { return [r.trade_id, r.date, r.symbol].join("|"); },
+    pageLabel() {
+      const n = this.rows().length; if (!n) return "0 of 0";
+      const s = (this.tPage - 1) * this.tPageSize + 1;
+      return s + "–" + Math.min(n, s + this.tPageSize - 1) + " of " + n;
+    },
+
+    /* ── through-day trend. Geometry only; every value comes from the payload ──
+       x is fixed to the approved timeline (09:15 … 15:30) so the axis does not
+       rescale as buckets fill and empty. */
+    XT: ["09:15","10:00","11:00","12:00","13:00","14:00","15:30"],
+    /* X1 leaves room for the LAST tick label to sit centred under its mark
+       without running past the viewBox — at 448 the "15:30" label was clipped
+       to "15:3". */
+    X0: 50, X1: 434, Y0: 30, Y1: 164,
+    trendRows() { return this.data.trend || []; },
+    tVal(b) { return this.trendKey === "rs" ? b.avg_slippage_rs : b.avg_slippage_pct; },
+    tMax() {
+      const v = this.trendRows().map(b => this.tVal(b)).filter(x => x !== null && x !== undefined);
+      const m = v.length ? Math.max(...v) : 0;
+      return m > 0 ? m * 1.25 : 1;             /* headroom for the point labels */
+    },
+    yFor(v) { return this.Y1 - (this.Y1 - this.Y0) * (v / this.tMax()); },
+    xFor(i) { return this.X0 + (this.X1 - this.X0) * (i / (this.XT.length - 1)); },
+    yTicks() {
+      const mx = this.tMax(), out = [];
+      for (let i = 0; i <= 3; i++) {
+        const v = mx * i / 3;
+        out.push({ v: v, y: this.yFor(v).toFixed(1),
+                   label: this.trendKey === "rs" ? "₹" + v.toFixed(2) : v.toFixed(2) + "%" });
+      }
+      return out;
+    },
+    xTicks() { return this.XT.map((l, i) => ({ label: l, x: this.xFor(i).toFixed(1) })); },
+    trendPoints() {
+      const out = [];
+      this.trendRows().forEach((b, i) => {
+        const v = this.tVal(b);
+        if (v === null || v === undefined) return;      /* ⛔ no point, no fill */
+        out.push({ bucket: b.bucket, x: this.xFor(i).toFixed(1), y: this.yFor(v).toFixed(1),
+                   label: this.trendKey === "rs" ? "₹" + Number(v).toFixed(2)
+                                                 : Number(v).toFixed(2) + "%" });
+      });
+      return out;
+    },
+    /* Contiguous runs only. A gap in the data becomes a GAP in the line. */
+    trendSegments() {
+      const segs = []; let cur = [];
+      this.trendRows().forEach((b, i) => {
+        const v = this.tVal(b);
+        if (v === null || v === undefined) {
+          if (cur.length > 1) segs.push(cur.join(" "));
+          cur = []; return;
+        }
+        cur.push(this.xFor(i).toFixed(1) + "," + this.yFor(v).toFixed(1));
+      });
+      if (cur.length > 1) segs.push(cur.join(" "));
+      return segs;
+    },
+    /* The whole chart body as one SVG string — see the note on the <svg>. */
+    chartMarkup() {
+      const esc = s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;");
+      let out = "";
+      this.yTicks().forEach(g => {
+        out += '<line class="slp-gl" x1="46" y1="' + g.y + '" x2="440" y2="' + g.y + '"></line>'
+             + '<text class="slp-axis" x="42" y="' + (Number(g.y) + 4).toFixed(1)
+             + '" text-anchor="end">' + esc(g.label) + "</text>";
+      });
+      this.trendSegments().forEach(seg => {
+        out += '<polyline class="curve-line slp-line" fill="none" points="' + seg + '"></polyline>';
+      });
+      const pts = this.trendPoints();
+      pts.forEach(p => {
+        out += '<circle class="slp-dot-pt" cx="' + p.x + '" cy="' + p.y + '" r="3.4"></circle>'
+             + '<text class="slp-pt-lbl" x="' + p.x + '" y="' + (Number(p.y) - 8).toFixed(1)
+             + '" text-anchor="middle">' + esc(p.label) + "</text>";
+      });
+      /* x axis: the approved timeline, all seven marks. Each point sits at the
+         START of the session bucket it summarises; 15:30 is the session close. */
+      this.xTicks().forEach(x => {
+        out += '<text class="slp-axis" x="' + x.x + '" y="188" text-anchor="middle">'
+             + esc(x.label) + "</text>";
+      });
+      if (!pts.length) {
+        out += '<text class="slp-axis slp-empty-axis" x="248" y="100" text-anchor="middle">'
+             + "No timestamped slippage in this period</text>";
+      }
+      return out;
+    },
+
+    /* ── status donut. Same geometry as Screens 06/07/09 (r = 15.9155 ⇒
+         circumference 100), so a percentage IS the dash length. ── */
+    pieSegs() {
+      const d = this.data.status_distribution || [];
+      const total = d.reduce((a, s) => a + (s.count || 0), 0);
+      if (!total) return [];
+      const out = []; let acc = 0;
+      d.forEach(s => {
+        if (!s.count) return;                            /* no zero-width arc */
+        const pct = 100 * s.count / total;
+        out.push({ status: s.status, label: s.label, count: s.count, pct: pct,
+                   dash: pct.toFixed(3) + " " + (100 - pct).toFixed(3),
+                   offset: (-acc).toFixed(3) });
+        acc += pct;
+      });
+      return out;
+    },
+    pieMarkup() {
+      return this.pieSegs().map(s =>
+        '<circle class="pd-arc slp-arc-' + s.status + '" cx="21" cy="21" r="15.9155" ' +
+        'stroke-dasharray="' + s.dash + '" stroke-dashoffset="' + s.offset + '"></circle>'
+      ).join("");
     },
   });
 }
