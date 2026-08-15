@@ -24,7 +24,7 @@ import io
 from flask import Blueprint, current_app, jsonify, request, send_file
 
 from ..auth import login_required
-from ..services import (analytics_period, execution_analytics,
+from ..services import (audit, analytics_period, execution_analytics,
                         slippage_analytics, system_health)
 
 
@@ -284,3 +284,61 @@ def export_system_health():
     payload = system_health.build_system_health(cfg, **_health_kwargs())
     return _xlsx(system_health.export_sheets(payload),
                  "system_health_%s.xlsx" % payload["today"])
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SCREEN 13 — AUDIT
+# ⛔ The pre-existing `/api/audit` (system.py) is left UNTOUCHED — it is a
+# today-only 4-field feed with its own callers and its own tests. This is an
+# ADDITIVE endpoint for the approved Audit screen.
+# ─────────────────────────────────────────────────────────────────────────────
+def _audit_kwargs() -> dict:
+    def _arg(name):
+        return (request.args.get(name) or "").strip() or None
+
+    return {"start": _arg("start"), "end": _arg("end"),
+            "category": _arg("category"), "action": _arg("action"),
+            "status": _arg("status"), "module": _arg("module"),
+            "user": _arg("user"), "q": _arg("q"),
+            "bucket": _arg("bucket") or "7d"}
+
+
+@analytics2_api.route("/api/audit-screen", methods=["GET"])
+@login_required
+def get_audit_screen():
+    """Screen 13. Read-only. ONE filtered population feeds the KPIs, the table,
+    the donut, the line chart, Top Actors, Critical Changes and the export."""
+    cfg = current_app.config["GUI_CONFIG"]
+    return jsonify(audit.build_audit(cfg, **_audit_kwargs()))
+
+
+@analytics2_api.route("/api/audit-detail", methods=["GET"])
+@login_required
+def get_audit_detail():
+    """The approved Audit Details panel for ONE record, with its timeline.
+
+    ⭐ Resolved from the SAME filtered build as the table, so a Reference ID
+    always addresses the row the operator actually clicked.
+    """
+    cfg = current_app.config["GUI_CONFIG"]
+    ref = (request.args.get("ref_id") or "").strip()
+    payload = audit.build_audit(cfg, **_audit_kwargs())
+    rec = audit.record_detail(payload, ref)
+    if rec is None:
+        return jsonify({"error": "unknown reference id", "ref_id": ref}), 404
+    return jsonify(rec)
+
+
+@analytics2_api.route("/api/export/audit-screen", methods=["GET"])
+@login_required
+def export_audit_screen():
+    """XLSX of the FILTERED view only (approved: "Export filtered results only").
+
+    ⭐ Same builder, same arguments ⇒ the exported rows are the table's rows.
+    ⛔ Unrecorded fields export as NOT INSTRUMENTED, never as a blank cell.
+    """
+    cfg = current_app.config["GUI_CONFIG"]
+    payload = audit.build_audit(cfg, **_audit_kwargs())
+    return _xlsx(audit.export_sheets(payload),
+                 "audit_%s_%s.xlsx" % (payload["range"]["start"],
+                                       payload["range"]["end"]))

@@ -3287,3 +3287,180 @@ def trade_explorer_summary(rows: list) -> dict:
             "rr_recorded": sum(1 for r in rows if r.get("rr_applied") is not None),
         },
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SCREEN 13 — AUDIT. Read-only (mode=ro) like every reader above; NO schema.
+#
+# ⚠️ THE EXISTING `audit_feed` IS TODAY-ONLY — every one of its six queries pins
+# `date`/`LIKE today%`. The approved Audit screen has a DATE RANGE filter and a
+# retention panel spanning the whole store, so it needs range-scoped reads.
+# ⛔ `audit_feed` is left UNTOUCHED: other callers depend on its shape.
+#
+# ⛔ NO SCANNER IDENTITY IS SELECTED ANYWHERE IN THIS BLOCK. `webhook_audit`
+# carries `scanner_name`, and the project-wide rule is KEEP STRATEGY / REMOVE
+# SCANNER — so the column is deliberately NOT read, not merely hidden later.
+# ─────────────────────────────────────────────────────────────────────────────
+def audit_system_events_range(cfg: dict, start: str, end: str,
+                              limit: int = 2000) -> list:
+    """STARTUP / SHUTDOWN / CRASH_DETECTED / CONFIG_DIFF … with their JSON detail.
+
+    `event_id` is the AUTOINCREMENT primary key and is what makes a stable,
+    non-mutating Reference ID possible.
+    """
+    with _ro(cfg) as conn:
+        try:
+            rows = conn.execute(
+                "SELECT event_id, timestamp, event_type, scenario, details "
+                "FROM system_events WHERE substr(timestamp,1,10) BETWEEN ? AND ? "
+                "ORDER BY timestamp DESC, event_id DESC LIMIT ?",
+                (start, end, int(limit)),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+    return [dict(r) for r in rows]
+
+
+def audit_config_snapshots(cfg: dict, start: str, end: str,
+                           limit: int = 200) -> list:
+    """Config snapshots in range PLUS the one immediately BEFORE `start`.
+
+    ⭐ THE PRECEDING ROW IS NOT OPTIONAL: a diff needs a left-hand side, so the
+    first change inside the window can only be computed against the snapshot
+    that preceded it. Without it the earliest change in any range would silently
+    vanish.
+
+    ⚠️ `config_json` is the FULL resolved AppConfig (~16 KB/row), so the caller
+    must keep `limit` sane.
+    """
+    with _ro(cfg) as conn:
+        try:
+            rows = conn.execute(
+                "SELECT snapshot_id, snapshot_date, snapshot_ts, config_hash, "
+                "config_json FROM config_snapshots "
+                "WHERE snapshot_date BETWEEN ? AND ? "
+                "   OR snapshot_id = (SELECT MAX(snapshot_id) FROM config_snapshots "
+                "                     WHERE snapshot_date < ?) "
+                "ORDER BY snapshot_ts ASC, snapshot_id ASC LIMIT ?",
+                (start, end, start, int(limit)),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+    return [dict(r) for r in rows]
+
+
+def audit_kill_switch(cfg: dict) -> Optional[dict]:
+    """The kill-switch row. ⚠️ `kill_switch_state` is SINGLE-ROW (CHECK (id=1)),
+    so this is the CURRENT state and ⛔ NOT a history of control actions —
+    the caller must not present it as one."""
+    with _ro(cfg) as conn:
+        try:
+            row = conn.execute(
+                "SELECT id, state, reason, triggered_at, triggered_by "
+                "FROM kill_switch_state WHERE id=1"
+            ).fetchone()
+        except sqlite3.OperationalError:
+            return None
+    return dict(row) if row else None
+
+
+def audit_reconciliation_range(cfg: dict, start: str, end: str,
+                               limit: int = 2000) -> list:
+    with _ro(cfg) as conn:
+        try:
+            rows = conn.execute(
+                "SELECT id, ts, check_name, tier, symbol, action_taken, success "
+                "FROM reconciliation_log WHERE substr(ts,1,10) BETWEEN ? AND ? "
+                "ORDER BY ts DESC, id DESC LIMIT ?", (start, end, int(limit)),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+    return [dict(r) for r in rows]
+
+
+def audit_webhook_range(cfg: dict, start: str, end: str,
+                        limit: int = 2000) -> list:
+    """⛔ `scanner_name` is deliberately NOT selected — KEEP STRATEGY / REMOVE
+    SCANNER. An inbound POST is still a real audited action without it."""
+    with _ro(cfg) as conn:
+        try:
+            rows = conn.execute(
+                "SELECT id, ts, response_code, signals_accepted, signals_rejected "
+                "FROM webhook_audit WHERE date BETWEEN ? AND ? "
+                "ORDER BY ts DESC, id DESC LIMIT ?", (start, end, int(limit)),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+    return [dict(r) for r in rows]
+
+
+def audit_control_tower_range(cfg: dict, start: str, end: str,
+                              limit: int = 2000) -> list:
+    with _ro(cfg) as conn:
+        try:
+            rows = conn.execute(
+                "SELECT id, scan_time, category, severity, resource_type, "
+                "resource_name, reason, status FROM control_tower_findings "
+                "WHERE substr(scan_time,1,10) BETWEEN ? AND ? "
+                "ORDER BY scan_time DESC, id DESC LIMIT ?",
+                (start, end, int(limit)),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+    return [dict(r) for r in rows]
+
+
+def audit_preflight_range(cfg: dict, start: str, end: str,
+                          limit: int = 2000) -> list:
+    with _ro(cfg) as conn:
+        try:
+            rows = conn.execute(
+                "SELECT run_id, run_date, phase, started_at, completed_at, "
+                "total_checks, passed, failed_critical, overall_status "
+                "FROM preflight_runs WHERE run_date BETWEEN ? AND ? "
+                "ORDER BY COALESCE(completed_at, started_at) DESC LIMIT ?",
+                (start, end, int(limit)),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+    return [dict(r) for r in rows]
+
+
+def audit_retention_meta(cfg: dict) -> dict:
+    """Store-wide record count and oldest/newest stamp across the audit sources.
+
+    ⛔ Deliberately NOT range-filtered: the Retention Overview describes the
+    STORE, not the current filter. Counting only the filtered window would make
+    the panel shrink as the operator narrows a date range, which is exactly the
+    opposite of what a retention figure means.
+    """
+    out = {"per_source": {}, "records": 0, "oldest": None, "newest": None}
+    probes = (
+        ("system_events", "COUNT(*)", "MIN(timestamp)", "MAX(timestamp)"),
+        ("config_snapshots", "COUNT(*)", "MIN(snapshot_ts)", "MAX(snapshot_ts)"),
+        ("reconciliation_log", "COUNT(*)", "MIN(ts)", "MAX(ts)"),
+        ("webhook_audit", "COUNT(*)", "MIN(ts)", "MAX(ts)"),
+        ("control_tower_findings", "COUNT(*)", "MIN(scan_time)", "MAX(scan_time)"),
+        ("preflight_runs", "COUNT(*)",
+         "MIN(COALESCE(completed_at, started_at))",
+         "MAX(COALESCE(completed_at, started_at))"),
+    )
+    with _ro(cfg) as conn:
+        for table, cnt, lo, hi in probes:
+            try:
+                r = conn.execute(
+                    "SELECT %s AS n, %s AS lo, %s AS hi FROM %s" % (cnt, lo, hi, table)
+                ).fetchone()
+            except sqlite3.OperationalError:
+                continue
+            n = int(r["n"] or 0)
+            out["per_source"][table] = {"records": n, "oldest": r["lo"],
+                                        "newest": r["hi"]}
+            out["records"] += n
+            for key, val in (("oldest", r["lo"]), ("newest", r["hi"])):
+                if not val:
+                    continue
+                cur = out[key]
+                if cur is None or (val < cur if key == "oldest" else val > cur):
+                    out[key] = val
+    return out
