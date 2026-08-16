@@ -898,14 +898,58 @@ def test_text_meets_the_thirteen_pixel_floor():
         assert rule in block, rule
 
 
+#: The ONE selector in this block that does not begin `.lav-page`, and it is
+#: still page-scoped: `:has()` targets the shared `main.content` only when THIS
+#: page is its child — the Screen-02 precedent (`main.content:has(> .dash-page)`).
+_SCOPED_EXCEPTION = "main.content:has(> .lav-page)"
+
+
 def test_the_screen_is_scoped_and_cannot_repaint_another():
     css = _css()
     start = css.index("SCREEN 18 — LIVE ACTIVITY")
     block = css[start:]
     for line in block.splitlines():
         line = line.strip()
-        if line.startswith(".") and "{" in line:
-            assert line.startswith(".lav-page"), line
+        if not line or "{" not in line or line.startswith(("/*", "*", "@", "}")):
+            continue
+        if line.startswith(("."), 0) or line.startswith("main"):
+            assert (line.startswith(".lav-page")
+                    or line.startswith(_SCOPED_EXCEPTION)), line
+    # ⛔ and the exception is the ONLY one — a second non-.lav-page selector
+    # would repaint a screen this one has no business touching.
+    heads = re.findall(r"^([a-z][^{\n]*)\{", block, re.M)
+    assert [h.strip() for h in heads] == [_SCOPED_EXCEPTION], heads
+
+
+def test_the_wall_uses_the_whole_main_column():
+    """🔴 THE REJECTED GUTTER, PINNED. The shared `.content` caps at 1600px and
+    centres, which on a 1920 viewport left an 86px empty gutter on BOTH sides
+    inside a 1740px column — the dashboard read as narrow and shifted right.
+    ⭐ The artwork gives 15px left and 16px right of a 1536 canvas, i.e. the
+    content is 97.7% of the column. ⛔ The cap must not come back."""
+    css = _css()
+    start = css.index("SCREEN 18 — LIVE ACTIVITY")
+    block = css[start:]
+    rule = re.search(r"main\.content:has\(> \.lav-page\) \{[^}]*\}", block).group(0)
+    assert "max-width: none" in rule
+    assert "margin: 0" in rule
+    assert "width: 100%" in rule
+    # ⛔ never re-centred, and never a bespoke padding scale
+    assert "auto" not in rule
+    assert "padding: 16px" in rule
+
+
+def test_the_three_columns_carry_the_artworks_own_proportions():
+    """⭐ MEASURED off `gui/18. Live_Activity.png`, ⛔ not chosen: its rail is
+    263px of a 1318px content band (20%), and its wide/narrow boundary averages
+    x876 across the three rows, splitting the 1044px left area 674:370 = 1.82."""
+    css = _css()
+    start = css.index("SCREEN 18 — LIVE ACTIVITY")
+    block = css[start:]
+    work = re.search(r"\.lav-page \.lav-work \{[^}]*\}", block).group(0)
+    assert "minmax(0, 1fr) 340px" in work
+    left = re.search(r"\.lav-page \.lav-left \{[^}]*\}", block).group(0)
+    assert "minmax(0, 1.82fr) minmax(0, 1fr)" in left
 
 
 def test_no_secret_reaches_the_screen(client):

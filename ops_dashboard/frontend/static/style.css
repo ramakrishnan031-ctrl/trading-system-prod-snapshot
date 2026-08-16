@@ -3371,6 +3371,21 @@ table td.ctr { text-align: center !important; }
    ⛔ NO min-height and NO stretch anywhere: the columns are balanced by what is
    IN them, which is the lesson Screen 15 paid for.
    ═══════════════════════════════════════════════════════════════════════════ */
+/* 🔴🔴 THE WALL USES THE WHOLE MAIN COLUMN, and this rule is the correction.
+   ⚠️ MEASURED, ⛔ not judged: the shared `.content` is `max-width:1600px;
+   margin:0 auto`, so on a 1920 viewport the 1600px box was CENTRED inside the
+   1740px main column and left an **86px empty gutter on BOTH sides** — the
+   dashboard read as narrow and shifted right. ⭐ THE ARTWORK SAYS 15 AND 16:
+   a row scan of `gui/18. Live_Activity.png` at y=300 puts the sidebar edge at
+   x=187, the first panel at x=202 and the last at x=1520 of a 1536 canvas ⇒
+   15px left, 16px right, content = 97.7% of the column. This restores that.
+   ⚠️ It changes NOTHING at 1440: there the 1600px cap never binds (the column
+   is 1260) and the gutter was already the correct 16px — verified both ways.
+   ⭐ `:has()` scoping is the Screen-02 precedent (`main.content:has(> .dash-page)`),
+   so no other screen is touched. */
+main.content:has(> .lav-page) { width: 100%; max-width: none; margin: 0;
+  padding: 16px; }
+
 .lav-page {
   --t-blue: 56,139,253;  --t-green: 46,160,67;   --t-red: 218,54,51;
   --t-orange: 219,109,40; --t-purple: 163,113,247; --t-yellow: 210,153,34;
@@ -3432,8 +3447,10 @@ table td.ctr { text-align: center !important; }
 /* ⛔ `minmax(0, 1fr)`, NEVER a bare `1fr`: a grid item defaults to
    `min-width:auto`, so a table's intrinsic width would refuse to shrink and
    push the whole page into a horizontal scroll (measured on Screen 13). */
+/* ⭐ RAIL 340px = the artwork's own 20%: the PNG's rail runs x1257→1520 (263px)
+   inside a 1318px content band, and 20% of the restored 1708px content is 341. */
 .lav-page .lav-work { display: grid; gap: 16px; align-items: start;
-  grid-template-columns: minmax(0, 1fr) 300px; }
+  grid-template-columns: minmax(0, 1fr) 340px; }
 @media (max-width: 1400px) { .lav-page .lav-work { grid-template-columns: minmax(0, 1fr); } }
 .lav-page .lav-rail { display: flex; flex-direction: column; gap: 16px; }
 .lav-page .lav-rail .panel, .lav-page .lav-left .panel { margin-bottom: 0; }
@@ -3446,14 +3463,17 @@ table td.ctr { text-align: center !important; }
    ⭐ THE STRIPS ARE THE PNG's OWN COLUMNS, measured off the artwork —
         WIDE   (x200-890)   feed · winners + system events · active positions
         NARROW (x805-1250)  pipeline · strategy · feed filters · capital
-   ⭐ The 1.6 ratio sits between the artwork's own row-A split (1.34) and row-C
-   split (1.95), and it is the value at which EVERY panel fits: the six pipeline
-   stages get 69px each ("Validation" needs 63) and the feed's three free-text
-   columns get 155px each — both BETTER than the rejected version.
+   ⭐ RATIO 1.82 IS THE ARTWORK'S OWN, measured: the PNG's wide/narrow boundary
+   sits at x800 (row A), x935 (row B) and x893 (row C) — average x876 — which
+   splits its 1044px left area 674:370 = 1.82. ⚠️ It was 1.6 for one commit ONLY
+   because the container was capped at 1600px and the narrow strip could not
+   otherwise give the pipeline its 63px; with the full column restored the
+   artwork's own ratio fits, so it is used. (P) wide 862 / narrow 474 at 1920 vs
+   the PNG's averages scaled to the same content band: 870 / 479.
    ⛔ Nothing is stretched, ⛔ no spacer exists, ⛔ no font or card was shrunk:
    each strip simply stops when its own content stops. */
 .lav-page .lav-left { display: grid; gap: 16px; align-items: start;
-  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); }
+  grid-template-columns: minmax(0, 1.82fr) minmax(0, 1fr); }
 .lav-page .lav-main, .lav-page .lav-side { display: flex; flex-direction: column;
   gap: 16px; min-width: 0; }
 
