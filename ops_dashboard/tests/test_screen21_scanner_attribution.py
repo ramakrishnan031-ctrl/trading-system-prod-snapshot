@@ -877,3 +877,145 @@ def test_percentages_carry_their_base_in_the_payload(gui_config):
     assert p["quality"]["base"]
     assert p["profitability"]["roi_base"]
     assert analytics_period is not None      # the shared period layer is imported
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# THE 16-AUG OLD-DESIGN COMPLIANCE GATE — D1 · D2 · D3 · D4
+# Each of these pins a deviation the artwork comparison actually found, so the
+# artwork's own geometry cannot drift back out.
+# ═════════════════════════════════════════════════════════════════════════════
+def test_d1_the_drilldown_is_one_row_of_six():
+    """⛔ THE DEFECT THIS PINS: the panel rendered 3×2 at every width, including
+    1920. The artwork draws SIX tiles in ONE row, and approved Screen 20 already
+    renders the identical panel that way."""
+    block = _css_block()
+    rule = block[block.index(".sca-page .sca-drill-grid"):]
+    rule = rule[:rule.index("}")]
+    # ⭐ SIX COLUMNS, however the track is expressed — the property is "one row
+    # of six", ⛔ not a literal `1fr`. The tracks are content-sized at the design
+    # width so `Performance` renders whole; a narrow-width media query below
+    # switches them back to equal.
+    assert re.search(r"grid-template-columns:\s*repeat\(6,", rule), rule
+    assert "repeat(3" not in rule, rule
+    # and the narrow fallback is still six across, never a second row
+    narrow = block[block.index("@media (max-width: 1560px)"):]
+    narrow = narrow[:narrow.index("\n}")]
+    assert "repeat(6," in narrow, narrow
+
+
+def test_d1_the_drilldown_geometry_matches_approved_screen_20():
+    """⭐ Asserted against Screen 20's OWN lines, not against numbers copied
+    here — if either screen's tile changes size the two stop matching.
+
+    ⚠️ HORIZONTAL PADDING IS DELIBERATELY OUT OF THE EQUALITY SET: Screen 21's
+    drilldown panel is the narrower of the two (it is one of three in its row,
+    not one of two), and the six approved labels need 292px of text at the
+    binding 13px floor. 3px rather than 4px per side is what buys `Performance`
+    its last few pixels. Every other dimension matches Screen 20 exactly.
+    """
+    css = _css()
+    def _decl(sel):
+        i = css.index(sel)
+        return " ".join(css[i:css.index("}", i)].split())
+    for prop in ("gap: 9px", "min-height: 74px", "border-radius: 9px",
+                 "border: 1px solid var(--border-soft)"):
+        assert prop in _decl(".sca-page .sca-tile ") or prop in _decl(".sca-page .sca-drill-grid"), prop
+        assert prop in _decl(".sh-page .sh-tile ") or prop in _decl(".sh-page .sh-drill-grid"), prop
+    # the vertical padding — the part that sets the card's height — is identical
+    for sel in (".sca-page .sca-tile ", ".sh-page .sh-tile "):
+        assert "padding: 13px " in _decl(sel), sel
+
+
+def test_d1_every_tile_carries_the_artworks_tone_and_the_first_is_active(gui_config):
+    p = scanner_attribution.build_scanner_attribution_screen(gui_config)
+    d = p["drilldown"]
+    assert [x["label"] for x in d] == ["Overview", "Signals", "Orders",
+                                       "Trades", "Performance", "Health"]
+    assert [x["tone"] for x in d] == ["blue", "purple", "amber", "green",
+                                      "blue", "red"]
+    assert [x["active"] for x in d] == [True, False, False, False, False, False]
+
+
+def test_d1_the_tones_use_existing_theme_tokens_only():
+    """⛔ NO NEW COLOUR VALUE (global rule 2). Each tone resolves to a token the
+    theme already defines."""
+    block = _css_block()
+    tones = re.findall(r"\.sca-t-(\w+)\s+\.sca-tile-ico \{ color: var\((--[\w-]+)\); \}", block)
+    assert dict(tones) == {"blue": "--blue", "purple": "--purple",
+                           "amber": "--yellow", "green": "--pos", "red": "--neg"}, tones
+    # ⚠️ the palette packs several tokens onto one line, so a definition is not
+    # anchored to a line start — search for the declaration itself.
+    css = _css()
+    for _t, token in tones:
+        assert re.search(re.escape(token) + r":\s*#[0-9a-fA-F]{3,8}", css), token
+
+
+def test_d2_the_mapping_panel_holds_its_five_row_footprint(gui_config):
+    """⛔ THE DEFECT THIS PINS: every row rendered, uncapped. Production has 16
+    scanners and the panel grew ~216px, pushing EXPORT down the rail."""
+    assert scanner_attribution.MAPPING_PREVIEW == 5
+    p = scanner_attribution.build_scanner_attribution_screen(gui_config)
+    m = p["mapping"]
+    assert m["preview"] == 5
+    assert m["hidden"] == max(0, m["count"] - 5)
+    # ⭐ NOTHING IS WITHHELD — every row is still in the payload and the export
+    assert len(m["rows"]) == m["count"]
+    sheets = {t: rows for t, _h, rows in scanner_attribution.export_sheets(p)}
+    assert len(sheets["Scanner Mapping"]) == m["count"]
+
+
+def test_d2_revealing_the_rest_cannot_grow_the_panel():
+    """⭐ `View All Mappings →` reveals inside a BOUNDED height, so the rail
+    geometry is the same in both states."""
+    tpl = _tpl()
+    assert "View All Mappings" in tpl
+    assert "mappingShown()" in tpl
+    # ⛔ BOUNDED IN BOTH STATES. Bounding only the expanded one made
+    # revealing the rest SHRINK the panel and pull EXPORT up 32px — the
+    # same geometry change the cap exists to prevent, in reverse.
+    block = _css_block()
+    rule = block[block.index(".sca-page .sca-map-wrap {"):]
+    rule = rule[:rule.index("}")]
+    assert "max-height" in rule and "overflow-y: auto" in rule, rule
+    assert ".sca-map-wrap.is-all" not in block, (
+        "a state-dependent cap reintroduces the geometry change")
+
+
+def test_d3_the_footer_uses_the_approved_showing_format():
+    """Artwork: `Showing 1 to N of M …`. ⛔ Was `Showing 8 of 8 strategies`."""
+    js = _js_syntax.script_of(_tpl())
+    body = js[js.index("showing()"):js.index("rejBase()")]
+    assert '"Showing " + (n ? 1 : 0) + " to " + n + " of "' in body, body
+    assert "strateg" in body
+    assert "scanners" not in body
+
+
+def test_d4_the_trend_count_noun_agrees_with_the_table_identity():
+    """⛔ THE DEFECT THIS PINS: `1 Scanners` — the wrong noun for its own base
+    (it counts this table's rows, and this table's identity is the strategy),
+    and no singular agreement."""
+    tpl = _tpl()
+    assert "' Scanners'" not in tpl, "the trend count still says Scanners"
+    js = _js_syntax.script_of(tpl)
+    body = js[js.index("trendLabel(label)"):]
+    body = body[:body.index("},")]
+    assert '"Strategy", "Strategies"' in body, body
+
+
+def test_d4_the_panel_titles_keep_the_artworks_scanner_terminology(client):
+    """⭐ ONLY the unit noun changed. The artwork's panel headings stay — this
+    screen IS Scanner Attribution, and the ruling was about the duplicated
+    identity COLUMN, not about renaming the design's own panels."""
+    page = _page(client)
+    for title in ("SCANNER PERFORMANCE TABLE", "SCANNER RANKING",
+                  "SCANNER MAPPING", "SCANNER DRILLDOWN QUICK ACCESS",
+                  "SCANNER ATTRIBUTION"):
+        assert title in page, title
+
+
+def test_the_plural_helper_is_used_wherever_a_count_meets_a_noun():
+    """⛔ `1 Strategies` reads as a formatting bug and puts the number itself in
+    doubt — the rule `strategy_ranking._n()` already records."""
+    js = _js_syntax.script_of(_tpl())
+    assert "plural(n, one, many)" in js
+    assert js.count("this.plural(") >= 3, js.count("this.plural(")

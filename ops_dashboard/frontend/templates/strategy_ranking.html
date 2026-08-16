@@ -245,8 +245,14 @@
             <span class="sr-trend-ring" :class="'sr-tr-' + t.key"
                   x-text="t.icon"></span>
             <span class="sr-trend-l" :class="'sr-tr-' + t.key" x-text="t.label"></span>
+            {# ⛔ THE NOUN AGREES WITH THE NUMBER. This panel rendered
+               "1 Strategies", the exact formatting bug `_n()` in
+               strategy_ranking.py already records; the smallest correction
+               is made HERE so Screen 21 does not become inconsistent with
+               its own sibling. #}
             <b class="sr-trend-n" x-text="trendCount(t.label)"></b>
-            <span class="sr-trend-s">Strategies</span>
+            <span class="sr-trend-s"
+                  x-text="trendCount(t.label) === 1 ? 'Strategy' : 'Strategies'"></span>
           </div>
         </template>
       </div>

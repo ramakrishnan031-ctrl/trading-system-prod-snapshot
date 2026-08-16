@@ -4659,15 +4659,46 @@ main.content:has(> .sca-page) { width: 100%; max-width: none; margin: 0;
 .sca-page .sca-g-cap { font-size: 13px; color: var(--dim); text-align: center;
   line-height: 1.35; max-width: 22ch; }
 
-.sca-page .sca-drill-grid { display: grid; grid-template-columns: repeat(3, 1fr);
-  gap: 10px; flex: 1 1 auto; align-content: center; }
+/* ⭐ SIX TILES IN ONE ROW — the artwork's own geometry, and the SAME numbers
+   approved Screen 20 already uses for the identical panel (6 columns, gap 9,
+   min-height 74, radius 9, border-soft, 13px label). 🔴 This was 3×2 with
+   one blue icon and no active tile: a layout the artwork never draws, and
+   inconsistent with its own approved sibling. */
+/* ⚠️ COLUMNS SIZE TO THEIR LABEL, ⛔ not `repeat(6, 1fr)`. MEASURED: the six
+   approved labels need 292px of text at the binding 13px floor, and the
+   panel's grid is 380px — which fits, but only if the tiles are NOT forced
+   equal. At `1fr` every tile is 56px while `Performance` needs 76, so two
+   labels truncated to `Overv…` and `Perfo…`.
+   ⛔ The alternatives were both worse: dropping the label below 13px breaks
+   the readability floor the design's own TXT states, and widening the panel
+   to ~583px would make DRILLDOWN the widest panel in a row where the
+   artwork makes it the middle one. Six tiles, one row, every label whole. */
+.sca-page .sca-drill-grid { display: grid;
+  grid-template-columns: repeat(6, minmax(0, max-content));
+  justify-content: space-between; gap: 9px; flex: 1 1 auto;
+  align-content: center; }
 .sca-page .sca-tile { display: flex; flex-direction: column; align-items: center;
-  justify-content: center; gap: 7px; padding: 12px 6px; border-radius: 9px;
-  background: var(--card); border: 1px solid var(--card-bd); min-height: 66px;
-  color: var(--muted); text-decoration: none; }
-.sca-page .sca-tile:hover { border-color: var(--blue); color: var(--blue); }
-.sca-page .sca-tile-ico { display: inline-flex; color: var(--blue); }
-.sca-page .sca-tile-l { font-size: 13px; font-weight: 600; }
+  justify-content: center; gap: 7px; padding: 13px 3px; border-radius: 9px;
+  background: var(--card); border: 1px solid var(--border-soft);
+  min-height: 74px; color: var(--muted); text-decoration: none; }
+.sca-page .sca-tile:hover { border-color: var(--blue); color: var(--text); }
+/* the approved ACTIVE treatment on the first tile — identical to Screen 20's */
+.sca-page .sca-tile.is-on { background: rgba(var(--t-blue), .16);
+  border-color: var(--blue); color: var(--blue); }
+.sca-page .sca-tile-ico { display: inline-flex; }
+/* ⭐ PER-TILE ICON TONE, measured off the artwork and mapped onto the
+   EXISTING theme tokens by nearest hue — ⛔ no new colour value. */
+.sca-page .sca-t-blue   .sca-tile-ico { color: var(--blue); }
+.sca-page .sca-t-purple .sca-tile-ico { color: var(--purple); }
+.sca-page .sca-t-amber  .sca-tile-ico { color: var(--yellow); }
+.sca-page .sca-t-green  .sca-tile-ico { color: var(--pos); }
+.sca-page .sca-t-red    .sca-tile-ico { color: var(--neg); }
+/* ⚠️ ⛔ NO `max-width: 100%` HERE: it collapses the label's max-content
+   contribution, which is exactly what made every `max-content` column resolve
+   to the minimum and truncate `Overview` and `Performance`. The ellipsis
+   stays as the LAST resort for a panel too narrow to hold the row. */
+.sca-page .sca-tile-l { font-size: 13px; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .sca-page .sca-gapbox { flex: 1 1 auto; display: flex; flex-direction: column;
   align-items: center; justify-content: center; gap: 9px; text-align: center;
@@ -4735,7 +4766,23 @@ main.content:has(> .sca-page) { width: 100%; max-width: none; margin: 0;
 .sca-page .sca-prof-v { font-size: 13px; font-weight: 700; color: var(--text);
   white-space: nowrap; }
 
-.sca-page .sca-map-wrap { overflow-x: auto; }
+/* ⭐ THE APPROVED 5-ROW FOOTPRINT. 🔴 Production has 16 scanners; uncapped,
+   the panel grew ~216px and pushed EXPORT down the rail. `is-all` reveals
+   the rest INSIDE the SAME height, so the geometry cannot change. */
+/* ⛔ THE BOX IS BOUNDED IN BOTH STATES, at exactly the natural 5-row height
+   (measured: 43px header + 5 × 28px = 183px). 🔴 Bounding only the expanded
+   state made revealing the rest SHRINK the panel 1120→1088 and pull EXPORT
+   UP 32px — the same geometry change the cap exists to prevent, in the
+   other direction. Collapsed fills it exactly and shows no scrollbar. */
+.sca-page .sca-map-wrap { overflow-x: auto; max-height: 183px;
+  overflow-y: auto; }
+.sca-page .sca-map-foot { display: flex; align-items: baseline; gap: 10px;
+  justify-content: space-between; margin-top: 8px; }
+.sca-page .sca-map-foot .sca-note { margin: 0; }
+.sca-page .sca-map-all { background: none; border: none; padding: 0;
+  font-family: inherit; font-size: 13px; font-weight: 600; color: var(--blue);
+  cursor: pointer; white-space: nowrap; }
+.sca-page .sca-map-all:hover { text-decoration: underline; }
 .sca-page .sca-maptbl { width: 100%; table-layout: fixed; }
 .sca-page .sca-maptbl td { padding: 5px 6px; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
@@ -4763,6 +4810,19 @@ main.content:has(> .sca-page) { width: 100%; max-width: none; margin: 0;
   gap: 7px; color: var(--dim); white-space: nowrap; }
 .sca-page .sca-conn .dot { width: 8px; height: 8px; border-radius: 50%; }
 .sca-page .sca-ins-pos { background: var(--pos); }
+
+/* ⚠️ BELOW THE DESIGN WIDTH THE SIX TILES COMPRESS RATHER THAN OVERFLOW.
+   🔴 MEASURED: content-sized tiles need ~373px and the panel is ~256px at
+   1440, which pushed 7 elements past their container. Here the tracks go
+   back to equal and the label ellipsises — its full text stays on the
+   title attribute. ⭐ ONE ROW OF SIX IS PRESERVED AT BOTH WIDTHS; only the
+   label's fullness is traded, and only where the panel cannot hold it. */
+@media (max-width: 1560px) {
+  .sca-page .sca-drill-grid { grid-template-columns: repeat(6, minmax(0, 1fr));
+    justify-content: stretch; }
+  .sca-page .sca-tile { min-width: 0; }
+  .sca-page .sca-tile-l { max-width: 100%; }
+}
 
 /* ⭐ THE TWO-COLUMN SHAPE HOLDS AT 1440 — the approved artwork puts the
    rail BESIDE the work area, and collapsing at 1500 stacked it underneath
@@ -4869,11 +4929,28 @@ main.content:has(> .hld-page) { width: 100%; max-width: none; margin: 0;
 .hld-page .hld-tbl-foot { display: flex; align-items: center;
   justify-content: space-between; gap: 12px; margin-top: 10px;
   font-size: 13px; color: var(--dim); }
-/* ⭐ 13px, ⛔ not the app-wide `.rt-btn` 11.84px: this is a NEW screen and
-   the readability floor applies to every glyph on it. Scoped, so the pill
-   keeps its approved size everywhere else. */
-.hld-page .hld-pager { display: inline-flex; align-items: center; gap: 8px; }
-.hld-page .hld-pager .rt-btn { font-size: 13px; line-height: 1.2; }
+/* ⭐ THE ARTWORK'S PAGINATION ROW: `‹ [1] 2 3 ›` with the current page
+   boxed, then the rows-per-page select. 🔴 Only prev/next existed, and the
+   `N / page` control the artwork draws was missing entirely.
+   ⛔ 13px throughout, ⛔ not the app-wide `.rt-btn` 11.84px — this is a NEW
+   screen and the readability floor applies to every glyph on it. */
+.hld-page .hld-pager { display: inline-flex; align-items: center; gap: 10px; }
+.hld-page .hld-pg-nav { display: inline-flex; align-items: center; gap: 4px; }
+.hld-page .hld-pg-b { min-width: 28px; height: 28px; padding: 0 7px;
+  font-family: inherit; font-size: 13px; font-weight: 600; line-height: 1;
+  color: var(--muted); background: var(--card);
+  border: 1px solid var(--card-bd); border-radius: 7px; cursor: pointer; }
+.hld-page .hld-pg-b:hover:not([disabled]) { color: var(--text);
+  border-color: var(--blue); }
+.hld-page .hld-pg-b.is-on { color: var(--blue); border-color: var(--blue);
+  background: rgba(var(--t-blue), .16); }
+.hld-page .hld-pg-b[disabled] { opacity: .45; cursor: not-allowed; }
+.hld-page .hld-pg-gap { color: var(--dim); font-size: 13px; padding: 0 2px; }
+/* ⭐ THE ESTABLISHED ROWS-PER-PAGE CONTROL, ⛔ not a new size: Screens 14 and
+   15 already ship `.tlg-rpp .sel` / `.slg-rpp .sel` at exactly
+   `height: 30px; padding: 0 8px`, and this is the same control. Reused
+   verbatim so a fourth screen cannot introduce a fourth height. */
+.hld-page .hld-rpp .sel { height: 30px; padding: 0 8px; }
 .hld-page .hld-pg { color: var(--muted); }
 .hld-page .hld-note { font-size: 13px; color: var(--dim); margin: 8px 0 0;
   line-height: 1.5; }

@@ -214,13 +214,37 @@
           </table>
         </div>
 
+        {# ⭐ THE ARTWORK'S PAGINATION ROW, verbatim: the count on the left, then
+           `‹ [1] 2 3 ›` with the current page boxed, then the rows-per-page
+           select. ⛔ The page state is `tableMixin`'s existing `tPage` /
+           `tPageSize` — no second pagination model was written, and
+           `tPageSizes` was already [10, 25, 50] and simply never rendered. #}
         <div class="hld-tbl-foot">
           <span class="hld-showing" x-text="showing()"></span>
-          <span class="hld-pager" x-show="tPageCount(rows()) > 1" x-cloak>
-            <button class="rt-btn" type="button" @click="tPage = Math.max(1, tPage - 1)">‹</button>
-            <span class="hld-pg mono" x-text="tPage + ' / ' + tPageCount(rows())"></span>
-            <button class="rt-btn" type="button"
-                    @click="tPage = Math.min(tPageCount(rows()), tPage + 1)">›</button>
+          <span class="hld-pager">
+            <span class="hld-pg-nav" x-show="tPageCount(rows()) > 1" x-cloak>
+              <button class="hld-pg-b" type="button" :disabled="tPage <= 1"
+                      title="Previous page"
+                      @click="tPage = Math.max(1, tPage - 1)">‹</button>
+              <template x-for="p in pageList()" :key="p">
+                <span>
+                  <button x-show="p !== '…'" class="hld-pg-b"
+                          :class="p === tPage ? 'is-on' : ''" type="button"
+                          @click="tPage = p" x-text="p"></button>
+                  <span x-show="p === '…'" class="hld-pg-gap">…</span>
+                </span>
+              </template>
+              <button class="hld-pg-b" type="button" title="Next page"
+                      :disabled="tPage >= tPageCount(rows())"
+                      @click="tPage = Math.min(tPageCount(rows()), tPage + 1)">›</button>
+            </span>
+            <label class="hld-rpp">
+              <select class="sel" x-model.number="tPageSize" @change="tPage = 1">
+                <template x-for="n in tPageSizes" :key="n">
+                  <option :value="n" x-text="n + ' / page'"></option>
+                </template>
+              </select>
+            </label>
           </span>
         </div>
         <p class="hld-note" x-show="anyShared()" x-cloak>
@@ -585,6 +609,26 @@ function holdingsPage() {
       return ((this.data.reconciliation || {}).broker_reachable) === false;
     },
     anyShared() { return this.rows().some(r => r.recon_shared); },
+
+    /* The page numbers the artwork draws. ⭐ Every page is listed while they
+       fit; beyond that the list windows around the current page with an
+       ellipsis, so the row can never outgrow the panel it sits in. ⛔ Not a
+       different pagination design — the same numbered buttons, bounded. */
+    PAGE_WINDOW: 7,
+    pageList() {
+      const last = this.tPageCount(this.rows());
+      if (last <= this.PAGE_WINDOW) {
+        return Array.from({length: last}, (_, i) => i + 1);
+      }
+      const cur = Math.min(Math.max(1, this.tPage), last);
+      const out = [1];
+      let lo = Math.max(2, cur - 1), hi = Math.min(last - 1, cur + 1);
+      if (lo > 2) out.push("…");
+      for (let p = lo; p <= hi; p++) out.push(p);
+      if (hi < last - 1) out.push("…");
+      out.push(last);
+      return out;
+    },
 
     /* ── formatting ──────────────────────────────────────────────────────── */
     fmt(n) { return (n === null || n === undefined) ? "—" : Number(n).toLocaleString("en-IN"); },

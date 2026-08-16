@@ -231,7 +231,12 @@
                   <span class="sca-trend-l" :class="'sca-tr-' + t.key" x-text="t.label"></span>
                   <span class="sca-trend-s" x-text="t.hint"></span>
                 </span>
-                <b class="sca-trend-n" x-text="trendCount(t.label) + ' Scanners'"></b>
+                  {# ⛔ THE NOUN IS `Strategy`/`Strategies`, ⛔ not `Scanners`:
+                     this counts the ROWS OF THIS TABLE, and the table's
+                     identity is the strategy — the same objects the footer
+                     two panels above counts. The panel TITLES keep the
+                     artwork's scanner terminology; only the unit changes. #}
+                <b class="sca-trend-n" x-text="trendLabel(t.label)"></b>
               </li>
             </template>
           </ul>
@@ -279,11 +284,17 @@
 
         <section class="panel sca-drill">
           <h3 class="panel-title">SCANNER DRILLDOWN QUICK ACCESS</h3>
+          {# ⭐ SIX TILES IN ONE ROW, each with the tone the artwork paints its
+             icon, and the FIRST tile carrying the approved blue active
+             treatment. ⛔ The tone and the active flag come from the payload,
+             so the order and the highlight cannot drift apart from the
+             approved list in `scanner_attribution.DRILLDOWN`. #}
           <div class="sca-drill-grid">
             <template x-for="d in drilldown()" :key="d.label">
-              <a class="sca-tile" :href="d.href">
+              <a class="sca-tile" :class="[d.active ? 'is-on' : '',
+                                           'sca-t-' + d.tone]" :href="d.href">
                 <span class="sca-tile-ico" x-html="tileIcon(d.label)"></span>
-                <span class="sca-tile-l" x-text="d.label"></span>
+                <span class="sca-tile-l" :title="d.label" x-text="d.label"></span>
               </a>
             </template>
           </div>
@@ -367,6 +378,11 @@
         {# ⭐ THE ONE PLACE THE SCANNER NAME BELONGS — naming the mapping IS this
            panel's purpose. URLs are read from `config/scan_webhook_map.yaml`;
            ⛔ none is constructed, and an entry without one prints the marker. #}
+        {# ⭐ THE APPROVED 5-ROW FOOTPRINT. 🔴 Production carries 16 scanners
+           and an uncapped list grew the rail by ~216px and pushed EXPORT down.
+           `View All Mappings →` reveals the rest INSIDE a fixed-height scroll
+           area, so the panel geometry never changes — ⛔ nothing is withheld,
+           and every row is also on the export's Scanner Mapping sheet. #}
         <div class="sca-map-wrap">
           <table class="cap-table sca-maptbl">
             <thead><tr>
@@ -374,7 +390,7 @@
               <th class="lbl">Linked Strategy</th>
             </tr></thead>
             <tbody>
-              <template x-for="m in mapping()" :key="m.scanner">
+              <template x-for="m in mappingShown()" :key="m.scanner">
                 <tr>
                   <td><span class="sca-map-n" :title="m.scanner" x-text="m.scanner"></span></td>
                   <td>
@@ -399,7 +415,12 @@
             </tbody>
           </table>
         </div>
-        <p class="sca-note" x-text="mapNote()"></p>
+        <div class="sca-map-foot">
+          <span class="sca-note" x-text="mapNote()"></span>
+          <button class="sca-map-all" type="button" x-show="mapHidden()"
+                  x-cloak @click="mapAll = !mapAll"
+                  x-text="mapAll ? 'Show Top 5 ←' : 'View All Mappings →'"></button>
+        </div>
       </section>
 
       <section class="panel sca-export">
@@ -487,6 +508,10 @@ function scannerPage() {
     mapping() { return ((this.data.mapping || {}).rows) || []; },
     ranking() { return ((this.data.ranking || {})[this.mode]) || []; },
     trendCount(label) { return ((this.data.trend_summary || {})[label]) || 0; },
+    trendLabel(label) {
+      const n = this.trendCount(label);
+      return n + " " + this.plural(n, "Strategy", "Strategies");
+    },
     trendUnavailable() { return ((this.data.trend_summary || {}).unavailable) || 0; },
     qScore() { const q = this.data.quality || {}; return (q.score === undefined) ? null : q.score; },
     gap(key) { return ((this.data.gaps || {})[key]) || {reason: "", short: ""}; },
@@ -562,21 +587,37 @@ function scannerPage() {
       return k.pre + v;
     },
 
+    /* ⭐ THE ARTWORK'S FORMAT: "Showing 1 to N of M …". ⛔ The noun is
+       `strategies`, not `scanners`: this table's identity IS the strategy,
+       which is the whole reason the duplicate Scanner column was removed. */
     showing() {
       const d = this.data;
       if (!d.rows) return "";
-      return "Showing " + d.count + " of " + d.total + " strategies";
+      const n = this.rows().length;
+      return "Showing " + (n ? 1 : 0) + " to " + n + " of " + d.total
+             + " " + this.plural(d.total, "strategy", "strategies");
     },
+    /* ⛔ "1 Strategies" reads as a formatting bug and puts the number itself
+       in doubt — the rule `strategy_ranking._n()` already records. */
+    plural(n, one, many) { return Number(n) === 1 ? one : many; },
     rejBase() {
       const r = this.data.rejection_analysis || {};
       if (!r.base) return "";
       const top = r.top ? (" · leading reason: " + top_label(r.top)) : "";
       return "Base: " + r.base + top;
     },
+    mapAll: false,
+    mappingShown() {
+      const rows = this.mapping();
+      const n = ((this.data.mapping || {}).preview) || 5;
+      return this.mapAll ? rows : rows.slice(0, n);
+    },
+    mapHidden() { return ((this.data.mapping || {}).hidden) || 0; },
     mapNote() {
       const m = this.data.mapping || {};
       if (!m.count) return "";
-      return m.count + " scanners mapped, " + m.with_url + " with a screener URL · source: " + m.source;
+      return m.count + " " + this.plural(m.count, "scanner", "scanners")
+             + " mapped, " + m.with_url + " with a screener URL";
     },
     qCaption() {
       const q = this.data.quality || {};

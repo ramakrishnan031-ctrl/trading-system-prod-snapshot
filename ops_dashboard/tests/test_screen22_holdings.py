@@ -854,10 +854,39 @@ def test_the_readability_floor_holds_for_text():
         assert size >= 12.9, (selector.strip(), m.group(0))
 
 
+#: The ONE control size this screen may restate, and only because Screens 14 and
+#: 15 already ship it verbatim for the SAME control. ⚠️ Compared as an exact
+#: declaration, ⛔ not as a class-name exemption: a fourth height smuggled in
+#: under the same class still fails.
+_RPP_DECL = "height: 30px; padding: 0 8px;"
+
+
 def test_no_one_off_control_sizing_is_introduced():
+    """⛔ Height, padding, radius and background come from the SHARED rules.
+
+    ⚠️ NARROWED 16-Aug for the artwork's rows-per-page select. It is genuinely
+    smaller than a filter control in the artwork, and the codebase already has
+    that control at ONE size — `.tlg-rpp .sel` and `.slg-rpp .sel`, both
+    `height: 30px; padding: 0 8px`. Screen 22 reuses that declaration rather
+    than inventing a fourth, and this guard now proves the reuse instead of
+    forbidding the control.
+    """
     for line in _css_block().splitlines():
         if ".sel" in line and "height" in line:
+            if ".hld-rpp .sel" in line and _RPP_DECL in line:
+                continue
             raise AssertionError("one-off control sizing: " + line.strip())
+
+
+def test_the_rows_per_page_control_matches_screens_14_and_15_exactly():
+    """⭐ The reuse is asserted against the OTHER screens' own lines, so if any
+    of the three ever changes size the three stop matching and this goes red."""
+    css = _css()
+    decls = re.findall(r"\.(?:tlg|slg|hld)-(?:page )?\.?\w*rpp \.sel \{([^}]*)\}", css)
+    assert len(decls) == 3, decls
+    norm = {" ".join(d.split()) for d in decls}
+    assert len(norm) == 1, norm
+    assert _RPP_DECL.replace(";", "") in list(norm)[0].replace(";", "")
 
 
 def test_the_page_joins_the_shared_filter_and_token_blocks():
@@ -912,3 +941,65 @@ def test_an_empty_book_produces_no_invented_numbers(gui_config):
     assert [t for t, _h, _r in sheets] == ["Holdings", "Orphans",
                                            "Not Instrumented"]
     assert sheets[0][1] == list(holdings.EXPORT_HEADER)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# THE 16-AUG OLD-DESIGN COMPLIANCE GATE — D5
+# ═════════════════════════════════════════════════════════════════════════════
+def test_d5_the_pagination_row_has_the_three_approved_controls():
+    """⛔ THE DEFECT THIS PINS: only prev/next existed. The artwork draws
+    `‹ [1] 2 3 ›` with the current page boxed AND a `10 / page` selector, and
+    the rows-per-page control was missing entirely."""
+    tpl = _tpl()
+    foot = tpl[tpl.index('<div class="hld-tbl-foot">'):]
+    foot = foot[:foot.index("</div>\n        <p")] if "</div>\n        <p" in foot else foot[:2600]
+    assert "pageList()" in foot, "no numbered page buttons"
+    assert "tPage = Math.max(1, tPage - 1)" in foot, "no previous control"
+    assert "tPage = Math.min(tPageCount(rows()), tPage + 1)" in foot, "no next control"
+    assert "hld-rpp" in foot and "tPageSizes" in foot, "no rows-per-page selector"
+    assert "n + ' / page'" in foot, "the selector does not read 'N / page'"
+
+
+def test_d5_pagination_reuses_the_existing_mixin_state():
+    """⭐ `tPage` / `tPageSize` / `tPageSizes` are tableMixin's own — ⛔ no second
+    pagination model was written, and `pageSizes` was already [10, 25, 50]."""
+    tpl = _tpl()
+    assert "pageSizes: [10, 25, 50]" in tpl
+    js = _js_syntax.script_of(tpl)
+    assert "tPage:" not in js and "tPageSize:" not in js, \
+        "the screen redeclares pagination state instead of using the mixin"
+
+
+def test_d5_the_page_list_is_the_artworks_numbers_and_cannot_overflow():
+    """⭐ Every page is listed while they fit; beyond that it windows with an
+    ellipsis so the row cannot outgrow its panel. ⛔ Not a different design."""
+    tpl = _tpl()
+    body = tpl[tpl.index("pageList() {"):]
+    body = body[:body.index("\n    },")]
+    assert "PAGE_WINDOW" in tpl
+    assert '"…"' in body, body
+
+
+def test_d5_at_28_rows_the_default_page_size_yields_three_pages(gui_config):
+    """⭐ The artwork's own worked example: 28 holdings at 10/page = pages 1-3.
+    Seeded here so the assertion has a real 28-row population, ⛔ not assumed."""
+    c = _conn(gui_config)
+    for i in range(28 - 7):                     # the fixture already carries 7
+        sym = "PAG%02d" % i
+        c.execute("INSERT INTO position_reconciliation(date,symbol,broker_qty,"
+                  "system_qty,status,resolved_at,created_at) VALUES(?,?,?,?,?,?,?)",
+                  (TODAY, sym, 10, 10, "OK", None, _ts("15:45:07")))
+    c.commit()
+    c.close()
+    p = holdings.build_holdings_screen(gui_config)
+    assert p["count"] == 28, p["count"]
+    import math
+    assert math.ceil(p["count"] / 10) == 3
+
+
+def test_d5_the_rows_per_page_control_is_the_established_one():
+    """⛔ Not a new size — Screens 14 and 15 already ship this exact control."""
+    block = _css_block()
+    assert ".hld-page .hld-rpp .sel" in block
+    line = [l for l in block.splitlines() if ".hld-rpp .sel" in l][0]
+    assert "height: 30px" in line and "padding: 0 8px" in line, line

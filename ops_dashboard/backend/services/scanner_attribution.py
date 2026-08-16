@@ -94,12 +94,25 @@ SCORE_WEIGHTS = (("acceptance_rate", "Acceptance Rate", 25),
 TRENDS = ("Improving", "Stable", "Declining")
 
 #: The artwork's SCANNER DRILLDOWN QUICK ACCESS tiles, in the order it draws
-#: them. ⚠️ The artwork's six are Overview · Signals · Orders · Trades ·
-#: Performance · Health — ⛔ the brief's list says "Warnings" where the artwork
-#: draws "Orders"; the ARTWORK is the binding visual target.
-DRILLDOWN = (("Overview", "/strategies"), ("Signals", "/signals"),
-             ("Orders", "/orders"), ("Trades", "/trades"),
-             ("Performance", "/strategy-ranking"), ("Health", "/strategy-health"))
+#: them, each with the TONE the artwork paints its icon. ⚠️ The artwork's six are
+#: Overview · Signals · Orders · Trades · Performance · Health — ⛔ the brief's
+#: list says "Warnings" where the artwork draws "Orders"; the ARTWORK is the
+#: binding visual target.
+#:
+#: ⭐ THE TONES ARE MEASURED OFF THE ARTWORK, then mapped onto the EXISTING theme
+#: tokens by nearest hue — ⛔ no new colour value is introduced (global rule 2):
+#:      Overview    rgb(20,178,255)  h200  → blue    (--blue   h214)
+#:      Signals     rgb(136,63,196)  h280  → purple  (--purple h266)
+#:      Orders      rgb(255,167,1)   h39   → amber   (--yellow h40)
+#:      Trades      rgb(19,180,67)   h137  → green   (--pos    h132)
+#:      Performance rgb(19,186,250)  h200  → blue    (--blue)
+#:      Health      rgb(251,65,39)   h7    → red     (--neg    h3)
+DRILLDOWN = (("Overview", "/strategies", "blue"),
+             ("Signals", "/signals", "purple"),
+             ("Orders", "/orders", "amber"),
+             ("Trades", "/trades", "green"),
+             ("Performance", "/strategy-ranking", "blue"),
+             ("Health", "/strategy-health", "red"))
 
 #: How many days ACTIVITY METRICS' "Signals This Week" spans, and the window the
 #: trend baseline averages over. ⭐ The SAME constant Screen 20 uses, imported
@@ -373,7 +386,12 @@ def build_scanner_attribution_screen(cfg: dict, health: Optional[str] = None,
         "trend_summary": _trend_summary(rows),
         "quality": _quality_overview(rows),
         "mapping": _mapping(registry, meta),
-        "drilldown": [{"label": lbl, "href": href} for lbl, href in DRILLDOWN],
+        # ⭐ `active` marks the FIRST tile, which the artwork paints with the
+        # blue active treatment. It travels in the payload so the tile order
+        # and the active one cannot drift apart in the template.
+        "drilldown": [{"label": lbl, "href": href, "tone": tone,
+                       "active": i == 0}
+                      for i, (lbl, href, tone) in enumerate(DRILLDOWN)],
         "score_weights": [{"key": k, "label": lbl, "pct": w}
                           for k, lbl, w in SCORE_WEIGHTS],
         "filters": {"health": list(HEALTH_STATES),
@@ -629,6 +647,14 @@ def _quality_overview(rows: list) -> dict:
     }
 
 
+#: The artwork draws FIVE mapping rows and then a "View All Mappings →" link.
+#: ⭐ The cap is the panel's APPROVED FOOTPRINT, ⛔ not a data limit: production
+#: carries 16 scanners and an uncapped list grows the right rail by ~216px and
+#: pushes EXPORT down. Every row still travels in the payload and on the export
+#: sheet, so nothing is withheld — only the default view is bounded.
+MAPPING_PREVIEW = 5
+
+
 def _mapping(registry: list, meta: dict) -> dict:
     """SCANNER MAPPING — scanner name · scanner URL · linked strategy, straight
     from `scan_webhook_map.yaml`.
@@ -648,6 +674,8 @@ def _mapping(registry: list, meta: dict) -> dict:
                      "display_name": info.get("display_name") or strat,
                      "strategy_configured": strat in meta})
     return {"rows": rows, "count": len(rows),
+            "preview": MAPPING_PREVIEW,
+            "hidden": max(0, len(rows) - MAPPING_PREVIEW),
             "with_url": sum(1 for r in rows if r["url"]),
             "source": "config/scan_webhook_map.yaml"}
 
