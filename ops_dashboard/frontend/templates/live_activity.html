@@ -73,10 +73,19 @@
   </div>
 
   <div class="lav-work">
+    {# ⛔⛔ TWO INDEPENDENT STRIPS, ⛔ NOT full-width rows — and this is the whole
+       shape of the page. 🔴 The rows version was REJECTED: a grid row is as tall
+       as its TALLEST cell, so on a quiet day the short REAL-TIME ACTIVITY FEED
+       left a ~210px dead band beneath it while RECENT WINNERS / LOSERS waited
+       for the unrelated PIPELINE + STRATEGY stack beside it to close.
+       ⭐ THE STRIPS ARE THE PNG's OWN COLUMNS, read off the artwork:
+         WIDE  strip (x200-890)  — FEED · WINNERS/LOSERS + SYSTEM EVENTS · ACTIVE POSITIONS
+         NARROW strip (x805-1250) — PIPELINE · STRATEGY ACTIVITY · FEED FILTERS · CAPITAL
+       ⛔ No panel changes strip, no section is added or removed, and there is no
+       spacer anywhere — each strip simply stops when its own content stops. #}
     <div class="lav-left">
+      <div class="lav-main">
 
-      {# ── ROW A — REAL-TIME ACTIVITY FEED · PIPELINE + STRATEGY ─────────── #}
-      <div class="lav-rowa">
         <section class="panel lav-feed">
           <div class="lav-panel-head">
             <h3 class="panel-title">REAL-TIME ACTIVITY FEED</h3>
@@ -161,80 +170,12 @@
           </div>
         </section>
 
-        <div class="lav-mid">
-          <section class="panel lav-pipe">
-            <h3 class="panel-title">LIVE PROCESSING PIPELINE
-              <span class="panel-sub" x-text="pipelineBase()"></span>
-            </h3>
-            <div class="lav-pipe-row">
-              <template x-for="s in stages()" :key="s.key">
-                <div class="lav-pstep" :class="s.active ? 'is-active' : ''">
-                  <span class="lav-pdot" :class="'lav-pd-' + s.key"
-                        x-html="STAGE_ICON[s.key]"></span>
-                  <span class="lav-pname" x-text="s.name"></span>
-                </div>
-              </template>
-            </div>
-            <div class="lav-pipe-counts">
-              <template x-for="s in stages()" :key="s.key">
-                <div class="lav-pcount" :class="s.active ? 'is-active' : ''">
-                  <b x-text="fmt(s.count)"></b>
-                  <span x-text="s.last_time ? ('Last: ' + s.last_time) : 'No event yet'"></span>
-                </div>
-              </template>
-            </div>
-          </section>
-
-          <section class="panel lav-strat">
-            <h3 class="panel-title">STRATEGY ACTIVITY
-              <span class="panel-sub" x-text="'(' + strategies().length + ')'"></span>
-            </h3>
-            {# 🔴 CAUGHT IN THE BROWSER at 1440: without this wrapper the five
-               columns overflowed the panel and the LAST SIGNAL TIME header
-               painted on top of the right rail. #}
-            <div class="lav-tbl-wrap">
-            <table class="cap-table lav-stbl">
-              <thead><tr>
-                <th class="lbl">Strategy</th>
-                <th class="lbl ctr">Signals</th>
-                <th class="lbl ctr">Orders</th>
-                <th class="lbl ctr">Trades</th>
-                <th class="lbl ctr">Last Signal Time</th>
-              </tr></thead>
-              <tbody>
-                <template x-for="s in strategies()" :key="s.strategy">
-                  <tr>
-                    <td x-text="s.strategy"></td>
-                    <td class="ctr mono" x-text="fmt(s.signals)"></td>
-                    <td class="ctr mono" x-text="fmt(s.orders)"></td>
-                    <td class="ctr mono" x-text="fmt(s.trades)"></td>
-                    <td class="ctr lav-last">
-                      <i class="lav-dot" :class="'lav-dot-' + s.dot"></i><span
-                         class="mono" x-text="s.last_signal_time || '—'"></span>
-                    </td>
-                  </tr>
-                </template>
-                <tr x-show="!strategies().length" x-cloak>
-                  <td colspan="5" class="lav-empty">No strategy activity recorded today.</td>
-                </tr>
-              </tbody>
-            </table>
-            </div>
-            {# ⛔ An order whose trade row is absent cannot be attributed to a
-               strategy. It is REPORTED rather than dropped, so this table can
-               never quietly total less than the ORDERS TODAY card above it. #}
-            <p class="lav-note" x-show="unattributedNote()" x-cloak
-               x-text="unattributedNote()"></p>
-            <div class="lav-foot">
-              <a class="panel-link lav-more" href="/strategies">View All Strategies →</a>
-            </div>
-          </section>
-        </div>
-      </div>
-
-      {# ── ROW B — WINNERS/LOSERS · SYSTEM EVENTS · FEED FILTERS ─────────── #}
-      <div class="lav-rowb">
-        <section class="panel lav-wl">
+        {# ── WINNERS / LOSERS + SYSTEM EVENTS — the PNG's second band, side by
+           side INSIDE the wide strip exactly as the artwork draws them, so they
+           now begin directly under the feed instead of waiting for the
+           pipeline stack beside them. ──────────────────────────────────── #}
+        <div class="lav-rowb">
+          <section class="panel lav-wl">
           <h3 class="panel-title">RECENT WINNERS / LOSERS
             <span class="panel-sub" x-text="wlBase()"></span>
           </h3>
@@ -250,7 +191,7 @@
           </div>
         </section>
 
-        <section class="panel lav-sysev">
+          <section class="panel lav-sysev">
           <h3 class="panel-title">SYSTEM EVENTS
             <span class="panel-sub" x-text="sysEventsSub()"></span>
           </h3>
@@ -278,25 +219,9 @@
           <div class="lav-foot">
             <a class="panel-link lav-more" href="/logs">View All Events →</a>
           </div>
-        </section>
+          </section>
+        </div>
 
-        <section class="panel lav-filters">
-          <h3 class="panel-title">FEED FILTERS</h3>
-          <div class="lav-tiles">
-            <template x-for="t in TILES" :key="t.key">
-              <button class="lav-tile" type="button"
-                      :class="tileActive(t.key) ? 'is-on' : ''"
-                      @click="setCat(t.key)">
-                <span class="lav-tile-ico" x-html="t.ico"></span>
-                <span class="lav-tile-l" x-text="t.label"></span>
-              </button>
-            </template>
-          </div>
-        </section>
-      </div>
-
-      {# ── ROW C — ACTIVE POSITIONS · CAPITAL UTILIZATION ────────────────── #}
-      <div class="lav-rowc">
         <section class="panel lav-pos">
           <h3 class="panel-title">ACTIVE POSITIONS <span class="lav-live-tag">(LIVE)</span>
             <span class="panel-sub" x-text="posBase()"></span>
@@ -352,6 +277,94 @@
           <p class="lav-note" x-text="posNote()"></p>
           <div class="lav-foot">
             <a class="panel-link lav-more" href="/positions">View All Positions →</a>
+          </div>
+        </section>
+      </div>
+
+      {# ── NARROW STRIP — LIVE PROCESSING PIPELINE · STRATEGY ACTIVITY ·
+         FEED FILTERS · CAPITAL UTILIZATION. These four are the PNG's own
+         right-hand column of the work area (x≈805-1250), and they flow on
+         their own so nothing in the wide strip ever waits for them. ────── #}
+      <div class="lav-side">
+        <section class="panel lav-pipe">
+          <h3 class="panel-title">LIVE PROCESSING PIPELINE
+            <span class="panel-sub" x-text="pipelineBase()"></span>
+          </h3>
+          <div class="lav-pipe-row">
+            <template x-for="s in stages()" :key="s.key">
+              <div class="lav-pstep" :class="s.active ? 'is-active' : ''">
+                <span class="lav-pdot" :class="'lav-pd-' + s.key"
+                      x-html="STAGE_ICON[s.key]"></span>
+                <span class="lav-pname" x-text="s.name"></span>
+              </div>
+            </template>
+          </div>
+          <div class="lav-pipe-counts">
+            <template x-for="s in stages()" :key="s.key">
+              <div class="lav-pcount" :class="s.active ? 'is-active' : ''">
+                <b x-text="fmt(s.count)"></b>
+                <span x-text="s.last_time ? ('Last: ' + s.last_time) : 'No event yet'"></span>
+              </div>
+            </template>
+          </div>
+        </section>
+
+        <section class="panel lav-strat">
+          <h3 class="panel-title">STRATEGY ACTIVITY
+            <span class="panel-sub" x-text="'(' + strategies().length + ')'"></span>
+          </h3>
+          {# 🔴 CAUGHT IN THE BROWSER at 1440: without this wrapper the five
+             columns overflowed the panel and the LAST SIGNAL TIME header
+             painted on top of the right rail. #}
+          <div class="lav-tbl-wrap">
+          <table class="cap-table lav-stbl">
+            <thead><tr>
+              <th class="lbl">Strategy</th>
+              <th class="lbl ctr">Signals</th>
+              <th class="lbl ctr">Orders</th>
+              <th class="lbl ctr">Trades</th>
+              <th class="lbl ctr">Last Signal Time</th>
+            </tr></thead>
+            <tbody>
+              <template x-for="s in strategies()" :key="s.strategy">
+                <tr>
+                  <td x-text="s.strategy"></td>
+                  <td class="ctr mono" x-text="fmt(s.signals)"></td>
+                  <td class="ctr mono" x-text="fmt(s.orders)"></td>
+                  <td class="ctr mono" x-text="fmt(s.trades)"></td>
+                  <td class="ctr lav-last">
+                    <i class="lav-dot" :class="'lav-dot-' + s.dot"></i><span
+                       class="mono" x-text="s.last_signal_time || '—'"></span>
+                  </td>
+                </tr>
+              </template>
+              <tr x-show="!strategies().length" x-cloak>
+                <td colspan="5" class="lav-empty">No strategy activity recorded today.</td>
+              </tr>
+            </tbody>
+          </table>
+          </div>
+          {# ⛔ An order whose trade row is absent cannot be attributed to a
+             strategy. It is REPORTED rather than dropped, so this table can
+             never quietly total less than the ORDERS TODAY card above it. #}
+          <p class="lav-note" x-show="unattributedNote()" x-cloak
+             x-text="unattributedNote()"></p>
+          <div class="lav-foot">
+            <a class="panel-link lav-more" href="/strategies">View All Strategies →</a>
+          </div>
+        </section>
+
+        <section class="panel lav-filters">
+          <h3 class="panel-title">FEED FILTERS</h3>
+          <div class="lav-tiles">
+            <template x-for="t in TILES" :key="t.key">
+              <button class="lav-tile" type="button"
+                      :class="tileActive(t.key) ? 'is-on' : ''"
+                      @click="setCat(t.key)">
+                <span class="lav-tile-ico" x-html="t.ico"></span>
+                <span class="lav-tile-l" x-text="t.label"></span>
+              </button>
+            </template>
           </div>
         </section>
 

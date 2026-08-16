@@ -749,10 +749,54 @@ def test_no_artificial_height_device_closes_a_gap():
     block = css[start: start + 20 + nxt.start()] if nxt else css[start:]
     for rule in re.findall(r"^\.lav-page[^{]*\{[^}]*\}", block, re.M | re.S):
         head = rule.split("{")[0]
-        if ".lav-row" in head or ".panel" in head or "lav-work" in head:
+        if any(k in head for k in (".lav-row", ".panel", "lav-work", "lav-left",
+                                   "lav-main", "lav-side", "lav-rail")):
             assert "min-height" not in rule, rule
             assert "height:" not in rule, rule
     assert "align-items: start" in block      # ⛔ never `stretch` on these rows
+
+
+def test_the_work_area_is_two_independent_strips_not_full_width_rows():
+    """🔴 THE REJECTED LAYOUT, PINNED. A grid ROW is as tall as its tallest cell,
+    so with the work area built as full-width rows the short REAL-TIME ACTIVITY
+    FEED left a dead band beneath it while RECENT WINNERS / LOSERS waited for the
+    unrelated PIPELINE + STRATEGY stack beside it to close.
+
+    ⭐ The strips are the PNG's own columns: the WIDE one carries the feed, the
+    winners/system-events band and active positions; the NARROW one carries the
+    pipeline, strategy activity, feed filters and capital. ⛔ No panel may cross
+    strips, because that is what moves a heading out of its approved place.
+    """
+    tpl = _tpl()
+    assert 'class="lav-main"' in tpl and 'class="lav-side"' in tpl
+    # ⛔ the rejected wrappers are gone for good
+    for dead in ('class="lav-rowa"', 'class="lav-rowc"', 'class="lav-mid"'):
+        assert dead not in tpl, dead
+
+    main = tpl[tpl.index('<div class="lav-main">'):tpl.index('<div class="lav-side">')]
+    side = tpl[tpl.index('<div class="lav-side">'):tpl.index('<aside class="lav-rail"')]
+    assert re.findall(r'class="panel lav-([a-z]+)"', main) == [
+        "feed", "wl", "sysev", "pos"]
+    assert re.findall(r'class="panel lav-([a-z]+)"', side) == [
+        "pipe", "strat", "filters", "cap"]
+    # each strip is its own flow — ⛔ never a row that both must line up in
+    css = _css()
+    assert (".lav-page .lav-main, .lav-page .lav-side { display: flex; "
+            "flex-direction: column;" in css)
+
+
+def test_the_collapsed_layout_keeps_the_pngs_row_order():
+    """⚠️ Below the breakpoint the two strips become one column. ⛔ It must not
+    read strip-after-strip (feed → winners → positions → pipeline → …): `order`
+    puts the panels back into the artwork's own row sequence."""
+    css = _css()
+    start = css.index("SCREEN 18 — LIVE ACTIVITY")
+    block = css[start:]
+    mq = re.search(r"@media \(max-width: 1500px\) \{(.*?)\n\}", block, re.S).group(1)
+    assert "display: contents" in mq
+    got = re.findall(r"\.lav-page \.lav-([a-z]+)\s*\{ order: (\d)", mq)
+    assert got == [("feed", "1"), ("pipe", "2"), ("strat", "3"), ("rowb", "4"),
+                   ("filters", "5"), ("pos", "6"), ("cap", "7")], got
 
 
 def test_the_feeds_bounded_height_is_a_scroll_container(client):

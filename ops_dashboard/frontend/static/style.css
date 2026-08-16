@@ -3435,39 +3435,52 @@ table td.ctr { text-align: center !important; }
 .lav-page .lav-work { display: grid; gap: 16px; align-items: start;
   grid-template-columns: minmax(0, 1fr) 300px; }
 @media (max-width: 1400px) { .lav-page .lav-work { grid-template-columns: minmax(0, 1fr); } }
-.lav-page .lav-left { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 .lav-page .lav-rail { display: flex; flex-direction: column; gap: 16px; }
-.lav-page .lav-mid  { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 .lav-page .lav-rail .panel, .lav-page .lav-left .panel { margin-bottom: 0; }
 
-/* the three left-hand rows, in the PNG's own proportions */
-.lav-page .lav-rowa { display: grid; gap: 16px; align-items: start;
-  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); }
+/* ⛔⛔ THE WORK AREA IS TWO INDEPENDENT STRIPS, ⛔ NOT full-width rows.
+   🔴 THE ROWS VERSION WAS REJECTED, and the mechanism is the point: a grid ROW
+   is as tall as its TALLEST cell, so on a quiet day the short REAL-TIME
+   ACTIVITY FEED left a ~210px dead band beneath it while RECENT WINNERS /
+   LOSERS waited for the unrelated PIPELINE + STRATEGY stack beside it to close.
+   ⭐ THE STRIPS ARE THE PNG's OWN COLUMNS, measured off the artwork —
+        WIDE   (x200-890)   feed · winners + system events · active positions
+        NARROW (x805-1250)  pipeline · strategy · feed filters · capital
+   ⭐ The 1.6 ratio sits between the artwork's own row-A split (1.34) and row-C
+   split (1.95), and it is the value at which EVERY panel fits: the six pipeline
+   stages get 69px each ("Validation" needs 63) and the feed's three free-text
+   columns get 155px each — both BETTER than the rejected version.
+   ⛔ Nothing is stretched, ⛔ no spacer exists, ⛔ no font or card was shrunk:
+   each strip simply stops when its own content stops. */
+.lav-page .lav-left { display: grid; gap: 16px; align-items: start;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); }
+.lav-page .lav-main, .lav-page .lav-side { display: flex; flex-direction: column;
+  gap: 16px; min-width: 0; }
+
+/* the PNG's second band INSIDE the wide strip — winners beside system events */
 .lav-page .lav-rowb { display: grid; gap: 16px; align-items: start;
-  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1.05fr); }
-.lav-page .lav-rowc { display: grid; gap: 16px; align-items: start;
-  grid-template-columns: minmax(0, 1.95fr) minmax(0, 1fr); }
-/* Below 1500 the three-across row no longer holds three readable panels. FEED
-   FILTERS takes the full width and lays its eight approved tiles out in ONE row
-   — ⛔ the alternative left half a row blank, which reads as a missing panel.
-   ACTIVE POSITIONS takes the full width too, which is what stops its ten
-   approved columns falling into a horizontal scroll at 1440. */
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); }
+
 @media (max-width: 1500px) {
-  /* ⚠️ MEASURED AT 1440, not guessed: at the PNG's 1.35 ratio the mid column is
-     381px, which gives the six pipeline stages 58px each while "Validation"
-     needs 63 — the labels touched — and squeezing the ratio instead left the
-     feed's three free-text columns at 63px, ellipsising everything to five
-     characters. Stacking the row gives BOTH panels the full width, which is the
-     same reflow idiom Screens 13-15 use below their own breakpoints. */
-  .lav-page .lav-rowa { grid-template-columns: minmax(0, 1fr); }
-  .lav-page .lav-rowb { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-  .lav-page .lav-filters { grid-column: 1 / -1; }
+  /* ⚠️ MEASURED AT 1440, ⛔ not guessed: the work area is 912px there, so at NO
+     two-strip ratio can the narrow strip give the six pipeline stages the 63px
+     "Validation" needs without cutting the feed's text columns to ~48px. The
+     strips therefore collapse to ONE column — and `display: contents` + `order`
+     put the panels back into the PNG's own ROW order as they do, so the reading
+     order stays the artwork's, ⛔ never strip-after-strip. */
+  .lav-page .lav-left { grid-template-columns: minmax(0, 1fr); }
+  .lav-page .lav-main, .lav-page .lav-side { display: contents; }
+  .lav-page .lav-feed    { order: 1; }
+  .lav-page .lav-pipe    { order: 2; }
+  .lav-page .lav-strat   { order: 3; }
+  .lav-page .lav-rowb    { order: 4; }
+  .lav-page .lav-filters { order: 5; }
+  .lav-page .lav-pos     { order: 6; }
+  .lav-page .lav-cap     { order: 7; }
   .lav-page .lav-tiles { grid-template-columns: repeat(8, minmax(0, 1fr)); }
-  .lav-page .lav-rowc { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 1100px) {
-  .lav-page .lav-rowa, .lav-page .lav-rowb, .lav-page .lav-rowc {
-    grid-template-columns: minmax(0, 1fr); }
+  .lav-page .lav-rowb { grid-template-columns: minmax(0, 1fr); }
   .lav-page .lav-tiles { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
 
@@ -3667,7 +3680,13 @@ table td.ctr { text-align: center !important; }
 .lav-page .lav-postbl th.ctr, .lav-page .lav-postbl td.ctr { text-align: center; }
 .lav-page .lav-postbl td { white-space: nowrap; }
 .lav-page .lav-postbl th, .lav-page .lav-postbl td { padding: 6px 7px; }
-.lav-page .lav-stbl th, .lav-page .lav-stbl td { padding: 6px 7px; white-space: nowrap; }
+.lav-page .lav-stbl th, .lav-page .lav-stbl td { padding: 6px 7px; }
+.lav-page .lav-stbl td { white-space: nowrap; }
+/* ⭐ The HEADER may wrap, the DATA may not. In the narrow strip "Last Signal
+   Time" on one line pushed the five columns 47px past the panel; wrapping that
+   one heading to two lines fits them all. ⛔ Not a font change — the approved
+   wording is intact and every value still reads on a single line. */
+.lav-page .lav-stbl th { white-space: normal; line-height: 1.25; }
 /* 🔴 CAUGHT IN THE BROWSER: three "NOT INSTRUMENTED" cells pushed SL, TGT and
    Status out of the panel. Screen 06's approved marker for exactly these three
    fields is a compact `n/a` carrying the reason on its tooltip; the full reason
