@@ -4011,6 +4011,51 @@ def activity_strategy_rows(cfg: dict, today: str) -> list:
     return list(out.values())
 
 
+def health_daily_counts(cfg: dict, start: str, end: str) -> dict:
+    """PER-DAY stored signals and positions opened over [start, end].
+
+    ⭐ SCREEN 20's SIGNAL ACTIVITY / TRADE ACTIVITY sparklines. Signals by
+    `signals.received_at`, trades by `trades.entry_time` — the same two bases
+    Screen 18 uses, so the two screens cannot count "a signal" or "a trade"
+    differently. ⛔ A day with nothing is simply absent from the map and the
+    caller reads it as a real zero; ⛔ nothing is interpolated.
+    """
+    out = {"signals": {}, "trades": {}}
+    with _ro(cfg) as conn:
+        for key, sql in (
+            ("signals", "SELECT substr(received_at,1,10) AS d, COUNT(*) AS n "
+                        "FROM signals WHERE substr(received_at,1,10) BETWEEN ? AND ? "
+                        "GROUP BY d"),
+            ("trades", "SELECT substr(entry_time,1,10) AS d, COUNT(*) AS n "
+                       "FROM trades WHERE substr(entry_time,1,10) BETWEEN ? AND ? "
+                       "GROUP BY d"),
+        ):
+            for r in conn.execute(sql, (start, end)).fetchall():
+                if r["d"]:
+                    out[key][str(r["d"])] = int(r["n"])
+    return out
+
+
+def health_strategy_daily_signals(cfg: dict, start: str, end: str) -> dict:
+    """{strategy: {date: n}} stored signals per strategy per day.
+
+    ⭐ The OPERATIONAL TREND on Screen 20 compares today's signal count with the
+    strategy's own recent daily average, so it needs the per-strategy split —
+    ⛔ a system-wide total would call every strategy the same trend.
+    """
+    out: dict = {}
+    with _ro(cfg) as conn:
+        rows = conn.execute(
+            "SELECT strategy, substr(received_at,1,10) AS d, COUNT(*) AS n "
+            "FROM signals WHERE substr(received_at,1,10) BETWEEN ? AND ? "
+            "GROUP BY strategy, d", (start, end)).fetchall()
+    for r in rows:
+        if r["strategy"] is None or not r["d"]:
+            continue
+        out.setdefault(str(r["strategy"]), {})[str(r["d"])] = int(r["n"])
+    return out
+
+
 def activity_pulse(cfg: dict, today: str) -> dict:
     """PER-MINUTE counts for the three approved MARKET PULSE series.
 

@@ -14,6 +14,10 @@ routes and never touch any existing endpoint):
   GET /api/system-health        ?status&kind          live snapshot (⛔ no period)
   GET /api/export/system-health ?status&kind          XLSX of the SAME view
   GET /api/live-activity/screen ?category              the live wall (⛔ no period)
+  GET /api/strategy-ranking/screen ?period&trade_type&direction&mode  (Screen 19)
+  GET /api/export/strategy-ranking same args           XLSX of the SAME ranking
+  GET /api/strategy-health/screen  ?state&trade_type   live snapshot (⛔ no period)
+  GET /api/export/strategy-health  same args           XLSX of the SAME view
   GET /api/export/live-activity ?category              XLSX of the SAME feed
 Every builder is read-only over db_reader.*_range (mode=ro); NO schema. The
 existing /api/pnl, /api/strategies, /api/slippage, /api/execution, Reports stay
@@ -27,8 +31,9 @@ from flask import Blueprint, current_app, jsonify, request, send_file
 
 from ..auth import login_required
 from ..services import (audit, analytics_period, execution_analytics,
-                        live_activity, slippage_analytics, system_health,
-                        system_logs, trade_logs)
+                        live_activity, slippage_analytics, strategy_health,
+                        strategy_ranking, system_health, system_logs,
+                        trade_logs)
 
 
 def _xlsx(sheets: list, download_name: str):
@@ -504,3 +509,86 @@ def export_live_activity():
     rows = live_activity.export_rows(payload)
     return _xlsx([("Live Activity", rows[0], rows[1:])],
                  "live_activity_%s.xlsx" % payload["today"])
+
+
+# ── SCREEN 19 — STRATEGY RANKING ─────────────────────────────────────────────
+# ⭐ ADDITIVE: the G5c `/api/strategy-ranking` endpoint is deliberately UNTOUCHED
+# and its contract test still passes. Screen 19 gets its own routes, exactly as
+# Screen 18 added `/api/live-activity/screen` beside `/api/activity`.
+def _ranking_kwargs() -> dict:
+    """⭐ TRADE TYPE HERE IS THE STRATEGY'S OWN `intent` from its YAML — the same
+    value the table column shows. ⛔ NOT the order product (MIS/CNC), which is a
+    different quantity owned by `analytics_period._trade_type`."""
+    def _arg(name):
+        return (request.args.get(name) or "").strip() or None
+
+    p, frm, to = _period_args()
+    return {"period": p, "from_date": frm, "to_date": to,
+            "trade_type": _arg("trade_type"), "direction": _arg("direction"),
+            "mode": (_arg("mode") or "net_pnl")}
+
+
+@analytics2_api.route("/api/strategy-ranking/screen", methods=["GET"])
+@login_required
+def get_strategy_ranking_screen():
+    """Screen 19. Read-only. ONE filtered population feeds the KPI strip, the
+    ranking table, the score breakdown, the trend summary, the winners/losers,
+    the insights and the export."""
+    cfg = current_app.config["GUI_CONFIG"]
+    return jsonify(strategy_ranking.build_strategy_ranking_screen(
+        cfg, **_ranking_kwargs()))
+
+
+@analytics2_api.route("/api/export/strategy-ranking", methods=["GET"])
+@login_required
+def export_strategy_ranking():
+    """XLSX of the FILTERED, RANKED view only.
+
+    ⭐ Same builder, same arguments ⇒ the exported rows ARE the table's rows, in
+    the table's order. ⛔ TRADE TYPE sits immediately after Strategy, exactly as
+    instructed, and no other approved column moved.
+    """
+    cfg = current_app.config["GUI_CONFIG"]
+    payload = strategy_ranking.build_strategy_ranking_screen(cfg, **_ranking_kwargs())
+    rows = strategy_ranking.export_rows(payload)
+    return _xlsx([("Strategy Ranking", rows[0], rows[1:])],
+                 "strategy_ranking_%s_%s.xlsx" % (payload["from"], payload["to"]))
+
+
+# ── SCREEN 20 — STRATEGY HEALTH ──────────────────────────────────────────────
+# ⭐ ADDITIVE: the G5c `/api/strategy-health` endpoint is UNTOUCHED and keeps its
+# own contract (including its 5-value state score, which this screen does NOT
+# use — Screen 20 computes the design's weighted composite instead).
+#
+# ⚠️ NOT period-scoped: this is a LIVE OPERATIONAL SNAPSHOT of today, exactly as
+# Screen 12 is. The sparklines carry their own stated history window.
+def _health_kwargs2() -> dict:
+    def _arg(name):
+        return (request.args.get(name) or "").strip() or None
+
+    return {"state": _arg("state"), "trade_type": _arg("trade_type")}
+
+
+@analytics2_api.route("/api/strategy-health/screen", methods=["GET"])
+@login_required
+def get_strategy_health_screen():
+    """Screen 20. Read-only. ONE tower build feeds every panel, so they all
+    describe the same strategies at the same instant."""
+    cfg = current_app.config["GUI_CONFIG"]
+    return jsonify(strategy_health.build_strategy_health_screen(
+        cfg, **_health_kwargs2()))
+
+
+@analytics2_api.route("/api/export/strategy-health", methods=["GET"])
+@login_required
+def export_strategy_health():
+    """XLSX of the FILTERED view only.
+
+    ⛔ An unmeasured field exports as NOT INSTRUMENTED, never as a blank cell —
+    a blank would read as zero.
+    """
+    cfg = current_app.config["GUI_CONFIG"]
+    payload = strategy_health.build_strategy_health_screen(cfg, **_health_kwargs2())
+    rows = strategy_health.export_rows(payload)
+    return _xlsx([("Strategy Health", rows[0], rows[1:])],
+                 "strategy_health_%s.xlsx" % payload["today"])

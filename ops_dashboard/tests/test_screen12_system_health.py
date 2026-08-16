@@ -456,12 +456,23 @@ def test_the_tall_readiness_card_is_packed_beside_a_stack_not_a_single_short_car
     assert "grid-column: auto; grid-row: auto;" in narrow
 
 
+#: The header line that opens the NEXT screen's block in `style.css`. ⛔ A CSS
+#: window that runs to end-of-file makes every screen added later fail a test
+#: that was never about it — a false red, not a finding.
+_NEXT_SCREEN_MARK = "\n   SCREEN "
+
+
 def test_cards_size_to_their_content_rather_than_stretching():
     """⛔ `stretch` puts the slack INSIDE the short card, where it reads as
     missing rows — the N15-10 trap in the opposite direction."""
     css = _css()
     assert ".sysh-page .sysh-zone-row { display: grid; gap: 16px; align-items: start; }" in css
-    assert "align-items: stretch" not in css[css.index(".sysh-page .sysh-zone"):]
+    # ⛔ bounded to THIS screen's own block: a window running to end-of-file
+    # would fail on any later screen's CSS, which this test is not about.
+    start = css.index(".sysh-page .sysh-zone")
+    nxt = css.find(_NEXT_SCREEN_MARK, start)
+    block = css[start:nxt] if nxt > 0 else css[start:]
+    assert "align-items: stretch" not in block
 
 
 def test_the_css_does_not_repaint_alert_text_over_the_semantic_class():

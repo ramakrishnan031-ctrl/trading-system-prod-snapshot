@@ -681,25 +681,38 @@ def _write_strategies(config_dir: str) -> None:
     range_breakout_long, first_pullback_long (SILENT enabled), gap_fade_short (disabled)."""
     sdir = os.path.join(config_dir, "strategies")
     os.makedirs(sdir, exist_ok=True)
+    # ⭐ SCREEN 19/20 (16-Aug-2026): `intent` is the Trade Type source of truth
+    # (`strategies/schema.py::_val_intent` permits exactly INTRADAY | DELIVERY;
+    # the 16 production YAMLs are 13 / 3). The fixture now carries BOTH values
+    # AND one strategy with NO intent at all, because a fixture where every row
+    # resolves the same way proves nothing: with all-INTRADAY a reader that
+    # ignored the YAML and returned a constant would pass, and with none missing
+    # the unavailable path would never be exercised.
+    #   range_breakout_long → DELIVERY   · first_pullback_long → (absent)
+    # ⚠️ `intent` was previously absent from every fixture strategy, so every
+    # Trade Type assertion would have been vacuously None.
     strategies = [
-        ("gap_fade_long", "LONG", True, 3),
-        ("vwap_bounce_long", "LONG", True, 2),
-        ("range_breakout_long", "LONG", True, 2),
-        ("first_pullback_long", "LONG", True, 2),   # silent — configured, zero rows
-        ("gap_fade_short", "SHORT", False, 2),
+        ("gap_fade_long", "LONG", True, 3, "INTRADAY"),
+        ("vwap_bounce_long", "LONG", True, 2, "INTRADAY"),
+        ("range_breakout_long", "LONG", True, 2, "DELIVERY"),
+        ("first_pullback_long", "LONG", True, 2, None),   # silent — and NO intent
+        ("gap_fade_short", "SHORT", False, 2, "INTRADAY"),
     ]
-    for name, direction, enabled, cap in strategies:
+    for name, direction, enabled, cap, intent in strategies:
+        doc = {
+            "name": name, "display_name": name.replace("_", " ").title(),
+            "direction": direction, "enabled": enabled,
+            "order_protocol": "CO_PLUS_TGT", "max_concurrent_positions": cap,
+            "entry_start_time": "09:25", "entry_end_time": "15:00",
+        }
+        if intent is not None:
+            doc["intent"] = intent
         with open(os.path.join(sdir, f"{name}.yaml"), "w", encoding="utf-8") as fh:
-            yaml.safe_dump({
-                "name": name, "display_name": name.replace("_", " ").title(),
-                "direction": direction, "enabled": enabled,
-                "order_protocol": "CO_PLUS_TGT", "max_concurrent_positions": cap,
-                "entry_start_time": "09:25", "entry_end_time": "15:00",
-            }, fh, sort_keys=False)
+            yaml.safe_dump(doc, fh, sort_keys=False)
     # scan_webhook_map: 1:1 for each strategy + N:1 (gap_fade_long_alt → gap_fade_long).
     # momentum_combo is deliberately ABSENT (unmapped → "scanner-level (shared)").
     scan_map = {"scanners": {}}
-    for name, _d, _e, _c in strategies:
+    for name, _d, _e, _c, _i in strategies:
         scan_map["scanners"][name] = {"strategy": name, "chartink_url": f"https://x/{name}"}
     scan_map["scanners"]["gap_fade_long_alt"] = {"strategy": "gap_fade_long",
                                                  "chartink_url": "https://x/alt"}

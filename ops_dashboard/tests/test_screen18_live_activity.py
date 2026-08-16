@@ -773,9 +773,7 @@ def test_every_data_card_holds_its_approved_footprint_when_empty():
     content. ⛔ They are FLOORS: a busy day grows past them, nothing is clipped,
     and ⛔ no value is a round number chosen to fill space.
     """
-    css = _css()
-    start = css.index("SCREEN 18 — LIVE ACTIVITY")
-    block = css[start:]
+    block = _lav_css_block()
     for sel, floor in ((r"\.lav-pos \.lav-tbl-wrap", "166px"),      # 4 rows
                        (r"\.lav-strat \.lav-tbl-wrap", "221px"),    # 5 rows
                        (r"\.lav-evlist", "232px"),                  # 4 items
@@ -844,9 +842,7 @@ def test_the_collapsed_layout_keeps_the_pngs_row_order():
     """⚠️ Below the breakpoint the two strips become one column. ⛔ It must not
     read strip-after-strip (feed → winners → positions → pipeline → …): `order`
     puts the panels back into the artwork's own row sequence."""
-    css = _css()
-    start = css.index("SCREEN 18 — LIVE ACTIVITY")
-    block = css[start:]
+    block = _lav_css_block()
     mq = re.search(r"@media \(max-width: 1500px\) \{(.*?)\n\}", block, re.S).group(1)
     assert "display: contents" in mq
     got = re.findall(r"\.lav-page \.lav-([a-z]+)\s*\{ order: (\d)", mq)
@@ -863,9 +859,7 @@ def test_the_feeds_bounded_height_is_a_scroll_container(client):
     the window is a FIXED height. ⛔ And it is only ever allowed to travel WITH
     `overflow-y: auto` — a bare height would hide rows instead of letting the
     operator reach them."""
-    css = _css()
-    start = css.index("SCREEN 18 — LIVE ACTIVITY")
-    block = css[start:]
+    block = _lav_css_block()
     rule = re.search(r"\.lav-page \.lav-feed \.lav-tbl-wrap \{[^}]*\}", block).group(0)
     assert "height: 430px" in rule
     assert "max-height" not in rule
@@ -889,9 +883,7 @@ def test_the_feed_columns_are_sized_by_key_so_a_drag_cannot_reassign_them():
 
 
 def test_alignment_is_by_role_and_not_blanket_centred():
-    css = _css()
-    start = css.index("SCREEN 18 — LIVE ACTIVITY")
-    block = css[start:]
+    block = _lav_css_block()
     assert (".lav-page .lav-tbl th, .lav-page .lav-tbl td { text-align: left; }"
             in block)
     cols = re.search(r"DEFAULT_COLS:\s*\[(.*?)\n    \],", _tpl(), re.S).group(1)
@@ -943,10 +935,22 @@ def test_timestamps_are_ist_and_never_converted(client):
         assert re.match(r"\d{2}:\d{2}:\d{2}$", r["time"])
 
 
-def test_text_meets_the_thirteen_pixel_floor():
+def _lav_css_block() -> str:
+    """Screen 18's OWN block of `style.css`.
+
+    ⭐ Bounded at the header line of the NEXT screen's block. ⛔ A window that
+    runs to end-of-file turns every screen added afterwards into a failure of a
+    Screen-18 test that was never about it — a false red, not a finding. The
+    property each caller asserts is unchanged.
+    """
     css = _css()
     start = css.index("SCREEN 18 — LIVE ACTIVITY")
-    block = css[start:]
+    nxt = css.find("\n   SCREEN ", start + 10)
+    return css[start:nxt] if nxt > 0 else css[start:]
+
+
+def test_text_meets_the_thirteen_pixel_floor():
+    block = _lav_css_block()
     small = [float(m) for m in re.findall(r"font-size:\s*(\d+(?:\.\d+)?)px", block)
              if float(m) < 13]
     assert not small, small
@@ -964,9 +968,7 @@ _SCOPED_EXCEPTION = "main.content:has(> .lav-page)"
 
 
 def test_the_screen_is_scoped_and_cannot_repaint_another():
-    css = _css()
-    start = css.index("SCREEN 18 — LIVE ACTIVITY")
-    block = css[start:]
+    block = _lav_css_block()
     for line in block.splitlines():
         line = line.strip()
         if not line or "{" not in line or line.startswith(("/*", "*", "@", "}")):
@@ -986,9 +988,7 @@ def test_the_wall_uses_the_whole_main_column():
     inside a 1740px column — the dashboard read as narrow and shifted right.
     ⭐ The artwork gives 15px left and 16px right of a 1536 canvas, i.e. the
     content is 97.7% of the column. ⛔ The cap must not come back."""
-    css = _css()
-    start = css.index("SCREEN 18 — LIVE ACTIVITY")
-    block = css[start:]
+    block = _lav_css_block()
     rule = re.search(r"main\.content:has\(> \.lav-page\) \{[^}]*\}", block).group(0)
     assert "max-width: none" in rule
     assert "margin: 0" in rule
@@ -1002,9 +1002,7 @@ def test_the_three_columns_carry_the_artworks_own_proportions():
     """⭐ MEASURED off `gui/18. Live_Activity.png`, ⛔ not chosen: its rail is
     263px of a 1318px content band (20%), and its wide/narrow boundary averages
     x876 across the three rows, splitting the 1044px left area 674:370 = 1.82."""
-    css = _css()
-    start = css.index("SCREEN 18 — LIVE ACTIVITY")
-    block = css[start:]
+    block = _lav_css_block()
     work = re.search(r"\.lav-page \.lav-work \{[^}]*\}", block).group(0)
     assert "minmax(0, 1fr) 340px" in work
     left = re.search(r"\.lav-page \.lav-left \{[^}]*\}", block).group(0)

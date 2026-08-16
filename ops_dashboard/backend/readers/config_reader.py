@@ -69,7 +69,13 @@ def get_strategies(cfg: dict) -> dict:
             "display_name": s.get("display_name", name),
             "enabled": bool(s.get("enabled", True)),
             "direction": s.get("direction"),
-            "intent": s.get("intent"),          # INTRADAY | POSITIONAL (→ Trade Type)
+            # ⚠️ CORRECTED 16-Aug-2026: the comment here read "INTRADAY |
+            # POSITIONAL". ⛔ POSITIONAL is NOT the enum — the production
+            # validator `strategies/schema.py::_val_intent` permits exactly
+            # INTRADAY or DELIVERY, and a scan of all 16 strategy YAMLs finds
+            # only those two (13 / 3). This is the Trade Type source for Screens
+            # 19/20; it is normalised in ONE place, services/strategy_meta.py.
+            "intent": s.get("intent"),          # INTRADAY | DELIVERY (→ Trade Type)
             "order_protocol": s.get("order_protocol"),
             "max_concurrent_positions": int(s.get("max_concurrent_positions", 2)),
             "entry_start_time": s.get("entry_start_time"),
