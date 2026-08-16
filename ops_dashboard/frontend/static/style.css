@@ -4811,13 +4811,33 @@ main.content:has(> .sca-page) { width: 100%; max-width: none; margin: 0;
 .sca-page .sca-conn .dot { width: 8px; height: 8px; border-radius: 50%; }
 .sca-page .sca-ins-pos { background: var(--pos); }
 
-/* ⚠️ BELOW THE DESIGN WIDTH THE SIX TILES COMPRESS RATHER THAN OVERFLOW.
-   🔴 MEASURED: content-sized tiles need ~373px and the panel is ~256px at
-   1440, which pushed 7 elements past their container. Here the tracks go
-   back to equal and the label ellipsises — its full text stays on the
-   title attribute. ⭐ ONE ROW OF SIX IS PRESERVED AT BOTH WIDTHS; only the
-   label's fullness is traded, and only where the panel cannot hold it. */
-@media (max-width: 1560px) {
+/* ⭐ ROW 3 GOES TWO-UP AND ITS LAST PANEL SPANS — the pattern Screen 22's own
+   row 3 already uses on its last child, reused rather than invented.
+   🔴 WHY: at 1440 the three-up row left DRILLDOWN 264px, so six equal tiles
+   were 31px each and every label collapsed to an initial — `O… Si… O… Tr…
+   P… H…`, with Overview and Orders indistinguishable. Two-up gives it ~428px
+   (~394px interior) against the ~373px the six labels need at the binding
+   13px floor, so every label reads in full and the row stays SIX ACROSS.
+   ⛔ NOT a return to 3×2, ⛔ no type below 13px, ⛔ nothing else in the row
+   redesigned — the third panel simply takes the full width beneath. */
+/* ⚠️ 1900, ⛔ not 1560. MEASURED across a width sweep: three-up row 3 gives
+   DRILLDOWN 306/976 of the left column, which only reaches the ~407px the
+   six tiles need above ~1868px — at 1600 it was 314px and two labels
+   overflowed their tile. So the artwork's three-up composition holds at its
+   own 1920 design width and above, and everything below goes two-up. */
+@media (max-width: 1900px) {
+  .sca-page .sca-row3 { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .sca-page .sca-row3 > :last-child { grid-column: 1 / -1; }
+}
+
+/* ⚠️ AND ONLY BELOW ~1400 DO THE TILES COMPRESS. Two-up row 3 holds the six
+   labels down to about 1400px (left column ≈ viewport − 570, and two-up needs
+   ≈ 828px to give each panel the 373px of tiles + 34px of panel padding).
+   Below that the tracks go back to equal and the label ellipsises, its full
+   text still on the title attribute. ⭐ ONE ROW OF SIX SURVIVES AT EVERY
+   WIDTH; only the label's fullness is traded, and only where the panel
+   genuinely cannot hold it. */
+@media (max-width: 1400px) {
   .sca-page .sca-drill-grid { grid-template-columns: repeat(6, minmax(0, 1fr));
     justify-content: stretch; }
   .sca-page .sca-tile { min-width: 0; }

@@ -898,9 +898,15 @@ def test_d1_the_drilldown_is_one_row_of_six():
     assert re.search(r"grid-template-columns:\s*repeat\(6,", rule), rule
     assert "repeat(3" not in rule, rule
     # and the narrow fallback is still six across, never a second row
-    narrow = block[block.index("@media (max-width: 1560px)"):]
+    narrow = block[block.index("@media (max-width: 1400px)"):]
     narrow = narrow[:narrow.index("\n}")]
     assert "repeat(6," in narrow, narrow
+    # ⛔ 3×2 must never come back at ANY width. ⚠️ Checked on the DRILLDOWN
+    # rules only — the KPI strip legitimately uses `repeat(3, …)` below 1000px,
+    # and a whole-block search would flag that instead.
+    for rule in re.findall(r"\.sca-drill-grid\s*\{[^}]*\}", block):
+        assert "repeat(3," not in rule, rule
+        assert "repeat(6," in rule, rule
 
 
 def test_d1_the_drilldown_geometry_matches_approved_screen_20():
@@ -1019,3 +1025,38 @@ def test_the_plural_helper_is_used_wherever_a_count_meets_a_noun():
     js = _js_syntax.script_of(_tpl())
     assert "plural(n, one, many)" in js
     assert js.count("this.plural(") >= 3, js.count("this.plural(")
+
+
+def test_the_drilldown_row_gives_its_panel_room_below_the_design_width():
+    """⛔ THE DEFECT THIS PINS, found in the 16-Aug browser review: at 1440 the
+    three-up row 3 left DRILLDOWN 264px, so six equal tiles were 31px each and
+    every label collapsed to an initial — `O… Si… O… Tr… P… H…`, with Overview
+    and Orders indistinguishable.
+
+    ⭐ THE FIX REUSES SCREEN 22's OWN ROW-3 PATTERN — two-up with the last panel
+    spanning — rather than inventing one, and is asserted against Screen 22's
+    own line so the two cannot drift apart.
+    """
+    block = _css_block()
+    two_up = block[block.index("@media (max-width: 1900px)"):]
+    two_up = two_up[:two_up.index("\n}")]
+    assert ".sca-page .sca-row3" in two_up, two_up
+    assert "minmax(0, 1fr) minmax(0, 1fr)" in two_up, two_up
+    assert "> :last-child { grid-column: 1 / -1; }" in two_up, two_up
+    # the pattern it reuses, in Screen 22's own CSS
+    css = _css()
+    assert ".hld-page .hld-row3 > :last-child { grid-column: 1 / -1; }" in css
+
+
+def test_the_breakpoints_are_ordered_so_the_tiles_never_overflow():
+    """⚠️ MEASURED ACROSS A WIDTH SWEEP, ⛔ not assumed. Three-up row 3 only
+    reaches the ~407px the six tiles need above ~1868px, so the two-up
+    breakpoint must sit ABOVE the width at which the tiles stop compressing —
+    otherwise there is a band (measured at 1600: 314px panel, two labels
+    overflowing) where content-sized tiles have nowhere to go.
+    """
+    block = _css_block()
+    two_up = block.index("@media (max-width: 1900px)")
+    compress = block.index("@media (max-width: 1400px)")
+    assert two_up < compress, "the two-up rule must precede the compress rule"
+    assert 1900 > 1400, "the two-up breakpoint must be the wider of the two"
