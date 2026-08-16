@@ -20,8 +20,12 @@
        timeline "(Example)", so those example values are ⛔ NOT rendered as
        production data. Both panels keep their APPROVED FOOTPRINT and state the
        gap.
-    ⛔ SILENT DETECTION's threshold is drawn as a control but is rendered
-       READ-ONLY: a dashboard control must never write to the trading system.
+    ⭐ SILENT DETECTION's threshold is a REAL SELECT in the application's own
+       dropdown language, and its choices come from `gui_config.silence` — the
+       only boundaries `strategy_score.silence_tier` applies. ⛔ SELECTING IS NOT
+       WRITING: the choice re-evaluates THIS READ only, the deployed config is
+       untouched, and the panel names the configured rule whenever the selection
+       differs from it.
     ⛔ An Alpine x-for TEMPLATE inside an SVG renders NOTHING — repeated SVG
        children go through `x-html` on a group node.  #}
 <div class="sh-page" x-data="healthPage()" x-init="init()"
@@ -62,28 +66,35 @@
       <section class="panel sh-tablep">
         <div class="sh-panel-head">
           <h3 class="panel-title">STRATEGY HEALTH TABLE</h3>
-          <span class="sh-tfilters">
-            <label class="sh-f">
-              <span class="sh-f-l">Status</span>
-              <select class="sel" x-model="f.state" @change="load()">
-                <option value="">All Statuses</option>
-                <template x-for="s in states()" :key="s">
-                  <option :value="s" x-text="s"></option>
-                </template>
-              </select>
-            </label>
-            <label class="sh-f">
-              {# ⭐ the STRATEGY's YAML intent — the SAME value Screen 19 uses #}
-              <span class="sh-f-l">Trade Type</span>
-              <select class="sel" x-model="f.trade_type" @change="load()">
-                <option value="">All Types</option>
-                <template x-for="t in ttOptions()" :key="t">
-                  <option :value="t" x-text="t"></option>
-                </template>
-              </select>
-            </label>
-            <button class="btn-ghost" type="button" @click="resetFilters()">↻ Reset</button>
-          </span>
+        </div>
+        {# ⭐ THE ESTABLISHED FILTER LANGUAGE, ⛔ not the cramped 32px boxed row
+           this screen carried before: the same `.flt-row` / `.flt-field` /
+           `.flt-k` / `.flt-actions` geometry and the same `.sel` control that
+           Screens 03/04/05/13/14/15 use, so this panel cannot read as a
+           different application. #}
+        <div class="flt-row sh-flt">
+          <label class="flt-field">
+            <span class="flt-k">Status</span>
+            <select class="sel" x-model="f.state" @change="load()">
+              <option value="">All Statuses</option>
+              <template x-for="s in states()" :key="s">
+                <option :value="s" x-text="s"></option>
+              </template>
+            </select>
+          </label>
+          <label class="flt-field">
+            {# ⭐ the STRATEGY's YAML intent — the SAME value Screen 19 uses #}
+            <span class="flt-k">Trade Type</span>
+            <select class="sel" x-model="f.trade_type" @change="load()">
+              <option value="">All Types</option>
+              <template x-for="t in ttOptions()" :key="t">
+                <option :value="t" x-text="t"></option>
+              </template>
+            </select>
+          </label>
+          <div class="flt-actions">
+            <button class="btn-ghost" type="button" @click="resetFilters()">↻ Reset Filters</button>
+          </div>
         </div>
 
         <div class="sh-tbl-wrap">
@@ -102,9 +113,14 @@
                     @drop.prevent="onDrop(c.key)"
                     @dragend="onDragEnd()"
                     @click="headClick(c.key)" @keyup.enter="tSort(c.key)">
-                  <span class="sh-grip" aria-hidden="true">⠿</span><span
-                        x-text="c.label"></span><span
-                        class="sh-arrow" x-text="tArrow(c.key)"></span>
+                  {# ⭐ The binding artwork draws PLAIN headings; the drag glyph
+                     was my own addition and it cost 12px on EVERY column, which
+                     is what pushed the three "… Today" headings into a wrap that
+                     read as a column of repeated TODAY. ⛔ The affordance is NOT
+                     removed — the <th> is still draggable and still says so. #}
+                  <span x-text="c.label"></span><span
+                        class="sh-arrow" x-show="tSortKey === c.key"
+                        x-text="tArrow(c.key)"></span>
                 </th>
               </template>
             </tr></thead>
@@ -114,11 +130,21 @@
                   <template x-for="c in cols" :key="c.key">
                     <td :class="[c.ctr ? 'ctr' : '', c.num ? 'mono' : '']">
                       <template x-if="c.key === 'display_name'">
-                        <span class="sh-name">
-                          <span class="sh-nm" x-text="r.display_name"></span>
-                          <span class="sh-tt" x-show="r.trade_type"
+                        {# a long name ellipsises; the full one stays reachable #}
+                        <span class="sh-nm" :title="r.display_name"
+                              x-text="r.display_name"></span>
+                      </template>
+                      {# ⭐ TRADE TYPE IS ITS OWN COLUMN, IMMEDIATELY AFTER
+                         STRATEGY (Rama, 16-Aug) — ⛔ no longer a badge tucked
+                         inside the Strategy cell, where its heading could not be
+                         read. Same strategy-level YAML value as Screen 19. #}
+                      <template x-if="c.key === 'trade_type'">
+                        <span>
+                          <span x-show="r.trade_type" class="sh-tt"
                                 :class="'sh-tt-' + (r.trade_type || '').toLowerCase()"
                                 x-text="r.trade_type"></span>
+                          <span x-show="!r.trade_type" class="sh-ni"
+                                title="this strategy's YAML declares no intent">n/a</span>
                         </span>
                       </template>
                       <template x-if="c.key === 'state'">
@@ -292,14 +318,40 @@
     <div class="sh-rail">
       <section class="panel sh-silent">
         <h3 class="panel-title">SILENT DETECTION SETTINGS</h3>
+        {# ⭐ A REAL SELECT, in the application's own dropdown language (Rama,
+           16-Aug) — the same `.sel` control every other filter on the site uses.
+           ⭐ ITS CHOICES COME FROM THE CONFIGURATION CONTRACT: `gui_config.
+           silence` defines exactly the boundaries `strategy_score.silence_tier`
+           applies, and those are the only values offered. ⛔ No arbitrary ladder
+           was invented.
+           ⛔ SELECTING IS NOT WRITING: the choice re-evaluates THIS READ only —
+           the deployed config is untouched (L4) — and whenever the selection is
+           not the configured rule the panel says so, so a what-if can never be
+           mistaken for what the trading system is actually enforcing. #}
         <div class="sh-sil-body">
-          <span class="sh-sil-l">Silent if no signal for more than</span>
-          {# ⛔ READ-ONLY by design — a dashboard control must never write to the
-             trading system. The value is the REAL configured one. #}
-          <span class="sh-sil-v" :title="'read-only · source: ' + (sil().source || '')"
-                x-text="sil().label || '—'"></span>
+          <label class="flt-field">
+            <span class="flt-k">Silent if no signal for more than</span>
+            {# ⛔ NEITHER `x-model` NOR `:value` ON THE SELECT: the options are
+               rendered by an x-for, so a value bound on the <select> is applied
+               before they exist, silently falls back to the FIRST option, and the
+               panel then states a threshold the data is not using. The selected
+               state is bound on the OPTION, which cannot be evaluated too early. #}
+            <select class="sel"
+                    @change="f.silent_min = $event.target.value; load()"
+                    :title="'view only · source: ' + (sil().source || '')">
+              <template x-for="o in silOptions()" :key="o.minutes">
+                <option :value="String(o.minutes)"
+                        :selected="o.minutes === sil().selected"
+                        x-text="o.label"></option>
+              </template>
+            </select>
+          </label>
           <span class="sh-sil-s">Status =
             <b class="sh-c-silent" x-text="sil().status || 'Silent'"></b></span>
+          <span class="sh-sil-note" x-show="sil().is_configured === false" x-cloak
+                x-text="'Viewing at ' + sil().label + '. The configured rule is '
+                        + sil().configured_label + ' — this selection changes what is '
+                        + 'shown, not what the system enforces.'"></span>
         </div>
       </section>
 
@@ -450,24 +502,31 @@ function healthPage() {
     /* ⭐ THE APPROVED COLUMN ORDER (design §STRATEGY HEALTH TABLE).
        ⛔ No Scanner column. Widths bind to the COLUMN KEY, not a position, so a
        drag can never hand one column's width to another. */
+    /* ⭐ Widths are sized so EVERY approved heading fits on ONE LINE — the fix
+       for the headers reading as a repeated "TODAY" (Rama, 16-Aug). ⛔ No column
+       was deleted and no data model changed; the table keeps a min-width and
+       scrolls inside its own container when the viewport is narrower. */
     DEFAULT_COLS: [
-      { key: "display_name",     label: "Strategy",                    w: "196px" },
-      { key: "state",            label: "Status",           ctr: true, w: "112px" },
-      { key: "last_signal",      label: "Last Signal",      ctr: true, num: true, w: "96px" },
-      { key: "last_trade",       label: "Last Trade",       ctr: true, num: true, w: "96px" },
-      { key: "signals_today",    label: "Signals Today",    ctr: true, num: true, w: "104px" },
-      { key: "orders_today",     label: "Orders Today",     ctr: true, num: true, w: "100px" },
-      { key: "trades_today",     label: "Trades Today",     ctr: true, num: true, w: "100px" },
-      { key: "rejections_today", label: "Rejections Today", ctr: true, num: true, w: "128px" },
-      { key: "health_score",     label: "Health Score",     ctr: true, w: "104px" },
-      { key: "trend",            label: "Trend",            ctr: true, w: "104px" },
+      { key: "display_name",     label: "Strategy",                    w: "132px" },
+      { key: "trade_type",       label: "Trade Type",       ctr: true, w: "94px" },
+      { key: "state",            label: "Status",           ctr: true, w: "108px" },
+      { key: "last_signal",      label: "Last Signal",      ctr: true, num: true, w: "98px" },
+      { key: "last_trade",       label: "Last Trade",       ctr: true, num: true, w: "94px" },
+      { key: "signals_today",    label: "Signals Today",    ctr: true, num: true, w: "118px" },
+      { key: "orders_today",     label: "Orders Today",     ctr: true, num: true, w: "114px" },
+      { key: "trades_today",     label: "Trades Today",     ctr: true, num: true, w: "113px" },
+      { key: "rejections_today", label: "Rejections Today", ctr: true, num: true, w: "141px" },
+      { key: "health_score",     label: "Health Score",     ctr: true, w: "110px" },
+      { key: "trend",            label: "Trend",            ctr: true, w: "92px" },
     ],
-    SPECIAL: ["display_name", "state", "last_signal", "rejections_today",
-              "health_score", "trend"],
+    SPECIAL: ["display_name", "trade_type", "state", "last_signal",
+              "rejections_today", "health_score", "trend"],
     cols: [], dragKey: "", overKey: "", _dragEndAt: 0,
-    COLS_KEY: "screen20.health.colOrder.v1",
+    /* v2: the column SET changed (Trade Type added after Strategy). A stored
+       v1 order would have appended it LAST - the Screen-14 lesson. */
+    COLS_KEY: "screen20.health.colOrder.v2",
 
-    f: { state: "", trade_type: "" },
+    f: { state: "", trade_type: "", silent_min: "" },
 
     init() { this.initCols(); this.load(); },
 
@@ -475,11 +534,17 @@ function healthPage() {
       const p = new URLSearchParams();
       if (this.f.state) p.set("state", this.f.state);
       if (this.f.trade_type) p.set("trade_type", this.f.trade_type);
+      if (this.f.silent_min) p.set("silent_min", this.f.silent_min);
       const s = p.toString();
       return s ? "?" + s : "";
     },
     exportUrl() { return "/api/export/strategy-health" + this.qs(); },
-    resetFilters() { this.f = { state: "", trade_type: "" }; this.tSortKey = ""; this.load(); },
+    resetFilters() {
+      /* ⭐ Reset returns the silence view to the CONFIGURED rule, not to a
+         blank - the screen must never sit on a what-if by default. */
+      this.f = { state: "", trade_type: "", silent_min: "" };
+      this.tSortKey = ""; this.load();
+    },
     toggleState(state) {
       if (!state) return;                      /* WITH ERRORS is not a state */
       this.f.state = (this.f.state === state) ? "" : state;
@@ -494,6 +559,7 @@ function healthPage() {
     guide() { return this.data.state_guide || []; },
     kpi(k) { return ((this.data.kpi || {})[k]); },
     sil() { return this.data.silent_detection || {}; },
+    silOptions() { return (this.sil().options) || []; },
     rej() { return this.data.rejection_monitoring || {}; },
     sig() { return this.data.signal_activity || {}; },
     trd() { return this.data.trade_activity || {}; },

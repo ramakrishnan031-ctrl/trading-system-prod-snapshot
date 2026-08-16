@@ -509,7 +509,17 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
    `--t-*`, `--card*` or `--ink` token is page-scoped to a screen the audit page
    is not (measured across the file), so on `.aud-page` these definitions stay
    inert until something references them. */
-.dash-page, .aud-page, .tlg-page, .slg-page {
+/* ⭐ Screens 19 (.sr-page) and 20 (.sh-page) JOIN THE SAME BLOCK, 16-Aug.
+   🔴 MEASURED DEFECT, not a preference: these tokens are PAGE-SCOPED, and the
+   two new screens had never joined — so every `rgba(var(--t-*), …)` tint they
+   used computed to an INVALID colour and fell back to TRANSPARENT, and every
+   `var(--card)` / `var(--card-bd)` on their filter controls resolved to nothing.
+   (P) on `.sr-page` `--t-green` was "" and the KPI icon background was
+   rgba(0,0,0,0), against rgb(22,27,34) on the approved audit page. That is what
+   made the two screens read as a different application (Rama, item 4).
+   ⛔ NO VALUE IS INTRODUCED HERE — they take the same tokens every other screen
+   already uses, exactly as `.aud-page`/`.tlg-page`/`.slg-page` did before. */
+.dash-page, .aud-page, .tlg-page, .slg-page, .sr-page, .sh-page {
   --t-blue: 56,139,253;  --t-green: 46,160,67;   --t-red: 218,54,51;
   --t-orange: 219,109,40; --t-purple: 163,113,247; --t-yellow: 210,153,34;
   --t-gray: 139,148,158;
@@ -739,9 +749,12 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
    markup already uses the identical classes (.flt-row/.flt-field/.flt-k/.flt-c/
    .flt-actions); only the scope was missing, which is why its controls fell back
    to browser defaults. ⛔ No value changed — Screen-03 renders byte-identically. */
-.strat-page .flt-row, .sig-page .flt-row, .ord-page .flt-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 14px; }
-.strat-page .flt-field, .sig-page .flt-field, .ord-page .flt-field { display: flex; flex-direction: column; gap: 5px; min-width: 150px; flex: 1 1 150px; }
-.strat-page .flt-k, .sig-page .flt-k, .ord-page .flt-k { font-size: 12px; font-weight: 600; color: var(--muted); }
+.strat-page .flt-row, .sig-page .flt-row, .ord-page .flt-row,
+.sr-page .flt-row, .sh-page .flt-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 14px; }
+.strat-page .flt-field, .sig-page .flt-field, .ord-page .flt-field,
+.sr-page .flt-field, .sh-page .flt-field { display: flex; flex-direction: column; gap: 5px; min-width: 150px; flex: 1 1 150px; }
+.strat-page .flt-k, .sig-page .flt-k, .ord-page .flt-k,
+.sr-page .flt-k, .sh-page .flt-k { font-size: 12px; font-weight: 600; color: var(--muted); }
 /* ⭐ Screen-13's FILTERS panel joins the SAME rule, by its own class name, for
    exactly the reason recorded above: `.sel` was never defined ANYWHERE in this
    file, so its dates and dropdowns fell back to native browser widgets — pale,
@@ -755,17 +768,27 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
    so every control on it — filter, rail search, global search, rows-per-page —
    takes the standard treatment from the start. Screen 13's narrower scope
    exists only because its AUDIT EVENTS header was already approved. */
+/* ⭐ Screens 19 + 20 join UNSCOPED for exactly Screen-14's reason: they are
+   NEW screens with no previously-approved control appearance to preserve, so
+   every control on them - filter dropdowns and the SILENT DETECTION select -
+   takes the standard treatment. ⛔ No value changed here; the earlier screens
+   render byte-identically. */
 .strat-page .flt-c, .sig-page .flt-c, .ord-page .flt-c,
 .aud-page .aud-filters .sel,
 .tlg-page .sel,
+.sr-page .sel,
+.sh-page .sel,
 .slg-page .sel { height: 36px; padding: 0 10px; font-size: 13px; color: var(--text);
   background: var(--card); border: 1px solid var(--card-bd); border-radius: 8px; font-family: inherit; }
 .strat-page .flt-c:focus, .sig-page .flt-c:focus, .ord-page .flt-c:focus,
 .aud-page .aud-filters .sel:focus,
 .tlg-page .sel:focus,
+.sr-page .sel:focus,
+.sh-page .sel:focus,
 .slg-page .sel:focus { outline: none; border-color: var(--blue); }
 .strat-page .flt-sm, .sig-page .flt-sm { height: 30px; padding: 0 8px; width: auto; min-width: 58px; }
-.strat-page .flt-actions, .sig-page .flt-actions, .ord-page .flt-actions { display: flex; gap: 10px; align-items: flex-end; margin-left: auto; }
+.strat-page .flt-actions, .sig-page .flt-actions, .ord-page .flt-actions,
+.sr-page .flt-actions, .sh-page .flt-actions { display: flex; gap: 10px; align-items: flex-end; margin-left: auto; }
 /* ⭐ Screen-13's two filter actions join the SAME pair, so they cannot drift from
    Screens 03/04/05. ⛔ Deliberately NOT extended to `.rt-btn`: that pill is a
    real app-wide component and Screen-13 still uses it for the AUDIT EVENTS
@@ -782,17 +805,23 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 .ord-page .btn-ghost, .ord-page .btn-primary,
 .aud-page .btn-ghost, .aud-page .btn-primary,
 .tlg-page .btn-ghost, .tlg-page .btn-primary,
+.sr-page .btn-ghost, .sr-page .btn-primary,
+.sh-page .btn-ghost, .sh-page .btn-primary,
 .slg-page .btn-ghost, .slg-page .btn-primary { height: 36px; padding: 0 16px; font-size: 13px; font-weight: 600;
   border-radius: 8px; cursor: pointer; font-family: inherit; }
 .strat-page .btn-ghost, .sig-page .btn-ghost, .ord-page .btn-ghost,
-.aud-page .btn-ghost, .tlg-page .btn-ghost, .slg-page .btn-ghost { background: transparent; color: var(--muted); border: 1px solid var(--card-bd); }
+.aud-page .btn-ghost, .tlg-page .btn-ghost, .sr-page .btn-ghost,
+.sh-page .btn-ghost, .slg-page .btn-ghost { background: transparent; color: var(--muted); border: 1px solid var(--card-bd); }
 .strat-page .btn-ghost:hover, .sig-page .btn-ghost:hover, .ord-page .btn-ghost:hover,
 .aud-page .btn-ghost:hover, .tlg-page .btn-ghost:hover,
+.sr-page .btn-ghost:hover, .sh-page .btn-ghost:hover,
 .slg-page .btn-ghost:hover { color: var(--text); border-color: var(--blue); }
 .strat-page .btn-primary, .sig-page .btn-primary, .ord-page .btn-primary,
-.aud-page .btn-primary, .tlg-page .btn-primary, .slg-page .btn-primary { background: var(--blue); color: #fff; border: 1px solid var(--blue); }
+.aud-page .btn-primary, .tlg-page .btn-primary, .sr-page .btn-primary,
+.sh-page .btn-primary, .slg-page .btn-primary { background: var(--blue); color: #fff; border: 1px solid var(--blue); }
 .strat-page .btn-primary:hover, .sig-page .btn-primary:hover, .ord-page .btn-primary:hover,
 .aud-page .btn-primary:hover, .tlg-page .btn-primary:hover,
+.sr-page .btn-primary:hover, .sh-page .btn-primary:hover,
 .slg-page .btn-primary:hover { filter: brightness(1.08); }
 
 /* Strategy hierarchy */
@@ -3916,16 +3945,13 @@ main.content:has(> .sr-page) { width: 100%; max-width: none; margin: 0;
 .sr-page .sr-mode:hover { color: var(--text); background: rgba(var(--t-blue), .08); }
 .sr-page .sr-mode.is-on { background: var(--blue); color: #fff; }
 
-.sr-page .sr-frow { display: flex; flex-wrap: wrap; align-items: flex-end;
-  gap: 14px; }
-.sr-page .sr-f { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
-.sr-page .sr-f-l { font-size: 13px; color: var(--muted); }
-.sr-page .sr-f .sel { min-width: 190px; height: 36px; font-size: 13px; }
-.sr-page .sr-f-dates { display: flex; align-items: center; gap: 7px; }
-.sr-page .sr-date { min-width: 138px; }
-.sr-page .sr-f-to { color: var(--dim); font-size: 13px; }
-.sr-page .sr-fbtns { margin-left: auto; }
-.sr-page .sr-fbtns .btn-ghost { height: 36px; font-size: 13px; white-space: nowrap; }
+/* ⛔ NO ONE-OFF CONTROL SIZING HERE: height, padding, radius, border,
+   background, focus and the button pair all come from the SHARED rules above.
+   What remains is only what the custom-range field needs. */
+.sr-page .sr-f-dates { display: flex; align-items: center; gap: 7px; width: 100%; }
+.sr-page .sr-f-dates .sel { flex: 1 1 0; min-width: 0; }
+.sr-page .sr-dates { flex: 1 1 300px; }
+.sr-page .sr-f-to { color: var(--dim); font-size: 13px; flex: none; }
 
 /* ── the ranking table ───────────────────────────────────────────────────── */
 .sr-page .sr-panel-head { display: flex; align-items: center;
@@ -3944,7 +3970,6 @@ main.content:has(> .sr-page) { width: 100%; max-width: none; margin: 0;
 .sr-page .sr-th { cursor: grab; user-select: none; }
 .sr-page .sr-th.is-drag { opacity: .5; }
 .sr-page .sr-th.is-over { box-shadow: inset 2px 0 0 var(--blue); }
-.sr-page .sr-grip { font-size: .55rem; color: var(--dim); margin-right: 3px; }
 .sr-page .sr-arrow { margin-left: 3px; color: var(--dim); }
 .sr-page .sr-tbl tbody tr:hover { background: rgba(var(--t-blue), .07); }
 .sr-page .sr-empty { color: var(--dim); text-align: center; padding: 22px 0; }
@@ -4123,35 +4148,36 @@ main.content:has(> .sh-page) { width: 100%; max-width: none; margin: 0;
 .sh-page .sh-panel-head { display: flex; align-items: flex-end;
   justify-content: space-between; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }
 .sh-page .sh-panel-head .panel-title { margin: 0; }
-.sh-page .sh-tfilters { display: flex; align-items: flex-end; gap: 12px; }
-.sh-page .sh-f { display: flex; flex-direction: column; gap: 4px; }
-.sh-page .sh-f-l { font-size: 13px; color: var(--muted); }
-.sh-page .sh-f .sel { min-width: 152px; height: 32px; font-size: 13px; }
-.sh-page .sh-tfilters .btn-ghost { height: 32px; font-size: 13px; white-space: nowrap; }
+/* ⛔ THE COMPACT 32px BOXED ROW IS GONE (Rama, 16-Aug): the filter row now
+   takes the shared `.flt-*` geometry and the shared `.sel` control, so it reads
+   as the same application as every other screen. */
+.sh-page .sh-flt { margin-bottom: 12px; }
+.sh-page .sh-sil-body .flt-field { flex: 1 1 auto; width: 100%; }
 /* ⭐ THE APPROVED TABLE FOOTPRINT: the artwork draws a 14-row table, and a
    short day must not shrink the card (Rama, Screen 18). ⛔ Not a spacer - the
    16 configured strategies already exceed this floor, which then does nothing. */
 .sh-page .sh-tbl-wrap { overflow-x: auto; min-height: 350px; }
-.sh-page .sh-tbl { width: 100%; table-layout: fixed; }
+/* ⭐ min-width = the sum of the approved column widths, so the headings never
+   compress into a wrap. Narrower viewports scroll inside `.sh-tbl-wrap`. */
+.sh-page .sh-tbl { width: 100%; table-layout: fixed; min-width: 1214px; }
 .sh-page .sh-tbl td { padding: 7px 6px; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; text-align: left; }
 /* the HEADER wraps rather than truncating - a clipped column name is a
    defect, and the approved labels must be readable in full. */
-.sh-page .sh-tbl th { padding: 7px 6px; text-align: left;
-  white-space: normal; line-height: 1.25; vertical-align: bottom; }
+/* ⭐ THE HEADINGS STAY ON ONE LINE — the columns are sized for them, so a wrap
+   would only ever mean something has drifted. */
+.sh-page .sh-tbl th { padding: 7px 4px; text-align: left;
+  white-space: nowrap; vertical-align: bottom; }
 .sh-page .sh-tbl th.ctr, .sh-page .sh-tbl td.ctr { text-align: center; }
 .sh-page .sh-th { cursor: grab; user-select: none; }
 .sh-page .sh-th.is-drag { opacity: .5; }
 .sh-page .sh-th.is-over { box-shadow: inset 2px 0 0 var(--blue); }
-.sh-page .sh-grip { font-size: .55rem; color: var(--dim); margin-right: 3px; }
 .sh-page .sh-arrow { margin-left: 3px; color: var(--dim); }
 .sh-page .sh-tbl tbody tr:hover { background: rgba(var(--t-blue), .07); }
 .sh-page .sh-empty { color: var(--dim); text-align: center; padding: 22px 0;
   height: 330px; vertical-align: middle; }   /* the approved table footprint */
-.sh-page .sh-name { display: inline-flex; align-items: center; gap: 8px;
-  min-width: 0; max-width: 100%; }
 .sh-page .sh-nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sh-page .sh-tt { flex: none; padding: 1px 7px; border-radius: 5px;
+.sh-page .sh-tt { display: inline-block; padding: 2px 9px; border-radius: 6px;
   font-size: 13px; font-weight: 600; }
 .sh-page .sh-tt-intraday { background: rgba(var(--t-blue), .16);   color: var(--blue); }
 .sh-page .sh-tt-delivery { background: rgba(var(--t-purple), .16); color: var(--purple); }
@@ -4294,13 +4320,11 @@ main.content:has(> .sh-page) { width: 100%; max-width: none; margin: 0;
 .sh-page .sh-ev-tbl td { padding: 0; vertical-align: middle; }
 
 /* ── the right rail ──────────────────────────────────────────────────────── */
-.sh-page .sh-sil-body { display: flex; flex-direction: column; gap: 6px; }
-.sh-page .sh-sil-l { font-size: 13px; color: var(--muted); }
-.sh-page .sh-sil-v { align-self: flex-start; font-size: 13px; font-weight: 700;
-  color: var(--text); background: rgba(255, 255, 255, .05);
-  border: 1px solid var(--border-soft); border-radius: 8px; padding: 6px 14px; }
+.sh-page .sh-sil-body { display: flex; flex-direction: column;
+  align-items: flex-start; gap: 9px; }
 .sh-page .sh-sil-s { font-size: 13px; color: var(--muted); }
-.sh-page .sh-sil-src { font-size: 13px; color: var(--dim); word-break: break-all; }
+/* shown ONLY while the selection is not the configured rule */
+.sh-page .sh-sil-note { font-size: 13px; color: var(--yellow); line-height: 1.45; }
 
 .sh-page .sh-rej-body { display: flex; align-items: center; gap: 14px; }
 .sh-page .sh-rej-list { list-style: none; margin: 0; padding: 0; flex: 1 1 auto;

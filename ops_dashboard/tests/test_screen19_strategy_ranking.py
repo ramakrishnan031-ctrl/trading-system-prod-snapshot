@@ -471,3 +471,47 @@ def test_the_guard_can_go_red():
     broken = 'a("one\ntwo"); b();'
     assert _js_syntax.string_literals_spanning_a_newline(broken)
     assert not _js_syntax.string_literals_spanning_a_newline('a("one two");')
+
+
+# ── the 16-Aug corrections ───────────────────────────────────────────────────
+def test_the_filters_use_the_established_language_not_a_one_off():
+    """⭐ Rama, 16-Aug: the filter controls must match the approved screens, and
+    the panel must not leave a large empty area on its right."""
+    tpl, css = _tpl(), _css()
+    assert 'class="flt-row"' in tpl and 'class="flt-field"' in tpl
+    assert 'class="flt-k"' in tpl and 'class="flt-actions"' in tpl
+    assert "sr-frow" not in tpl and "sr-f-l" not in tpl and "sr-fbtns" not in tpl
+
+    for shared in (".sr-page .flt-row", ".sr-page .flt-field", ".sr-page .flt-k",
+                   ".sr-page .flt-actions", ".sr-page .sel", ".sr-page .btn-ghost"):
+        assert shared in css, shared
+
+    # ⭐ the shared field GROWS (flex: 1 1 150px) — that is what fills the panel
+    field = css[css.index(".sr-page .flt-field"):]
+    field = field[:field.index("}")]
+    assert "flex: 1 1 150px" in field, field
+
+    block = css[css.index("SCREEN 19"):css.index("SCREEN 20")]
+    for line in block.splitlines():
+        if ".sel" in line and "height" in line:
+            raise AssertionError("one-off control sizing: " + line.strip())
+
+
+def test_the_trade_type_filter_is_an_ordinary_dropdown():
+    """⭐ Required immediately after Strategy in the TABLE, but its FILTER stays a
+    normal select like every other filter on the page."""
+    tpl = _tpl()
+    i = tpl.index('<span class="flt-k">Trade Type</span>')
+    block = tpl[i:i + 400]
+    assert '<select class="sel"' in block, block[:200]
+
+
+def test_the_drag_affordance_survives_the_glyph_removal():
+    """⚠️ Scoped to THIS screen's own CSS block — a bare substring check would
+    match another screen's class and fail for the wrong reason."""
+    tpl, css = _tpl(), _css()
+    block = css[css.index("SCREEN 19"):css.index("SCREEN 20")]
+    assert 'class="sr-grip"' not in tpl
+    assert ".sr-grip" not in block
+    assert 'draggable="true"' in tpl and "drag to reorder" in tpl
+    assert ".sr-page .sr-th { cursor: grab" in css

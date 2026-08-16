@@ -257,13 +257,76 @@ def test_the_silence_threshold_is_read_from_config_not_hard_coded(gui_config):
     assert _b(moved)["silent_detection"]["label"] == "3 Hours"
 
 
-def test_the_threshold_control_is_read_only():
-    """⛔ A dashboard control must never write to the trading system (L4)."""
+def _silent_panel() -> str:
     tpl = _tpl()
     start = tpl.index('class="panel sh-silent"')
-    block = tpl[start:tpl.index('class="panel sh-rej"')]
-    assert "<select" not in block and "<input" not in block
-    assert "read-only" in block, "the panel does not say the value is read-only"
+    return tpl[start:tpl.index('class="panel sh-rej"')]
+
+
+def test_the_threshold_is_a_real_select_in_the_shared_control_language():
+    """⭐ Rama, 16-Aug: it must be a REAL dropdown in the application's own
+    cosmetics — ⛔ not a static chip."""
+    block = _silent_panel()
+    assert "<select" in block, "the threshold is not a select"
+    assert 'class="sel"' in block, "the select does not use the shared control"
+    assert 'class="flt-k"' in block, "the label does not use the shared treatment"
+    assert "silOptions()" in block and "f.silent_min" in block
+
+
+def test_selecting_a_threshold_never_writes(gui_config):
+    """⛔ L4. The selection is a READ-TIME VIEW: it is applied to this build's own
+    copy of the config, and the caller's dict is left untouched."""
+    block = _silent_panel()
+    assert "<form" not in block.lower()
+    assert "post" not in block.lower()
+
+    before = dict(gui_config.get("silence") or {})
+    _b(gui_config, silent_min=30)
+    assert dict(gui_config.get("silence") or {}) == before, "the config was mutated"
+
+
+def test_the_threshold_choices_come_from_the_configuration_contract(gui_config):
+    """⭐ `gui_config.silence` defines the ONLY boundaries `silence_tier` applies.
+    ⛔ No arbitrary ladder (15m / 4h / …) is offered."""
+    opts = strategy_health.silence_options(gui_config)
+    sil = strategy_health._silence_cfg(gui_config)
+    assert [o["minutes"] for o in opts] == sorted(
+        {int(sil["green_max_min"]), int(sil["yellow_max_min"])})
+    for o in opts:
+        assert o["source"].startswith("gui_config.silence.")
+    configured = [o for o in opts if o["configured"]]
+    assert len(configured) == 1
+    assert configured[0]["minutes"] == int(sil["yellow_max_min"])
+
+
+def test_a_threshold_that_is_not_configured_is_ignored(gui_config):
+    """⛔ A hand-typed query string cannot invent a rule this system was never
+    configured with."""
+    base = _b(gui_config)["silent_detection"]
+    for bogus in (7, 999, "abc", None):
+        got = _b(gui_config, silent_min=bogus)["silent_detection"]
+        assert got["minutes"] == base["minutes"], bogus
+        assert got["is_configured"] is True
+
+
+def test_selecting_a_configured_threshold_changes_what_is_shown(gui_config):
+    """⭐ The selection must actually re-evaluate the view — otherwise the control
+    is decoration — and the panel must still name the CONFIGURED rule."""
+    opts = strategy_health.silence_options(gui_config)
+    other = [o for o in opts if not o["configured"]]
+    assert other, "the fixture offers only one threshold, so this cannot fail"
+    picked = other[0]["minutes"]
+
+    got = _b(gui_config, silent_min=picked)
+    sd = got["silent_detection"]
+    assert sd["minutes"] == picked
+    assert sd["is_configured"] is False
+    assert sd["configured_minutes"] != picked
+    assert sd["configured_label"]
+    # a TIGHTER threshold can only make MORE strategies Silent, never fewer
+    base = _b(gui_config)
+    if picked < base["silent_detection"]["minutes"]:
+        assert got["counts"]["Silent"] >= base["counts"]["Silent"]
 
 
 # ── states, KPI and the table ────────────────────────────────────────────────
@@ -316,7 +379,10 @@ def test_the_six_approved_kpi_cards_in_the_approved_order():
                       "STRATEGIES WITH ERRORS"]
 
 
-APPROVED_COLUMNS = ["Strategy", "Status", "Last Signal", "Last Trade",
+#: ⭐ Rama, 16-Aug enumerated these headings for THIS screen, Trade Type
+#: included — so it is a COLUMN here too, immediately after Strategy, and no
+#: longer a badge tucked inside the Strategy cell where it had no heading.
+APPROVED_COLUMNS = ["Strategy", "Trade Type", "Status", "Last Signal", "Last Trade",
                     "Signals Today", "Orders Today", "Trades Today",
                     "Rejections Today", "Health Score", "Trend"]
 
@@ -577,3 +643,55 @@ def test_the_guard_can_go_red():
     broken = 'a("one\ntwo"); b();'
     assert _js_syntax.string_literals_spanning_a_newline(broken)
     assert not _js_syntax.string_literals_spanning_a_newline('a("one two");')
+
+
+# ── the 16-Aug corrections ───────────────────────────────────────────────────
+def test_the_filters_use_the_established_language_not_a_one_off():
+    """⭐ Rama, 16-Aug: the filter area must match the approved screens.
+    ⛔ The screen must not restate control sizing of its own."""
+    tpl, css = _tpl(), _css()
+    assert 'class="flt-row' in tpl and 'class="flt-field"' in tpl
+    assert 'class="flt-k"' in tpl and 'class="flt-actions"' in tpl
+    assert "sh-tfilters" not in tpl and "sh-f-l" not in tpl
+
+    for shared in (".sh-page .flt-row", ".sh-page .flt-field", ".sh-page .flt-k",
+                   ".sh-page .flt-actions", ".sh-page .sel", ".sh-page .btn-ghost"):
+        assert shared in css, shared
+
+    block = css[css.index("SCREEN 20"):]
+    for line in block.splitlines():
+        if ".sel" in line and "height" in line:
+            raise AssertionError("one-off control sizing: " + line.strip())
+
+
+def test_every_approved_heading_fits_on_one_line():
+    """⛔ THE DEFECT THIS PINS: the three "… Today" headings wrapped, and the
+    second line read as a column of repeated TODAY (Rama, 16-Aug)."""
+    css = _css()
+    block = css[css.index("SCREEN 20"):]
+    th = block[block.index(".sh-page .sh-tbl th"):]
+    th = th[:th.index("}")]
+    assert "white-space: nowrap" in th, th
+
+    tpl = _tpl()
+    cols = tpl[tpl.index("DEFAULT_COLS:"):tpl.index("SPECIAL:")]
+    widths = [int(w) for w in re.findall(r'w:\s*"(\d+)px"', cols)]
+    assert len(widths) == len(APPROVED_COLUMNS)
+    declared = re.search(r"\.sh-page \.sh-tbl \{[^}]*min-width:\s*(\d+)px", block)
+    assert declared, "the table declares no min-width"
+    assert sum(widths) == int(declared.group(1)), (sum(widths), declared.group(1))
+
+
+def test_the_drag_affordance_survives_the_glyph_removal():
+    """⭐ The glyph went to buy header width; ⛔ the affordance did not.
+
+    ⚠️ Scoped to THIS screen's own CSS block — `.sysh-grip` is Screen 12's class
+    and a bare substring check would match it and fail for the wrong reason.
+    """
+    tpl, css = _tpl(), _css()
+    block = css[css.index("SCREEN 20"):]
+    assert 'class="sh-grip"' not in tpl
+    assert ".sh-grip" not in block
+    assert 'draggable="true"' in tpl
+    assert "drag to reorder" in tpl
+    assert ".sh-page .sh-th { cursor: grab" in css

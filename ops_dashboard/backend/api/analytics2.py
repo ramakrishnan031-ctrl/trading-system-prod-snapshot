@@ -566,7 +566,11 @@ def _health_kwargs2() -> dict:
     def _arg(name):
         return (request.args.get(name) or "").strip() or None
 
-    return {"state": _arg("state"), "trade_type": _arg("trade_type")}
+    # ⭐ `silent_min` is the SILENT DETECTION selection — a READ-TIME VIEW.
+    # ⛔ It writes nothing: the builder applies it to its own copy of the config
+    # and ignores any value that is not one of the CONFIGURED thresholds.
+    return {"state": _arg("state"), "trade_type": _arg("trade_type"),
+            "silent_min": _arg("silent_min")}
 
 
 @analytics2_api.route("/api/strategy-health/screen", methods=["GET"])

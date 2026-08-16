@@ -183,11 +183,24 @@ def _series(daily: dict, days: list) -> list:
 
 def build_strategy_health_screen(cfg: dict, state: Optional[str] = None,
                                  trade_type: Optional[str] = None,
-                                 now=None) -> dict:
+                                 silent_min=None, now=None) -> dict:
     """The whole wall from ONE tower build, so every panel describes the same
-    strategies at the same instant."""
+    strategies at the same instant.
+
+    ⭐ `silent_min` is the SILENT DETECTION SETTINGS selection. It is a READ-TIME
+    VIEW ONLY: the chosen threshold is handed to this build's own copy of the
+    config so the tower re-evaluates the silence tier at it. ⛔ NOTHING IS
+    WRITTEN — the deployed `gui_config.silence.yellow_max_min` is untouched, and
+    the panel always states which value is the configured one so a what-if can
+    never be read as the live rule.
+    """
     now = now or freshness.ist_now()
     today = freshness.ist_today_iso(now)
+    # ⚠️ ORDER MATTERS: the options and the CONFIGURED value are read from the
+    # DEPLOYED config, before the selection is applied — reading them afterwards
+    # would make whatever was selected look like the configured rule.
+    sil_options = silence_options(cfg)
+    cfg = _cfg_for_silence(cfg, silent_min)
     tower = strategy_tower.build_strategy_tower(cfg, today, now)
     meta = strategy_meta.strategy_meta(cfg)
 
@@ -274,7 +287,7 @@ def build_strategy_health_screen(cfg: dict, state: Optional[str] = None,
         "state_guide": [{"state": s, "text": t} for s, t in STATE_GUIDE],
         "counts": counts,
         "kpi": _kpi(rows, counts),
-        "silent_detection": _silent_detection(cfg),
+        "silent_detection": _silent_detection(cfg, sil_options),
         "rejection_monitoring": _rejections(rows),
         "signal_activity": _signal_activity(cfg, rows, daily, today, now),
         "trade_activity": _trade_activity(cfg, rows, daily, today),
@@ -349,18 +362,87 @@ def _kpi(rows: list, counts: dict) -> dict:
     return out
 
 
-def _silent_detection(cfg: dict) -> dict:
+def _silence_cfg(cfg: dict) -> dict:
+    """The deployed silence contract, defaults filled in."""
+    sil = dict(strategy_score.DEFAULT_SILENCE)
+    sil.update({k: v for k, v in (cfg.get("silence") or {}).items() if v is not None})
+    return sil
+
+
+def _duration_label(minutes: int) -> str:
+    hours = minutes / 60.0
+    if hours == int(hours) and hours >= 1:
+        return "%d Hour%s" % (int(hours), "" if hours == 1 else "s")
+    return "%d Minutes" % minutes
+
+
+def silence_options(cfg: dict) -> list:
+    """⭐ THE CHOICES COME FROM THE CONFIGURATION CONTRACT, ⛔ NOT INVENTED.
+
+    `gui_config.silence` defines exactly TWO last-signal-age boundaries, and they
+    are the only two values that change what "Silent" means — `silence_tier`
+    returns RED beyond `yellow_max_min` and GREEN at or under `green_max_min`.
+    ⛔ No arbitrary ladder (15m / 30m / 1h / 4h …) is offered: every option here
+    is a value this system is actually configured with, and each carries the
+    config key it came from.
+    """
+    sil = _silence_cfg(cfg)
+    seen, out = set(), []
+    for key in ("green_max_min", "yellow_max_min"):
+        minutes = int(sil[key])
+        if minutes in seen:
+            continue
+        seen.add(minutes)
+        out.append({"minutes": minutes, "label": _duration_label(minutes),
+                    "source": "gui_config.silence.%s" % key,
+                    "configured": key == "yellow_max_min"})
+    return sorted(out, key=lambda o: o["minutes"])
+
+
+def _cfg_for_silence(cfg: dict, silent_min) -> dict:
+    """A COPY of the config with the selected threshold applied.
+
+    ⛔ READ-TIME ONLY — this dict lives for one request and is never persisted;
+    the deployed `gui_config.yaml` is untouched (L4: no write path). ⛔ A value
+    that is not one of the configured options is IGNORED, so a hand-typed query
+    string cannot invent a threshold this system was never configured with.
+    """
+    if silent_min is None:
+        return cfg
+    try:
+        want = int(silent_min)
+    except (TypeError, ValueError):
+        return cfg
+    if want not in {o["minutes"] for o in silence_options(cfg)}:
+        return cfg
+    out = dict(cfg)
+    out["silence"] = dict(_silence_cfg(cfg))
+    out["silence"]["yellow_max_min"] = want
+    return out
+
+
+def _silent_detection(cfg: dict, options: list) -> dict:
     """⭐ The REAL configured rule, read from config — ⛔ the artwork's "2 Hours"
     is not hard-coded. `silence.yellow_max_min` is the age beyond which
     `strategy_score.silence_tier` returns RED, which `health_state` maps to
-    Silent."""
-    sil = dict(strategy_score.DEFAULT_SILENCE)
-    sil.update({k: v for k, v in (cfg.get("silence") or {}).items() if v is not None})
+    Silent.
+
+    ⚠️ `cfg` here is ALREADY the per-request copy, so `minutes` is what the
+    screen is CURRENTLY evaluating at. `configured_minutes` is what the deployed
+    config says — the two are reported separately so a selection can never be
+    mistaken for the live rule.
+    """
+    sil = _silence_cfg(cfg)
     minutes = int(sil["yellow_max_min"])
-    hours = minutes / 60.0
-    label = ("%d Hours" % hours) if hours == int(hours) else ("%d Minutes" % minutes)
-    return {"minutes": minutes, "label": label, "status": "Silent",
+    configured = next((o["minutes"] for o in options if o["configured"]), minutes)
+    return {"minutes": minutes, "label": _duration_label(minutes),
+            "status": "Silent",
             "source": "gui_config.silence.yellow_max_min",
+            "options": options,
+            "selected": minutes,
+            "configured_minutes": configured,
+            "configured_label": _duration_label(configured),
+            "is_configured": minutes == configured,
             "green_max_min": int(sil["green_max_min"])}
 
 
@@ -493,11 +575,12 @@ def _trend_analysis(rows: list) -> dict:
 
 
 # ── XLSX ─────────────────────────────────────────────────────────────────────
-#: ⭐ The approved nine table columns first, in the approved order; Trend and the
-#: strategy's Trade Type follow AFTER. ⛔ No Scanner column.
-EXPORT_HEADER = ("Strategy", "Status", "Last Signal", "Last Trade",
+#: ⭐ The approved table columns IN THE TABLE'S OWN ORDER, Trade Type second —
+#: the Screen-14 rule that a spreadsheet opens in the order the screen shows.
+#: ⛔ No Scanner column.
+EXPORT_HEADER = ("Strategy", "Trade Type", "Status", "Last Signal", "Last Trade",
                  "Signals Today", "Orders Today", "Trades Today",
-                 "Rejections Today", "Health Score", "Trend", "Trade Type")
+                 "Rejections Today", "Health Score", "Trend")
 
 NA = "NOT INSTRUMENTED"
 
@@ -516,12 +599,12 @@ def export_rows(payload: dict) -> list:
     out = [list(EXPORT_HEADER)]
     for r in payload.get("rows") or []:
         out.append([
-            r.get("display_name") or r.get("strategy"), r.get("state"),
+            r.get("display_name") or r.get("strategy"),
+            r.get("trade_type") or NA, r.get("state"),
             _hhmm(r.get("last_signal")), _hhmm(r.get("last_trade")),
             r.get("signals_today"), r.get("orders_today"), r.get("trades_today"),
             r.get("rejections_today"),
             r.get("health_score") if r.get("health_score") is not None else NA,
             r.get("trend") or NA,
-            r.get("trade_type") or NA,
         ])
     return out

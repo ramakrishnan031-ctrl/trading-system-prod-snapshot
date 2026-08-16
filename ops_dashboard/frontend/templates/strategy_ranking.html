@@ -61,28 +61,36 @@
       </div>
     </section>
 
+    {# ⭐ THE ESTABLISHED FILTER LANGUAGE, ⛔ not a one-off for this screen:
+       `.flt-row` / `.flt-field` / `.flt-k` / `.flt-actions` are the classes
+       Screens 03/04/05 own and Screens 13/14/15 already joined, and the controls
+       carry `.sel` so they take the standard 36px / radius-8 / card-background
+       treatment. ⭐ `.flt-field` is `flex: 1 1 150px`, so the fields SPREAD
+       across the panel instead of clustering on the left and leaving the right
+       half empty. ⛔ No new control size, radius or colour is introduced here. #}
     <section class="panel sr-filters">
       <h3 class="panel-title">FILTERS</h3>
-      <div class="sr-frow">
-        <label class="sr-f">
-          <span class="sr-f-l">Date Range</span>
+      <div class="flt-row">
+        <label class="flt-field">
+          <span class="flt-k">Date Range</span>
           <select class="sel" x-model="f.period" @change="applyFilters()">
             <template x-for="d in dateRanges()" :key="d.key">
               <option :value="d.key" x-text="d.label"></option>
             </template>
           </select>
         </label>
-        <label class="sr-f" x-show="f.period === 'custom'" x-cloak>
-          <span class="sr-f-l">From → To</span>
+        <label class="flt-field sr-dates" x-show="f.period === 'custom'" x-cloak>
+          <span class="flt-k">From → To</span>
           <span class="sr-f-dates">
-            <input type="date" class="sel sr-date" x-model="f.from" @change="applyFilters()">
+            <input type="date" class="sel" x-model="f.from" @change="applyFilters()">
             <span class="sr-f-to">→</span>
-            <input type="date" class="sel sr-date" x-model="f.to" @change="applyFilters()">
+            <input type="date" class="sel" x-model="f.to" @change="applyFilters()">
           </span>
         </label>
-        <label class="sr-f">
-          {# ⭐ the STRATEGY's YAML intent — the same value the column shows #}
-          <span class="sr-f-l">Trade Type</span>
+        <label class="flt-field">
+          {# ⭐ the STRATEGY's YAML intent — the same value the column shows, and
+             an ordinary dropdown like every other filter on the page #}
+          <span class="flt-k">Trade Type</span>
           <select class="sel" x-model="f.trade_type" @change="applyFilters()">
             <option value="">All Types</option>
             <template x-for="t in ttOptions()" :key="t">
@@ -90,8 +98,8 @@
             </template>
           </select>
         </label>
-        <label class="sr-f">
-          <span class="sr-f-l">Direction</span>
+        <label class="flt-field">
+          <span class="flt-k">Direction</span>
           <select class="sel" x-model="f.direction" @change="applyFilters()">
             <option value="">All Directions</option>
             <template x-for="d in dirOptions()" :key="d">
@@ -99,9 +107,9 @@
             </template>
           </select>
         </label>
-        <span class="sr-fbtns">
+        <div class="flt-actions">
           <button class="btn-ghost" type="button" @click="resetFilters()">↻ Reset Filters</button>
-        </span>
+        </div>
       </div>
     </section>
   </div>
@@ -133,9 +141,13 @@
                 @drop.prevent="onDrop(c.key)"
                 @dragend="onDragEnd()"
                 @click="headClick(c.key)" @keyup.enter="tSort(c.key)">
-              <span class="sr-grip" aria-hidden="true">⠿</span><span
-                    x-text="c.label"></span><span
-                    class="sr-arrow" x-text="tArrow(c.key)"></span>
+              {# ⭐ The binding artwork draws PLAIN headings; the drag glyph was
+                 my own addition and it ate width the approved labels needed.
+                 ⛔ The affordance is NOT removed — the <th> is still draggable,
+                 still `cursor: grab`, and its tooltip still says so. #}
+              <span x-text="c.label"></span><span
+                    class="sr-arrow" x-show="tSortKey === c.key"
+                    x-text="tArrow(c.key)"></span>
             </th>
           </template>
         </tr></thead>
