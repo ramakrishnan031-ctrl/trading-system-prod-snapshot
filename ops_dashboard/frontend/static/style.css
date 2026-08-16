@@ -3355,3 +3355,414 @@ table td.ctr { text-align: center !important; }
 .slg-page .slg-foot-note { font-size: 13px; color: var(--muted); line-height: 1.6; }
 .slg-page .slg-foot-note b { color: var(--dim); font-weight: 400; }
 .slg-page .slg-i { color: var(--blue); margin-right: 4px; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SCREEN 18 — LIVE ACTIVITY  (.lav-page)
+   Structure follows `gui/18. Live_Activity.png` exactly: the six-card KPI strip ·
+   a two-column body (work area + a 300px right rail) whose left column holds
+   three rows — feed + pipeline/strategy · winners-losers + system events + feed
+   filters · active positions + capital utilization — and whose rail holds alerts
+   banner · market pulse · live mode · export.
+   ⛔ Everything is scoped to `.lav-page`, so no other screen can be repainted.
+   ⭐ Readability floor: the brief sets 13px. Every text rule here is >= 13px;
+   the drag grip stays at the project's established `.55rem` because it is a
+   DECORATIVE handle glyph, identical to `.aud-grip` / `.tlg-grip` / `.slg-grip`
+   on the approved screens, not readable text.
+   ⛔ NO min-height and NO stretch anywhere: the columns are balanced by what is
+   IN them, which is the lesson Screen 15 paid for.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.lav-page {
+  --t-blue: 56,139,253;  --t-green: 46,160,67;   --t-red: 218,54,51;
+  --t-orange: 219,109,40; --t-purple: 163,113,247; --t-yellow: 210,153,34;
+  --t-gray: 139,148,158;
+  --card: #0f141b;          /* inner card bg — a step below --panel */
+  --card-bd: #232b35;       /* inner card border */
+  display: flex; flex-direction: column; gap: 16px;
+}
+
+.lav-page .lav-head { display: flex; align-items: flex-start;
+  justify-content: space-between; gap: 16px; }
+.lav-page .lav-title { font-size: 1.5rem; font-weight: 800; margin: 0;
+  letter-spacing: .04em; }
+.lav-page .lav-sub { font-size: 13px; color: var(--muted); margin-top: 2px; }
+.lav-page .lav-headright { display: flex; align-items: center; gap: 14px; }
+.lav-page .lav-lastcheck { display: flex; flex-direction: column; align-items: flex-end; }
+.lav-page .lav-lc-l { font-size: 13px; color: var(--dim); letter-spacing: .06em; }
+.lav-page .lav-lc-v { font-size: 13px; color: var(--muted); }
+.lav-page .lav-livechip { display: inline-flex; align-items: center; gap: 7px;
+  padding: 4px 11px; border-radius: 999px; font-size: 13px; font-weight: 700;
+  letter-spacing: .05em; border: 1px solid var(--card-bd); }
+.lav-page .lav-livechip.is-on { background: var(--pos-tint); color: var(--pos);
+  border-color: rgba(var(--t-green), .45); }
+.lav-page .lav-livechip.is-off { background: var(--muted-tint); color: var(--muted); }
+.lav-page .lav-livedot { width: 8px; height: 8px; border-radius: 50%;
+  background: currentColor; }
+.lav-page .lav-livechip.is-on .lav-livedot { animation: pulse 1.6s infinite; }
+
+/* ── KPI strip: icon at left, label / value / sub stacked beside it ───────── */
+.lav-page .lav-kpis { display: grid; gap: 12px; grid-template-columns: repeat(6, 1fr); }
+@media (max-width: 1500px) { .lav-page .lav-kpis { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 900px)  { .lav-page .lav-kpis { grid-template-columns: repeat(2, 1fr); } }
+.lav-page .lav-kpi { display: flex; align-items: flex-start; gap: 12px;
+  padding: 13px 14px; margin-bottom: 0; }
+.lav-page .lav-kpi-ico { width: 34px; height: 34px; border-radius: 9px; flex: none;
+  display: inline-flex; align-items: center; justify-content: center; }
+.lav-page .lav-ico-info   { background: rgba(var(--t-blue), .15);   color: var(--blue); }
+.lav-page .lav-ico-purple { background: rgba(var(--t-purple), .16); color: var(--purple); }
+.lav-page .lav-ico-warn   { background: rgba(var(--t-yellow), .16); color: var(--yellow); }
+.lav-page .lav-ico-pos    { background: rgba(var(--t-green), .16);  color: var(--pos); }
+.lav-page .lav-kpi-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.lav-page .lav-kpi-l { font-size: 13px; color: var(--muted); letter-spacing: .05em; }
+.lav-page .lav-kpi-v { font-size: 1.55rem; font-weight: 800; line-height: 1.15;
+  font-variant-numeric: tabular-nums; }
+.lav-page .lav-v-plain { color: var(--text); }
+.lav-page .lav-v-info  { color: var(--blue); }
+.lav-page .lav-v-pos   { color: var(--pos); }
+.lav-page .lav-v-neg   { color: var(--neg); }
+.lav-page .lav-v-dim   { color: var(--muted); }
+/* ⛔ the NOT-INSTRUMENTED headline is deliberately small and grey: it is a
+   statement, not a figure, and must never read as a value. */
+.lav-page .lav-v-ni { font-size: 13px; font-weight: 700; color: var(--dim);
+  letter-spacing: .03em; line-height: 1.9; }
+.lav-page .lav-kpi-s { font-size: 13px; color: var(--dim); line-height: 1.4; }
+.lav-page .lav-up   { color: var(--pos); }
+.lav-page .lav-down { color: var(--neg); }
+
+/* ── the page body: work area + a right rail ─────────────────────────────── */
+/* ⛔ `minmax(0, 1fr)`, NEVER a bare `1fr`: a grid item defaults to
+   `min-width:auto`, so a table's intrinsic width would refuse to shrink and
+   push the whole page into a horizontal scroll (measured on Screen 13). */
+.lav-page .lav-work { display: grid; gap: 16px; align-items: start;
+  grid-template-columns: minmax(0, 1fr) 300px; }
+@media (max-width: 1400px) { .lav-page .lav-work { grid-template-columns: minmax(0, 1fr); } }
+.lav-page .lav-left { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.lav-page .lav-rail { display: flex; flex-direction: column; gap: 16px; }
+.lav-page .lav-mid  { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.lav-page .lav-rail .panel, .lav-page .lav-left .panel { margin-bottom: 0; }
+
+/* the three left-hand rows, in the PNG's own proportions */
+.lav-page .lav-rowa { display: grid; gap: 16px; align-items: start;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); }
+.lav-page .lav-rowb { display: grid; gap: 16px; align-items: start;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1.05fr); }
+.lav-page .lav-rowc { display: grid; gap: 16px; align-items: start;
+  grid-template-columns: minmax(0, 1.95fr) minmax(0, 1fr); }
+/* Below 1500 the three-across row no longer holds three readable panels. FEED
+   FILTERS takes the full width and lays its eight approved tiles out in ONE row
+   — ⛔ the alternative left half a row blank, which reads as a missing panel.
+   ACTIVE POSITIONS takes the full width too, which is what stops its ten
+   approved columns falling into a horizontal scroll at 1440. */
+@media (max-width: 1500px) {
+  /* ⚠️ MEASURED AT 1440, not guessed: at the PNG's 1.35 ratio the mid column is
+     381px, which gives the six pipeline stages 58px each while "Validation"
+     needs 63 — the labels touched — and squeezing the ratio instead left the
+     feed's three free-text columns at 63px, ellipsising everything to five
+     characters. Stacking the row gives BOTH panels the full width, which is the
+     same reflow idiom Screens 13-15 use below their own breakpoints. */
+  .lav-page .lav-rowa { grid-template-columns: minmax(0, 1fr); }
+  .lav-page .lav-rowb { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .lav-page .lav-filters { grid-column: 1 / -1; }
+  .lav-page .lav-tiles { grid-template-columns: repeat(8, minmax(0, 1fr)); }
+  .lav-page .lav-rowc { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 1100px) {
+  .lav-page .lav-rowa, .lav-page .lav-rowb, .lav-page .lav-rowc {
+    grid-template-columns: minmax(0, 1fr); }
+  .lav-page .lav-tiles { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+
+/* ── controls, in the language Screens 13-15 settled ─────────────────────── */
+.lav-page .panel-sub { font-size: 13px; }
+.lav-page .rt-btn { font-size: 13px; }
+.lav-page .mono { font-size: 13px; }
+.lav-page th { font-size: 13px; }
+.lav-page .panel-link { font-size: 13px; }
+.lav-page .lav-live-tag { font-size: 13px; color: var(--muted); font-weight: 400; }
+
+/* ── REAL-TIME ACTIVITY FEED ─────────────────────────────────────────────── */
+.lav-page .lav-panel-head { display: flex; align-items: center;
+  justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.lav-page .lav-panel-head .panel-title { margin: 0; }
+.lav-page .lav-chips { display: flex; align-items: center; gap: 7px;
+  flex-wrap: wrap; margin: 10px 0 12px; }
+.lav-page .lav-chip { border-radius: 8px; padding: 5px 12px; }
+.lav-page .lav-pause { margin-left: auto; border-radius: 8px; padding: 5px 12px;
+  min-width: 40px; }
+.lav-page .lav-tbl-wrap { overflow-x: auto; }
+/* ⭐ FIXED layout so the six approved columns always ALL fit the panel: Time,
+   Category and Status take their declared widths (bound to the column KEY, so a
+   drag cannot reassign them) and the three free-text columns share the rest and
+   ellipsis, with the whole value on the cell's tooltip. */
+.lav-page .lav-tbl { width: 100%; min-width: 0; table-layout: fixed; }
+.lav-page .lav-tbl th, .lav-page .lav-tbl td { overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+/* every pixel taken back here goes to the three free-text columns */
+.lav-page .lav-tbl th, .lav-page .lav-tbl td { padding: 6px 6px; }
+/* 🔴 CAUGHT IN THE BROWSER: with a real day's events the feed rendered all 190
+   rows and the panel grew to 7204px, burying every panel below it. The binding
+   PNG draws the feed as a FIXED-HEIGHT WINDOW with its count in the footer, so
+   the table body scrolls inside the panel and the header stays put.
+   ⭐ This is the panel's DESIGNED SIZE, ⛔ not a spacer closing a dead band —
+   it is a scroll container, and a test pins that `overflow-y: auto` travels
+   with the height. */
+.lav-page .lav-feed .lav-tbl-wrap { max-height: 430px; overflow-y: auto; }
+.lav-page .lav-feed thead th { position: sticky; top: 0; z-index: 1;
+  background: var(--panel); }
+/* Alignment by ROLE, the established rule: labels/text LEFT, badges CENTRED.
+   ⛔ No blanket centring — this table carries no numeric column. */
+.lav-page .lav-tbl th, .lav-page .lav-tbl td { text-align: left; }
+.lav-page .lav-tbl th.ctr, .lav-page .lav-tbl td.ctr { text-align: center; }
+.lav-page .lav-th { cursor: grab; user-select: none; white-space: nowrap; }
+.lav-page .lav-th.is-drag { opacity: .5; }
+.lav-page .lav-th.is-over { box-shadow: inset 2px 0 0 var(--blue); }
+.lav-page .lav-grip { font-size: .55rem; color: var(--dim); margin-right: 5px; }
+.lav-page .lav-arrow { margin-left: 5px; color: var(--dim); }
+.lav-page .lav-tbl tbody tr:hover { background: rgba(var(--t-blue), .07); }
+.lav-page .lav-time { white-space: nowrap; color: var(--muted); }
+/* 🔴 CAUGHT IN THE BROWSER at 260px: the Details cell alone pushed the STATUS
+   column out of the panel and into the horizontal scroll, so the approved
+   traffic light was off screen. Narrower here; the full text is on the tooltip. */
+.lav-page .lav-det { max-width: 175px; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; color: var(--muted); }
+.lav-page .lav-empty { color: var(--dim); text-align: center; padding: 18px 0; }
+.lav-page .lav-foot { display: flex; align-items: center;
+  justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-top: 10px; }
+.lav-page .lav-showing { font-size: 13px; color: var(--muted); }
+.lav-page .lav-more { margin-left: auto; text-decoration: none; font-weight: 600; }
+.lav-page .lav-more:hover { text-decoration: underline; }
+
+/* the eight approved CATEGORY chips */
+.lav-page .lav-cat { display: inline-block; padding: 2px 9px; border-radius: 6px;
+  font-size: 13px; font-weight: 600; white-space: nowrap; }
+.lav-page .lav-c-signal   { background: rgba(var(--t-blue), .16);   color: var(--blue); }
+.lav-page .lav-c-order    { background: rgba(var(--t-blue), .10);   color: #7cb2ff; }
+.lav-page .lav-c-position { background: rgba(var(--t-orange), .16); color: var(--orange); }
+.lav-page .lav-c-trade    { background: rgba(var(--t-purple), .16); color: var(--purple); }
+.lav-page .lav-c-risk     { background: rgba(var(--t-green), .16);  color: var(--pos); }
+.lav-page .lav-c-capital  { background: rgba(var(--t-red), .16);    color: var(--neg); }
+.lav-page .lav-c-system   { background: rgba(var(--t-purple), .10); color: #c3a6f7; }
+.lav-page .lav-c-alert    { background: rgba(var(--t-yellow), .16); color: var(--yellow); }
+
+/* the approved TRAFFIC LIGHT — exactly four states */
+.lav-page .lav-st { display: inline-block; padding: 2px 10px; border-radius: 6px;
+  font-size: 13px; font-weight: 600; white-space: nowrap; }
+.lav-page .lav-st-success    { background: rgba(var(--t-green), .16);  color: var(--pos); }
+.lav-page .lav-st-processing { background: rgba(var(--t-yellow), .18); color: var(--yellow); }
+.lav-page .lav-st-failed     { background: rgba(var(--t-red), .20);    color: var(--neg); }
+.lav-page .lav-st-info       { background: rgba(var(--t-blue), .16);   color: var(--blue); }
+
+/* the established NOT-INSTRUMENTED treatment */
+.lav-page .lav-ni { font-size: 13px; color: var(--dim); letter-spacing: .02em;
+  white-space: nowrap; }
+.lav-page .lav-note { font-size: 13px; color: var(--dim); margin: 10px 0 0;
+  line-height: 1.5; }
+.lav-page .lav-d-empty { color: var(--dim); font-size: 13px; padding: 10px 0;
+  display: flex; flex-direction: column; gap: 4px; }
+
+/* ── LIVE PROCESSING PIPELINE ────────────────────────────────────────────── */
+/* ⛔ `minmax(0, 1fr)`, never a bare `1fr`: a bare `1fr` is `minmax(auto, 1fr)`,
+   so the widest "Last: 10:45:30" label set the column's floor and the sixth
+   count box was clipped out of the panel (caught in the browser). */
+.lav-page .lav-pipe-row { display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 4px; margin-bottom: 12px; }
+.lav-page .lav-pstep { display: flex; flex-direction: column; align-items: center;
+  gap: 6px; position: relative; }
+/* the connector the PNG draws between the stage circles */
+.lav-page .lav-pstep:not(:last-child)::after { content: ""; position: absolute;
+  top: 17px; left: calc(50% + 20px); right: calc(-50% + 20px); height: 1px;
+  background: var(--card-bd); }
+.lav-page .lav-pdot { width: 34px; height: 34px; border-radius: 50%; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1.5px solid currentColor; background: var(--card); }
+.lav-page .lav-pd-signal     { color: var(--blue); }
+.lav-page .lav-pd-validation { color: var(--pos); }
+.lav-page .lav-pd-risk       { color: var(--purple); }
+.lav-page .lav-pd-capital    { color: var(--orange); }
+.lav-page .lav-pd-order      { color: var(--orange); }
+.lav-page .lav-pd-fill       { color: var(--pos); }
+.lav-page .lav-pname { font-size: 13px; color: var(--muted); white-space: nowrap; }
+.lav-page .lav-pipe-counts { display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; }
+.lav-page .lav-pcount { display: flex; flex-direction: column; align-items: center;
+  gap: 2px; padding: 9px 3px; border-radius: 8px; background: var(--card);
+  border: 1px solid rgba(var(--t-green), .35); min-width: 0; }
+.lav-page .lav-pcount b { font-size: 1.25rem; font-weight: 800;
+  font-variant-numeric: tabular-nums; }
+/* ⭐ The stamp WRAPS rather than truncating: "Last: 10:45:30" does not fit a
+   sixth of this panel at the 13px readability floor, and an ellipsised time is
+   no time at all. Two short centred lines keep both the approved wording and
+   the whole value. */
+.lav-page .lav-pcount span { font-size: 13px; color: var(--dim); min-width: 0;
+  max-width: 100%; text-align: center; line-height: 1.3; }
+/* ⭐ the most recently stamped stage — a HIGHLIGHT, ⛔ not a health verdict */
+.lav-page .lav-pcount.is-active { border-color: rgba(var(--t-yellow), .65);
+  background: rgba(var(--t-yellow), .10); }
+.lav-page .lav-pcount.is-active b, .lav-page .lav-pcount.is-active span {
+  color: var(--yellow); }
+
+/* ── STRATEGY ACTIVITY ───────────────────────────────────────────────────── */
+.lav-page .lav-stbl th.ctr, .lav-page .lav-stbl td.ctr { text-align: center; }
+.lav-page .lav-last { white-space: nowrap; }
+.lav-page .lav-dot { display: inline-block; width: 8px; height: 8px;
+  border-radius: 50%; margin-right: 7px; vertical-align: middle; }
+.lav-page .lav-dot-on  { background: var(--pos); }
+.lav-page .lav-dot-off { background: var(--neg); }
+
+/* ── RECENT WINNERS / LOSERS ─────────────────────────────────────────────── */
+.lav-page .lav-wl-grid { display: grid; grid-template-columns: repeat(4, 1fr);
+  gap: 10px; }
+@media (max-width: 1500px) { .lav-page .lav-wl-grid { grid-template-columns: repeat(2, 1fr); } }
+.lav-page .lav-wl-card { display: flex; flex-direction: column; gap: 5px;
+  padding: 11px 9px; border-radius: 9px; background: var(--card);
+  border: 1px solid var(--card-bd); min-width: 0; }
+.lav-page .lav-wl-pos { border-color: rgba(var(--t-green), .42);
+  background: rgba(var(--t-green), .07); }
+.lav-page .lav-wl-neg { border-color: rgba(var(--t-red), .42);
+  background: rgba(var(--t-red), .07); }
+.lav-page .lav-wl-l { font-size: 13px; letter-spacing: .05em; }
+.lav-page .lav-wl-pos .lav-wl-l { color: var(--pos); }
+.lav-page .lav-wl-neg .lav-wl-l { color: var(--neg); }
+.lav-page .lav-wl-v { font-size: 1.4rem; font-weight: 800;
+  font-variant-numeric: tabular-nums; }
+.lav-page .lav-wl-pos .lav-wl-v { color: var(--pos); }
+.lav-page .lav-wl-neg .lav-wl-v { color: var(--neg); }
+.lav-page .lav-wl-sym { font-size: 13px; color: var(--text); }
+.lav-page .lav-wl-t { font-size: 13px; color: var(--dim); }
+
+/* ── SYSTEM EVENTS ───────────────────────────────────────────────────────── */
+.lav-page .lav-evlist { list-style: none; margin: 0; padding: 0; }
+.lav-page .lav-evlist li { display: flex; align-items: flex-start; gap: 9px;
+  padding: 7px 0; border-bottom: 1px solid var(--border-soft); }
+.lav-page .lav-evlist li:last-child { border-bottom: none; }
+.lav-page .lav-ev-dot { width: 9px; height: 9px; border-radius: 50%; flex: none;
+  margin-top: 5px; background: currentColor; }
+.lav-page .lav-ev-info  { color: var(--blue); }
+.lav-page .lav-ev-warning { color: var(--yellow); }
+.lav-page .lav-ev-t { font-size: 13px; color: var(--muted); flex: none;
+  white-space: nowrap; }
+.lav-page .lav-ev-b { display: flex; flex-direction: column; gap: 1px;
+  min-width: 0; flex: 1 1 auto; }
+.lav-page .lav-ev-n { font-size: 13px; color: var(--text); }
+.lav-page .lav-ev-d { font-size: 13px; color: var(--dim); overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.lav-page .lav-ev-chip { font-size: 13px; font-weight: 600; padding: 1px 9px;
+  border-radius: 6px; flex: none; }
+.lav-page span.lav-ev-info    { background: rgba(var(--t-blue), .14); }
+.lav-page span.lav-ev-warning { background: rgba(var(--t-yellow), .18); }
+
+/* ── FEED FILTERS tiles ──────────────────────────────────────────────────── */
+.lav-page .lav-tiles { display: grid; grid-template-columns: repeat(4, 1fr);
+  gap: 9px; }
+.lav-page .lav-tile { display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 7px; padding: 13px 4px; border-radius: 9px;
+  background: var(--card); border: 1px solid var(--card-bd); cursor: pointer;
+  color: var(--muted); font-family: inherit; }
+.lav-page .lav-tile:hover { border-color: var(--blue); color: var(--text); }
+.lav-page .lav-tile.is-on { background: var(--blue); border-color: var(--blue);
+  color: #fff; }
+.lav-page .lav-tile-ico { display: inline-flex; }
+.lav-page .lav-tile-l { font-size: 13px; }
+
+/* ── ACTIVE POSITIONS ────────────────────────────────────────────────────── */
+.lav-page .lav-postbl th.ctr, .lav-page .lav-postbl td.ctr { text-align: center; }
+.lav-page .lav-postbl td { white-space: nowrap; }
+.lav-page .lav-postbl th, .lav-page .lav-postbl td { padding: 6px 7px; }
+.lav-page .lav-stbl th, .lav-page .lav-stbl td { padding: 6px 7px; white-space: nowrap; }
+/* 🔴 CAUGHT IN THE BROWSER: three "NOT INSTRUMENTED" cells pushed SL, TGT and
+   Status out of the panel. Screen 06's approved marker for exactly these three
+   fields is a compact `n/a` carrying the reason on its tooltip; the full reason
+   also sits in the note under the table, so nothing is hidden. */
+.lav-page .lav-nolive { color: var(--dim); font-style: italic; font-size: 13px; }
+
+/* ── CAPITAL UTILIZATION donut ───────────────────────────────────────────── */
+.lav-page .lav-cap-body { display: flex; align-items: center; gap: 16px; }
+.lav-page .lav-donut { width: 116px; height: 116px; flex: none;
+  transform: rotate(-90deg); }
+.lav-page .lav-donut-bg { stroke: var(--card); }
+.lav-page .lav-arc-used { stroke: var(--blue); }
+.lav-page .lav-arc-free { stroke: var(--green); }
+.lav-page i.lav-arc-used { background: var(--blue); }
+.lav-page i.lav-arc-free { background: var(--green); }
+.lav-page .lav-cap-legend { list-style: none; margin: 0; padding: 0;
+  flex: 1 1 auto; min-width: 0; }
+.lav-page .lav-cap-legend li { display: flex; align-items: center; gap: 9px;
+  font-size: 13px; padding: 5px 0; }
+.lav-page .lav-cap-legend .dot { width: 9px; height: 9px; border-radius: 50%;
+  flex: none; }
+.lav-page .lav-lg-n { margin-left: auto; color: var(--text); font-weight: 600; }
+.lav-page .lav-cap-total { margin-top: 6px; padding-top: 9px;
+  border-top: 1px solid var(--border-soft); }
+
+/* ── ALERTS BANNER ───────────────────────────────────────────────────────── */
+.lav-page .lav-alert { border-radius: 9px; padding: 11px 12px; margin-bottom: 10px;
+  border: 1px solid var(--card-bd); }
+.lav-page .lav-alert.is-crit { border-color: rgba(var(--t-red), .65);
+  background: rgba(var(--t-red), .10); }
+.lav-page .lav-alert.is-warn { border-color: rgba(var(--t-yellow), .65);
+  background: rgba(var(--t-yellow), .09); }
+.lav-page .lav-alert-top { display: flex; align-items: center;
+  justify-content: space-between; gap: 8px; margin-bottom: 7px; }
+.lav-page .lav-alert-k { display: inline-flex; align-items: center; gap: 7px;
+  font-size: 13px; font-weight: 800; letter-spacing: .04em; }
+.lav-page .is-crit .lav-alert-k { color: var(--neg); }
+.lav-page .is-warn .lav-alert-k { color: var(--yellow); }
+.lav-page .lav-alert-i { font-size: 14px; }
+.lav-page .lav-alert-t { font-size: 13px; color: var(--muted); }
+.lav-page .lav-alert-body { display: flex; align-items: center; gap: 10px; }
+.lav-page .lav-alert-b { display: flex; flex-direction: column; gap: 2px;
+  min-width: 0; flex: 1 1 auto; }
+.lav-page .lav-alert-title { font-size: 13px; color: var(--text); }
+.lav-page .lav-alert-d { font-size: 13px; color: var(--dim); overflow: hidden;
+  text-overflow: ellipsis; }
+.lav-page .lav-alert-view { flex: none; text-decoration: none; border-radius: 7px;
+  padding: 5px 13px; }
+
+/* ── MARKET PULSE ────────────────────────────────────────────────────────── */
+/* the window note sits on its OWN line — inline it wrapped the title and pushed
+   the approved "(LIVE)" tag onto a second row (caught in the browser) */
+.lav-page .lav-pulse .panel-title, .lav-page .lav-alerts .panel-title {
+  flex-wrap: wrap; }
+.lav-page .lav-pulse .panel-sub, .lav-page .lav-alerts .panel-sub {
+  flex-basis: 100%; margin-top: 2px; }
+.lav-page .lav-pl-row { padding: 10px 0; border-bottom: 1px solid var(--border-soft); }
+.lav-page .lav-pl-row:last-of-type { border-bottom: none; }
+.lav-page .lav-pl-l { font-size: 13px; color: var(--muted); display: block;
+  margin-bottom: 3px; }
+.lav-page .lav-pl-body { display: flex; align-items: center; gap: 8px; }
+.lav-page .lav-pl-v { font-size: 1.35rem; font-weight: 800;
+  font-variant-numeric: tabular-nums; }
+.lav-page .lav-pl-d { font-size: 13px; }
+.lav-page .lav-spark { flex: 1 1 auto; min-width: 0; height: 34px; }
+.lav-page .lav-spk-signals { stroke: var(--green); }
+.lav-page .lav-spk-orders  { stroke: var(--yellow); }
+.lav-page .lav-spk-trades  { stroke: var(--orange); }
+
+/* ── LIVE MODE ───────────────────────────────────────────────────────────── */
+.lav-page .lav-mode-btns { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.lav-page .lav-mode-b { display: flex; align-items: center; gap: 9px;
+  padding: 12px 10px; border-radius: 9px; background: var(--card);
+  border: 1px solid var(--card-bd); cursor: pointer; color: var(--muted);
+  font-family: inherit; text-align: left; }
+.lav-page .lav-mode-b:hover { border-color: var(--blue); }
+.lav-page .lav-mode-b.is-on { border-color: rgba(var(--t-green), .65);
+  background: rgba(var(--t-green), .10); color: var(--pos); }
+.lav-page .lav-mode-b.is-off { border-color: var(--muted); color: var(--text); }
+.lav-page .lav-mode-i { font-size: 14px; flex: none; }
+.lav-page .lav-mode-t { display: flex; flex-direction: column; min-width: 0; }
+.lav-page .lav-mode-t span { font-size: 13px; letter-spacing: .04em; }
+.lav-page .lav-mode-t b { font-size: 13px; font-weight: 800; }
+
+/* ── EXPORT ──────────────────────────────────────────────────────────────── */
+.lav-page .btn-primary { height: 36px; padding: 0 16px; font-size: 13px;
+  font-weight: 600; border-radius: 8px; cursor: pointer; font-family: inherit;
+  background: var(--blue); color: #fff; border: 1px solid var(--blue); }
+.lav-page .btn-primary:hover { filter: brightness(1.08); }
+.lav-page .lav-xbtn { display: flex; align-items: center; justify-content: center;
+  text-decoration: none; margin-top: 8px; }
+
+/* ── footer note ─────────────────────────────────────────────────────────── */
+.lav-page .lav-foot-note { display: flex; align-items: center; gap: 8px;
+  flex-wrap: wrap; font-size: 13px; color: var(--muted); line-height: 1.6; }
+.lav-page .lav-i { color: var(--blue); }
+.lav-page .lav-conn { margin-left: auto; display: inline-flex; align-items: center;
+  color: var(--dim); white-space: nowrap; }

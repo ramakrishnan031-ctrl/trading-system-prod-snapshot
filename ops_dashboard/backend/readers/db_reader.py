@@ -3781,3 +3781,254 @@ def tradelog_orders_of_trade(cfg: dict, trade_id: str) -> list:
         except sqlite3.OperationalError:
             return []
     return [dict(r) for r in rows]
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# SCREEN 18 — LIVE ACTIVITY (16-Aug-2026).
+# `gui/18. Live_Activity.png` + `.txt` are BINDING for structure.
+#
+# ROW GRAIN = the EVENT, and the day is TODAY. Screen 14's grain is also an event
+# but its question is forensic and period-scoped ("what happened to this trade");
+# this one is "what is happening right now", so the readers stay separate.
+#
+# ⭐ THE PIPELINE IS COUNTED OFF ONE BASE — today's STORED signals — because a
+# funnel whose stages come from different denominators cannot narrow honestly.
+# `webhook_audit.received` is a DIFFERENT denominator (it includes pre-insert
+# duplicates) and is deliberately NOT mixed in here. /api/pipeline keeps its own
+# 13-stage contract, untouched.
+# ═════════════════════════════════════════════════════════════════════════════
+
+#: Row cap for the live feed readers. The screen states the cap rather than
+#: silently truncating a busy session.
+_ACT_CAP = 400
+
+
+def activity_cap() -> int:
+    return _ACT_CAP
+
+
+def activity_signals_today(cfg: dict, today: str, limit: int = _ACT_CAP) -> list:
+    """Today's stored signals, shaped for the live feed.
+
+    ⭐ `trigger_price` is the REAL price the scanner fired at
+    (`signals.trigger_price`), ⛔ not an entry price and ⛔ never a fill — the
+    feed's Details cell says "Price" and means exactly that column. It is
+    nullable in production, and the caller renders an em-dash, ⛔ never a zero.
+    """
+    fam = _bucket_case_sql("s.")
+    with _ro(cfg) as conn:
+        rows = conn.execute(
+            "SELECT s.signal_id, s.symbol, s.strategy, s.scanner, s.status, "
+            "s.received_at, s.trigger_price, s.rejection_reason, s.trade_id, "
+            + fam + " AS family "
+            "FROM signals s WHERE s.received_at LIKE ? "
+            "ORDER BY s.received_at DESC, s.signal_id DESC LIMIT ?",
+            (today + "%", max(1, min(int(limit), _ACT_CAP))),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def activity_trade_exits(cfg: dict, today: str, limit: int = _ACT_CAP) -> list:
+    """Trades that CLOSED today, with the levels the feed's Details cell names.
+
+    ⚠️ Dated by `exit_time` ONLY — a trade entered yesterday and closed today is
+    today's event, and `position_screen_rows` (dated by entry_time) would miss it.
+    """
+    states = _CLOSED_STATES
+    with _ro(cfg) as conn:
+        rows = conn.execute(
+            "SELECT trade_id, signal_id, symbol, strategy, direction, qty_filled, "
+            "entry_actual_price, entry_target_price, sl_initial, tgt_initial, "
+            "exit_price, exit_time, exit_reason, gross_pnl, charges, net_pnl, status "
+            "FROM trades WHERE status IN (" + _in_clause(states) + ") "
+            "AND exit_time LIKE ? ORDER BY exit_time DESC, trade_id DESC LIMIT ?",
+            (*states, today + "%", max(1, min(int(limit), _ACT_CAP))),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def activity_positions_opened(cfg: dict, today: str, limit: int = _ACT_CAP) -> list:
+    """Positions that OPENED today, dated by `entry_time` — the instant a trade
+    actually became a position. ⛔ Not `created_at`, which is when the row was
+    written for a trade that may never have filled."""
+    with _ro(cfg) as conn:
+        rows = conn.execute(
+            "SELECT trade_id, signal_id, symbol, strategy, direction, qty_filled, "
+            "entry_actual_price, entry_target_price, sl_initial, tgt_initial, "
+            "entry_time, status FROM trades "
+            "WHERE entry_time LIKE ? ORDER BY entry_time DESC, trade_id DESC LIMIT ?",
+            (today + "%", max(1, min(int(limit), _ACT_CAP))),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def activity_pipeline(cfg: dict, today: str) -> dict:
+    """The SIX approved pipeline stages — Signal → Validation → Risk → Capital →
+    Order → Fill — counted off ONE base, each carrying its own last stamp.
+
+    ⭐ THE BASE IS TODAY'S STORED SIGNALS, for every stage. Each step subtracts a
+    DISJOINT status family (`_bucket_case_sql` resolves `expired` before
+    `rejected`, and the risk/capital reject lists are `REJECTED_*` values that
+    are neither duplicate nor expired), so the funnel narrows monotonically by
+    construction. Order and Fill come from the SAME base via `signals ⋈ trades`,
+    so a trade belonging to an EARLIER day's signal is not counted into today's
+    funnel.
+
+    ⛔ The webhook `received` count is NOT used here: it counts pre-insert
+    duplicates and is a different denominator — exactly how a funnel starts
+    telling two stories at once.
+    """
+    fam = _bucket_case_sql("s.")
+    risk = _RISK_REJECT_STATUSES
+    cap = _CAPITAL_REJECT_STATUSES
+    with _ro(cfg) as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS total, MAX(s.received_at) AS last_total, "
+            "  SUM(CASE WHEN " + fam + " = 'duplicated' THEN 1 ELSE 0 END) AS dup, "
+            "  SUM(CASE WHEN " + fam + " = 'expired' THEN 1 ELSE 0 END) AS exp, "
+            "  SUM(CASE WHEN s.status IN (" + _in_clause(risk) + ") "
+            "           THEN 1 ELSE 0 END) AS risk_rej, "
+            "  SUM(CASE WHEN s.status IN (" + _in_clause(cap) + ") "
+            "           THEN 1 ELSE 0 END) AS cap_rej, "
+            "  MAX(CASE WHEN " + fam + " NOT IN ('duplicated','expired') "
+            "           THEN s.received_at END) AS last_valid, "
+            "  MAX(CASE WHEN " + fam + " NOT IN ('duplicated','expired') "
+            "           AND s.status NOT IN (" + _in_clause(risk) + ") "
+            "           THEN s.received_at END) AS last_risk, "
+            "  MAX(CASE WHEN " + fam + " NOT IN ('duplicated','expired') "
+            "           AND s.status NOT IN (" + _in_clause(risk) + ") "
+            "           AND s.status NOT IN (" + _in_clause(cap) + ") "
+            "           THEN s.received_at END) AS last_cap "
+            "FROM signals s WHERE s.received_at LIKE ?",
+            (*risk, *cap, *risk, *risk, *cap, today + "%"),
+        ).fetchone()
+        trow = conn.execute(
+            "SELECT COUNT(t.trade_id) AS created, MAX(t.created_at) AS last_created, "
+            "  SUM(CASE WHEN t.entry_time IS NOT NULL THEN 1 ELSE 0 END) AS filled, "
+            "  MAX(t.entry_time) AS last_filled "
+            "FROM signals s JOIN trades t ON t.signal_id = s.signal_id "
+            "WHERE s.received_at LIKE ?",
+            (today + "%",),
+        ).fetchone()
+
+    d = dict(row) if row else {}
+    t = dict(trow) if trow else {}
+
+    def _i(key):
+        return int(d.get(key) or 0)
+
+    total = _i("total")
+    validated = max(0, total - _i("dup") - _i("exp"))
+    risk_ok = max(0, validated - _i("risk_rej"))
+    cap_ok = max(0, risk_ok - _i("cap_rej"))
+    return {
+        "base": "stored signals received today",
+        "stages": [
+            {"key": "signal", "name": "Signal", "count": total,
+             "last": d.get("last_total")},
+            {"key": "validation", "name": "Validation", "count": validated,
+             "last": d.get("last_valid")},
+            {"key": "risk", "name": "Risk", "count": risk_ok,
+             "last": d.get("last_risk")},
+            {"key": "capital", "name": "Capital", "count": cap_ok,
+             "last": d.get("last_cap")},
+            {"key": "order", "name": "Order", "count": int(t.get("created") or 0),
+             "last": t.get("last_created")},
+            {"key": "fill", "name": "Fill", "count": int(t.get("filled") or 0),
+             "last": t.get("last_filled")},
+        ],
+        "dropped": {"duplicate": _i("dup"), "expired": _i("exp"),
+                    "risk_rejected": _i("risk_rej"),
+                    "capital_rejected": _i("cap_rej")},
+    }
+
+
+def activity_day_counts(cfg: dict, date_iso: str) -> dict:
+    """Signals / ENTRY orders / positions opened for ONE date.
+
+    ⭐ Called for today AND for the comparison date, so a KPI delta compares the
+    SAME quantity across two days rather than two different measures.
+    ⛔ Open positions are deliberately ABSENT: the open set is a live `status`
+    read with no stored history, so it has no past value to compare against.
+    """
+    with _ro(cfg) as conn:
+        signals = _count(conn, "SELECT COUNT(*) FROM signals WHERE received_at LIKE ?",
+                         (date_iso + "%",))
+        orders = _count(conn, "SELECT COUNT(*) FROM orders "
+                              "WHERE leg='ENTRY' AND placed_at LIKE ?",
+                        (date_iso + "%",))
+        trades = _count(conn, "SELECT COUNT(*) FROM trades WHERE entry_time LIKE ?",
+                        (date_iso + "%",))
+    return {"date": date_iso, "signals": signals, "orders": orders, "trades": trades}
+
+
+def activity_strategy_rows(cfg: dict, today: str) -> list:
+    """Per-strategy Signals · Orders · Trades · Last Signal Time for today.
+
+    ⭐ THE SAME THREE BASES THE KPI STRIP USES, on purpose: signals by
+    `received_at`, ENTRY orders by `placed_at`, positions opened by `entry_time`.
+    ⛔ `strategy_order_stats` counts ALL legs and `strategy_trade_stats` dates by
+    `created_at`; both are correct for their own screens, and using either here
+    would make this table disagree with the card above it on the same page.
+    ⛔ Computed in SQL over EVERY row, not off the capped feed list, so a busy
+    session cannot silently under-report.
+    """
+    with _ro(cfg) as conn:
+        sig = conn.execute(
+            "SELECT strategy, COUNT(*) AS n, MAX(received_at) AS last "
+            "FROM signals WHERE received_at LIKE ? GROUP BY strategy",
+            (today + "%",)).fetchall()
+        orders = conn.execute(
+            "SELECT t.strategy AS strategy, COUNT(*) AS n FROM orders o "
+            "JOIN trades t ON t.trade_id = o.trade_id "
+            "WHERE o.leg='ENTRY' AND o.placed_at LIKE ? GROUP BY t.strategy",
+            (today + "%",)).fetchall()
+        trades = conn.execute(
+            "SELECT strategy, COUNT(*) AS n FROM trades "
+            "WHERE entry_time LIKE ? GROUP BY strategy",
+            (today + "%",)).fetchall()
+
+    out: dict = {}
+
+    def _slot(name):
+        return out.setdefault(str(name), {"strategy": str(name), "signals": 0,
+                                          "orders": 0, "trades": 0, "last": None})
+
+    for r in sig:
+        if r["strategy"] is None:
+            continue
+        s = _slot(r["strategy"])
+        s["signals"] = int(r["n"])
+        s["last"] = r["last"]
+    for r in orders:
+        if r["strategy"] is None:
+            continue
+        _slot(r["strategy"])["orders"] = int(r["n"])
+    for r in trades:
+        if r["strategy"] is None:
+            continue
+        _slot(r["strategy"])["trades"] = int(r["n"])
+    return list(out.values())
+
+
+def activity_pulse(cfg: dict, today: str) -> dict:
+    """PER-MINUTE counts for the three approved MARKET PULSE series.
+
+    Signals by `signals.received_at`, Orders by ENTRY `orders.placed_at`, Trades
+    by `trades.entry_time` — the instant each thing actually happened. ⛔ Nothing
+    is smoothed, back-filled or interpolated: a minute with no event is simply
+    absent from the map, and the caller reads that as a real zero.
+    """
+    out: dict = {}
+    with _ro(cfg) as conn:
+        for key, sql in (
+            ("signals", "SELECT substr(received_at,12,5) AS m, COUNT(*) AS n "
+                        "FROM signals WHERE received_at LIKE ? GROUP BY m"),
+            ("orders", "SELECT substr(placed_at,12,5) AS m, COUNT(*) AS n "
+                       "FROM orders WHERE leg='ENTRY' AND placed_at LIKE ? GROUP BY m"),
+            ("trades", "SELECT substr(entry_time,12,5) AS m, COUNT(*) AS n "
+                       "FROM trades WHERE entry_time LIKE ? GROUP BY m"),
+        ):
+            rows = conn.execute(sql, (today + "%",)).fetchall()
+            out[key] = {str(r["m"]): int(r["n"]) for r in rows if r["m"]}
+    return out

@@ -13,6 +13,8 @@ routes and never touch any existing endpoint):
   GET /api/export/execution     ?period&from&to&…      XLSX of the SAME filtered set
   GET /api/system-health        ?status&kind          live snapshot (⛔ no period)
   GET /api/export/system-health ?status&kind          XLSX of the SAME view
+  GET /api/live-activity/screen ?category              the live wall (⛔ no period)
+  GET /api/export/live-activity ?category              XLSX of the SAME feed
 Every builder is read-only over db_reader.*_range (mode=ro); NO schema. The
 existing /api/pnl, /api/strategies, /api/slippage, /api/execution, Reports stay
 UNTOUCHED.
@@ -25,8 +27,8 @@ from flask import Blueprint, current_app, jsonify, request, send_file
 
 from ..auth import login_required
 from ..services import (audit, analytics_period, execution_analytics,
-                        slippage_analytics, system_health, system_logs,
-                        trade_logs)
+                        live_activity, slippage_analytics, system_health,
+                        system_logs, trade_logs)
 
 
 def _xlsx(sheets: list, download_name: str):
@@ -462,3 +464,43 @@ def export_system_logs_screen():
     rows = system_logs.export_rows(payload)
     return _xlsx([("System Log Events", rows[0], rows[1:])],
                  "system_logs_%s_%s.xlsx" % (payload["from"], payload["to"]))
+
+
+# ── SCREEN 18 — LIVE ACTIVITY ────────────────────────────────────────────────
+# ⭐ ADDITIVE: the G5d `/api/activity` merged-attention feed is deliberately
+# UNTOUCHED and its contract test still passes. Screen 18 gets its own routes,
+# exactly as Screen 15 added `/api/system-logs/screen` beside `/api/logs`.
+#
+# ⚠️ NOT period-scoped: this is a LIVE WALL. Giving it a `period` would invite a
+# reader to believe the wall of an hour ago is retrievable — it is not.
+def _activity_kwargs() -> dict:
+    """⛔ CATEGORY ONLY. It is the only filter the approved design draws — the
+    nine toolbar chips and the eight FEED FILTERS tiles both select a category —
+    so a status filter or a search parameter would be an invention."""
+    return {"category": (request.args.get("category") or "").strip() or None}
+
+
+@analytics2_api.route("/api/live-activity/screen", methods=["GET"])
+@login_required
+def get_live_activity_screen():
+    """Screen 18. Read-only. The FEED FILTER narrows the FEED — which is what
+    the approved design calls it — while the KPI strip, the pipeline, the
+    strategy table, the pulse and the capital ring describe THE DAY and each
+    carries its own base in the payload."""
+    cfg = current_app.config["GUI_CONFIG"]
+    return jsonify(live_activity.build_live_activity(cfg, **_activity_kwargs()))
+
+
+@analytics2_api.route("/api/export/live-activity", methods=["GET"])
+@login_required
+def export_live_activity():
+    """XLSX of the FILTERED feed only.
+
+    ⭐ Same builder, same arguments ⇒ the exported rows ARE the feed's rows.
+    ⛔ No Scanner column — a test asserts its absence in the generated file.
+    """
+    cfg = current_app.config["GUI_CONFIG"]
+    payload = live_activity.build_live_activity(cfg, **_activity_kwargs())
+    rows = live_activity.export_rows(payload)
+    return _xlsx([("Live Activity", rows[0], rows[1:])],
+                 "live_activity_%s.xlsx" % payload["today"])
