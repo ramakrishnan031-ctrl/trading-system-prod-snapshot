@@ -3535,10 +3535,15 @@ main.content:has(> .lav-page) { width: 100%; max-width: none; margin: 0;
    rows and the panel grew to 7204px, burying every panel below it. The binding
    PNG draws the feed as a FIXED-HEIGHT WINDOW with its count in the footer, so
    the table body scrolls inside the panel and the header stays put.
-   ⭐ This is the panel's DESIGNED SIZE, ⛔ not a spacer closing a dead band —
-   it is a scroll container, and a test pins that `overflow-y: auto` travels
-   with the height. */
-.lav-page .lav-feed .lav-tbl-wrap { max-height: 430px; overflow-y: auto; }
+   🔴🔴 AND IT IS `height`, ⛔ NOT `max-height`: as a MAX it also let the window
+   COLLAPSE — on a quiet day with one event the feed shrank 562 → 196px and took
+   the whole wide strip down with it (measured 652 vs the rail's 913), which is
+   the blank lower area the review rejected. The artwork draws a 13-row window
+   whether or not there are 13 events, so the window is that size ALWAYS.
+   ⭐ This is the panel's APPROVED FOOTPRINT, ⛔ not a spacer closing a dead
+   band — it is a scroll container, and a test pins that `overflow-y: auto`
+   travels with the height. */
+.lav-page .lav-feed .lav-tbl-wrap { height: 430px; overflow-y: auto; }
 .lav-page .lav-feed thead th { position: sticky; top: 0; z-index: 1;
   background: var(--panel); }
 /* Alignment by ROLE, the established rule: labels/text LEFT, badges CENTRED.
@@ -3583,6 +3588,45 @@ main.content:has(> .lav-page) { width: 100%; max-width: none; margin: 0;
 .lav-page .lav-st-processing { background: rgba(var(--t-yellow), .18); color: var(--yellow); }
 .lav-page .lav-st-failed     { background: rgba(var(--t-red), .20);    color: var(--neg); }
 .lav-page .lav-st-info       { background: rgba(var(--t-blue), .16);   color: var(--blue); }
+
+/* ═══ APPROVED CARD FOOTPRINTS ═════════════════════════════════════════════
+   ⛔⛔ THESE ARE NOT SPACERS AND NOT A DEVICE FOR CLOSING A GAP BETWEEN
+   COLUMNS. Every value below reserves the room the BINDING ARTWORK draws for
+   that card's own content, so an unavailable-data day renders the approved
+   composition with empty content instead of collapsing into a sliver and
+   opening a blank lower page. ⭐ Each floor is (the artwork's item count) x
+   (our measured row height) — ⛔ never a round number picked to fill space, and
+   ⛔ never applied to a layout container (a test still forbids height on
+   .lav-work / .lav-left / .lav-main / .lav-side / .lav-rail / .panel / .lav-row*).
+   ⭐ They are FLOORS: a busy day grows past them and nothing is clipped.
+
+     ACTIVE POSITIONS   PNG draws 4 rows  → head 30 + 4 x 34 = 166
+     STRATEGY ACTIVITY  PNG draws 5 rows  → head 61 + 5 x 32 = 221
+     SYSTEM EVENTS      PNG draws 4 items → 4 x 58           = 232
+     ALERTS BANNER      PNG draws 2 cards → 2 x 96           = 192
+     CAPITAL UTILIZATION the donut itself                    = 116          */
+.lav-page .lav-pos .lav-tbl-wrap { min-height: 166px; }
+.lav-page .lav-strat .lav-tbl-wrap { min-height: 221px; }
+.lav-page .lav-evlist { min-height: 232px; }
+.lav-page .lav-alert-list { min-height: 192px; }
+/* ⭐ BOTH states, so the ring's footprint survives the day it cannot be drawn */
+.lav-page .lav-cap-body, .lav-page .lav-cap .lav-d-empty { min-height: 116px; }
+
+/* ⭐ The empty state sits in the MIDDLE of the room it reserved, so a quiet day
+   reads as an empty panel rather than a broken one.
+   ⛔⛔ THE HEIGHT IS ON THE EMPTY ROW ITSELF, ⛔ never on the table: stretching
+   the table distributed the slack across the DATA rows too and floated the one
+   real event into the middle of the feed (caught in the browser). The empty row
+   is `x-show`-hidden the moment any data arrives, so this reaches nothing else. */
+.lav-page .lav-empty { vertical-align: middle; }
+.lav-page .lav-feed .lav-empty { height: 396px; }   /* 430 window − header */
+.lav-page .lav-pos .lav-empty { height: 136px; }    /* 166 floor  − header */
+.lav-page .lav-strat .lav-empty { height: 160px; }  /* 221 floor  − header */
+.lav-page .lav-evlist, .lav-page .lav-alert-list { display: flex;
+  flex-direction: column; }
+.lav-page .lav-evlist > .lav-empty, .lav-page .lav-alert-list > .lav-d-empty {
+  margin: auto 0; text-align: center; }
+.lav-page .lav-cap .lav-d-empty { justify-content: center; }
 
 /* the established NOT-INSTRUMENTED treatment */
 .lav-page .lav-ni { font-size: 13px; color: var(--dim); letter-spacing: .02em;

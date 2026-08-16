@@ -741,8 +741,14 @@ def test_a_stored_order_can_permute_but_never_change_the_column_set():
 
 
 def test_no_artificial_height_device_closes_a_gap():
-    """⛔ A min-height / fixed height / stretch would HIDE a layout imbalance
-    rather than fix it — the lesson Screen 15 paid for."""
+    """⛔ A height on a LAYOUT CONTAINER would HIDE an imbalance between columns
+    rather than fix it — the lesson Screen 15 paid for, and it stays forbidden.
+
+    ⚠️ THE DISTINCTION IS LOAD-BEARING: a floor on a CARD's own content region
+    reserves the footprint the artwork draws for that card, which is a different
+    act and is required (see the footprint test below). This guard covers only
+    the containers, where a height could only ever be a spacer.
+    """
     css = _css()
     start = css.index("SCREEN 18 — LIVE ACTIVITY")
     nxt = re.search(r"SCREEN \d+ [—-]", css[start + 20:])
@@ -754,6 +760,55 @@ def test_no_artificial_height_device_closes_a_gap():
             assert "min-height" not in rule, rule
             assert "height:" not in rule, rule
     assert "align-items: start" in block      # ⛔ never `stretch` on these rows
+
+
+def test_every_data_card_holds_its_approved_footprint_when_empty():
+    """🔴 THE REJECTED COLLAPSE, PINNED. On a day with no activity the data
+    cards shrank to slivers — feed 562→196, system events 376→175, positions
+    342→204, strategy 300→154, alerts 302→157 — and the wide strip fell to 652px
+    against the rail's 913, opening a blank lower page.
+
+    ⭐ Each floor is (the artwork's OWN item count) x (our measured row height),
+    so an unavailable-data day renders the approved composition with empty
+    content. ⛔ They are FLOORS: a busy day grows past them, nothing is clipped,
+    and ⛔ no value is a round number chosen to fill space.
+    """
+    css = _css()
+    start = css.index("SCREEN 18 — LIVE ACTIVITY")
+    block = css[start:]
+    for sel, floor in ((r"\.lav-pos \.lav-tbl-wrap", "166px"),      # 4 rows
+                       (r"\.lav-strat \.lav-tbl-wrap", "221px"),    # 5 rows
+                       (r"\.lav-evlist", "232px"),                  # 4 items
+                       (r"\.lav-alert-list", "192px")):             # 2 cards
+        rule = re.search(r"\.lav-page " + sel + r" \{[^}]*\}", block).group(0)
+        assert "min-height: " + floor in rule, rule
+    # ⭐ the donut's footprint survives the day it cannot be drawn — BOTH states
+    cap = re.search(r"\.lav-page \.lav-cap-body[^{]*\{[^}]*\}", block).group(0)
+    assert "min-height: 116px" in cap
+    assert ".lav-cap .lav-d-empty" in cap
+    # ⛔ and the feed window is a fixed height, never a max that can collapse
+    feed = re.search(r"\.lav-page \.lav-feed \.lav-tbl-wrap \{[^}]*\}", block).group(0)
+    assert "height: 430px" in feed and "max-height" not in feed
+    assert "overflow-y: auto" in feed
+
+
+def test_the_capital_chart_keeps_its_card_when_the_source_is_unavailable(client):
+    """⭐ The approved donut card is NOT removed on a day with no capital base —
+    it shows the truthful NOT INSTRUMENTED state inside the same footprint.
+    ⛔ And no percentage or rupee figure is invented to fill it."""
+    tpl = _tpl()
+    assert 'x-show="capital().available_basis"' in tpl      # the ring
+    assert 'x-show="!capital().available_basis"' in tpl     # the honest state
+    assert "NOT INSTRUMENTED" in _page_content(client)
+    css = _css()
+    start = css.index("SCREEN 18 — LIVE ACTIVITY")
+    cap = re.search(r"\.lav-page \.lav-cap-body[^{]*\{[^}]*\}", css[start:]).group(0)
+    assert "min-height" in cap
+    # ⛔ the unavailable payload carries no number at all
+    p = _s(client)["capital"]
+    if not p["available_basis"]:
+        assert p["utilized_pct"] is None and p["available_pct"] is None
+        assert p["reason"]
 
 
 def test_the_work_area_is_two_independent_strips_not_full_width_rows():
@@ -800,16 +855,20 @@ def test_the_collapsed_layout_keeps_the_pngs_row_order():
 
 
 def test_the_feeds_bounded_height_is_a_scroll_container(client):
-    """🔴 CAUGHT IN THE BROWSER: with a real day's events the feed rendered all
-    190 rows and the panel grew to 7204px, burying every panel below it. The
-    binding PNG draws the feed as a fixed-height window, so the body scrolls.
-    ⛔ The height is only ever allowed to travel WITH `overflow-y: auto` — a
-    bare height would hide rows instead of letting the operator reach them."""
+    """🔴 CAUGHT IN THE BROWSER TWICE, in BOTH directions. With a real day's
+    events the feed rendered all 190 rows and the panel grew to 7204px, burying
+    everything below it. As a `max-height` it then COLLAPSED the other way — one
+    event shrank the feed 562 → 196px and took the whole wide strip down with
+    it. The artwork draws a 13-row window whether or not there are 13 events, so
+    the window is a FIXED height. ⛔ And it is only ever allowed to travel WITH
+    `overflow-y: auto` — a bare height would hide rows instead of letting the
+    operator reach them."""
     css = _css()
     start = css.index("SCREEN 18 — LIVE ACTIVITY")
     block = css[start:]
     rule = re.search(r"\.lav-page \.lav-feed \.lav-tbl-wrap \{[^}]*\}", block).group(0)
-    assert "max-height" in rule
+    assert "height: 430px" in rule
+    assert "max-height" not in rule
     assert "overflow-y: auto" in rule
     # and the footer states the real total, so a scrolled feed never under-reports
     assert "showing()" in _tpl()

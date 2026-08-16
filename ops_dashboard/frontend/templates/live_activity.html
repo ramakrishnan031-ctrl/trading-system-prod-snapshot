@@ -411,6 +411,10 @@
         <h3 class="panel-title">ALERTS BANNER
           <span class="panel-sub" x-text="alertsSub()"></span>
         </h3>
+        {# ⭐ The cards and the empty state share ONE region so the approved
+           two-card footprint is held either way — ⛔ the card geometry does not
+           disappear on a day with no alerts. #}
+        <div class="lav-alert-list">
         <template x-for="a in alertCards()" :key="a.ts + a.title">
           <div class="lav-alert" :class="a.kind === 'WARNING' ? 'is-warn' : 'is-crit'">
             <div class="lav-alert-top">
@@ -431,6 +435,7 @@
         </template>
         <div class="lav-d-empty" x-show="!alertCards().length" x-cloak>
           No critical alerts or warnings today.
+        </div>
         </div>
         <div class="lav-foot">
           <a class="panel-link lav-more" href="/alerts">View All Alerts →</a>
