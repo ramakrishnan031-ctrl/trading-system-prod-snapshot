@@ -165,7 +165,8 @@
                   <tr>
                     <td><span class="sca-hs" :class="'sca-hs-' + (r.health||'').toLowerCase()"
                               :title="r.health"><i class="dot"></i></span><span
-                          class="sca-nm" x-text="r.display_name"></span></td>
+                          class="sca-nm" :title="r.display_name"
+                          x-text="r.display_name"></span></td>
                     <td class="ctr mono" x-text="fmt(r.signals_today)"></td>
                     <td class="ctr mono" x-text="fmt(r.signals_week)"></td>
                     <td class="ctr mono" x-text="hhmmss(r.last_signal) || '—'"></td>

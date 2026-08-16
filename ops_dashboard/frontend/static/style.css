@@ -4549,11 +4549,28 @@ main.content:has(> .sca-page) { width: 100%; max-width: none; margin: 0;
 .sca-page .sca-am-wrap, .sca-page .sca-rk-wrap { overflow-x: auto;
   flex: 1 1 auto; min-width: 0; }
 .sca-page .sca-am-wrap { max-height: 246px; overflow-y: auto; }
+/* ⛔⛔ `table-layout: fixed` WAS TRIED HERE AND REVERTED. It did make all five
+   columns present at every width — and at 1440 it rendered every strategy
+   name as "…" and every value as "10:…" / "₹ …". A column that shows
+   nothing is WORSE than one behind a scroll: the scroll still reaches the
+   real value. Auto layout stays; the NAME is capped instead, which is the
+   one cell that was pushing the others out. */
 .sca-page .sca-amtbl, .sca-page .sca-rtbl { width: 100%; }
+/* ⭐ The cap is on the NAME, ⛔ not on the table: a strategy name longer than
+   this ellipsises (its full text is on the title attribute) instead of
+   sizing the whole column and pushing Last Signal Time and Last Trade Time
+   — two columns the artwork draws — out of the panel. */
+.sca-page .sca-amtbl .sca-nm { max-width: 124px; }
 .sca-page .sca-amtbl td, .sca-page .sca-rtbl td { padding: 6px 6px;
   white-space: nowrap; }
-.sca-page .sca-amtbl th, .sca-page .sca-rtbl th { padding: 6px 6px;
-  white-space: nowrap; }
+/* ⛔ THE HEADERS WRAP, exactly as the main table's already do. 🔴 MEASURED
+   DEFECT at 1920 — the PRIMARY width: with `nowrap` the ACTIVITY METRICS
+   headings claimed 714px inside a 448px panel and only 3 of the 5 approved
+   columns were visible, and SCANNER RANKING claimed 560px inside 511px and
+   hid Trades. The artwork draws every one of those columns, so hiding them
+   behind a scroll at the design's own width is a real deviation. */
+.sca-page .sca-amtbl th, .sca-page .sca-rtbl th { padding: 6px 5px;
+  white-space: normal; line-height: 1.2; vertical-align: bottom; }
 .sca-page .sca-amtbl .ctr, .sca-page .sca-rtbl .ctr { text-align: center; }
 .sca-page .sca-amtbl .sca-hs { margin-right: 7px; }
 
