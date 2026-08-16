@@ -1,60 +1,731 @@
 {% extends "base.html" %}
-{% from "components.html" import kpi_row, kpi_card, period_selector, export_button, medal %}
 {% block title %}AlgoCore Systems — Scanner Attribution{% endblock %}
 {% block nav_scanner_attribution %}active{% endblock %}
 {% block content %}
-{# G5c: which scanner creates the best opportunities. Funnel Signals→Accepted→
-   Orders→Trades per scanner (scanner_for_trades join). Opportunity Quality Score
-   = 100 × accept_rate × trade_conversion × win_rate (documented; factors 0 when a
-   denominator is 0, never fabricated). Unmapped scanner → "scanner-level (shared)". #}
-<div x-data="scannerPage()" x-init="load(); $watch('pPeriod', () => load())" @ops-refresh.window="load()">
-  <h2 class="panel-title">Scanner Attribution
-    <span class="panel-sub" x-text="data.from ? (data.from + ' → ' + data.to) : ''"></span></h2>
+{#  SCREEN 21 — SCANNER ATTRIBUTION.  `gui/21. Scanner_Attribution.png` + `.txt`
+    are BINDING: the six KPI cards · SCANNER PERFORMANCE TABLE · SIGNAL FUNNEL ·
+    REJECTION ANALYSIS · PROFITABILITY OVERVIEW · SCANNER MAPPING · EXPORT ·
+    ACTIVITY METRICS · SCANNER RANKING · TREND SUMMARY · OPPORTUNITY QUALITY
+    SCORE · SCANNER DRILLDOWN QUICK ACCESS · HEALTH TIMELINE.
 
-  {% call kpi_row() %}
-    {{ kpi_card("Scanners", "data.count || 0", tone="info") }}
-    {{ kpi_card("Best (net)", "(data.rows && data.rows.length) ? data.rows[0].scanner : '—'", tone="pos") }}
-    {{ kpi_card("Highest Quality", "topQuality()", tone="info") }}
-  {% endcall %}
+    ⛔⛔ NO SCANNER COLUMN IN THE MAIN TABLE (Rama, 16-Aug). Scanner and Strategy
+       are 1:1 in this system — measured: 16 scanners onto 16 distinct
+       strategies, each named after its strategy — so the artwork's `Scanner`
+       column is dropped and `Strategy (Primary)` becomes `Strategy`. ⛔ Every
+       OTHER approved column stays where the artwork puts it, `Health` included.
+    ⭐ The scanner identity survives in the SCANNER MAPPING panel, which is the
+       one place naming it is the point.
 
-  {{ period_selector() }}
-  <div class="filters">{{ export_button("Export Scanners") }}
-    <span class="panel-sub" x-text="data.orders_note || ''"></span></div>
+    ⛔ THE ARTWORK DRAWS NO FILTER ROW ON THIS SCREEN, so none is added: the
+       ranking tabs are the only control it has. Adding dropdowns here would be
+       filling space the design leaves alone.
 
-  <div class="tbl-scroll">
-    <table class="cap-table">
-      <thead><tr><th>Rank</th><th>Scanner</th><th>Linked Strategy</th><th>Signals</th><th>Accepted</th>
-        <th>Orders</th><th>Trades</th><th>Win %</th><th>PF</th><th>Net</th><th>Quality</th></tr></thead>
-      <tbody>
-        <template x-for="(r, i) in data.rows || []" :key="r.scanner">
-          <tr>
-            <td>{{ medal("i+1") }}</td>
-            <td x-text="r.scanner"></td>
-            <td><span :class="r.linked_strategy==='scanner-level (shared)' ? 'cap-inert' : ''" x-text="r.linked_strategy"></span></td>
-            <td class="cap-num" x-text="r.received"></td>
-            <td class="cap-num" x-text="r.accepted"></td>
-            <td class="cap-num" x-text="r.orders"></td>
-            <td class="cap-num" x-text="r.trades"></td>
-            <td class="cap-num" x-text="dash(r.win_rate)"></td>
-            <td class="cap-num" x-text="dash(r.profit_factor)"></td>
-            <td class="cap-num" :class="r.net>0?'num-pos':(r.net<0?'num-neg':'')" x-text="money(r.net)"></td>
-            <td class="cap-num" x-text="r.quality_score"></td>
-          </tr>
-        </template>
-        <tr x-show="!(data.rows||[]).length" x-cloak><td colspan="11" class="ev-empty">No scanner activity in this period.</td></tr>
-      </tbody>
-    </table>
+    ⛔ An Alpine x-for TEMPLATE placed inside an SVG renders NOTHING — the HTML
+       parser turns it into an SVG node named "template". Repeated SVG children
+       are injected with `x-html` on a group node instead, the pattern Screens
+       06/07/09/10/11/13/15/18/19 already use.
+
+    ⛔ An x-if TEMPLATE MUST HAVE EXACTLY ONE ROOT ELEMENT — with two siblings
+       Alpine renders only the first, which silently blanks every "no value"
+       cell (the Screen-19 defect). Each branch below is wrapped.  #}
+<div class="sca-page" x-data="scannerPage()" x-init="init()"
+     @ops-refresh.window="load()">
+
+  <div class="sca-head">
+    <div>
+      <h1 class="sca-title">SCANNER ATTRIBUTION</h1>
+      <div class="sca-sub">Understand which scanners generate the best opportunities and profitability</div>
+    </div>
+    <span class="sca-lastcheck">
+      <span class="sca-lc-l">LAST UPDATED</span>
+      <span class="sca-lc-v mono" x-text="hhmmss(data.generated_at) || '—'"></span>
+    </span>
+  </div>
+
+  {# ── the six approved KPI cards, in the approved order ─────────────────── #}
+  <div class="sca-kpis">
+    <template x-for="k in KPIS" :key="k.key">
+      <section class="panel sca-kpi">
+        <span class="sca-kpi-ico" :class="'sca-ico-' + k.tone" x-html="k.ico"></span>
+        <span class="sca-kpi-body">
+          <span class="sca-kpi-l" x-text="k.label"></span>
+          <b class="sca-kpi-v" :class="'sca-v-' + k.tone"
+             :title="kpiVal(k)" x-text="kpiVal(k)"></b>
+          <span class="sca-kpi-s" x-text="kpiSub(k)"></span>
+        </span>
+      </section>
+    </template>
+  </div>
+
+  <div class="sca-main">
+    <div class="sca-left">
+
+      {# ── SCANNER PERFORMANCE TABLE ───────────────────────────────────────── #}
+      <section class="panel sca-tablep">
+        <div class="sca-panel-head">
+          <h3 class="panel-title">SCANNER PERFORMANCE TABLE</h3>
+        </div>
+
+        <div class="sca-tbl-wrap">
+          <table class="cap-table sca-tbl">
+            <thead><tr>
+              {# ⭐ ONE `cols` array drives the header AND the body, so a drag can
+                 never leave the two out of step. #}
+              <template x-for="c in cols" :key="c.key">
+                <th class="lbl sca-th"
+                    :class="[dragKey === c.key ? 'is-drag' : '',
+                             overKey === c.key ? 'is-over' : '', c.ctr ? 'ctr' : '']"
+                    :style="c.w ? ('width:' + c.w) : ''"
+                    draggable="true" role="button" tabindex="0"
+                    :title="c.label + ' · click to sort, drag to reorder'"
+                    @dragstart="onDragStart(c.key, $event)"
+                    @dragover.prevent="overKey = c.key"
+                    @dragleave="overKey === c.key && (overKey = '')"
+                    @drop.prevent="onDrop(c.key)"
+                    @dragend="onDragEnd()"
+                    @click="headClick(c.key)" @keyup.enter="tSort(c.key)">
+                  <span x-text="c.label"></span><span
+                        class="sca-arrow" x-show="tSortKey === c.key"
+                        x-text="tArrow(c.key)"></span>
+                </th>
+              </template>
+            </tr></thead>
+            <tbody>
+              <template x-for="r in tSorted(rows())" :key="r.strategy">
+                <tr>
+                  <template x-for="c in cols" :key="c.key">
+                    <td :class="[c.ctr ? 'ctr' : '', c.num ? 'mono' : '']">
+                      <template x-if="c.key === 'rank'">
+                        <span class="sca-rank" :class="'sca-medal-' + r.rank"
+                              x-text="r.rank"></span>
+                      </template>
+                      <template x-if="c.key === 'display_name'">
+                        <span class="sca-nm" :title="nameTitle(r)"
+                              x-text="r.display_name"></span>
+                      </template>
+                      <template x-if="c.key === 'health'">
+                        <span class="sca-hs" :class="'sca-hs-' + (r.health||'').toLowerCase()">
+                          <i class="dot"></i><span x-text="r.health"></span></span>
+                      </template>
+                      <template x-if="c.key === 'quality_score'">
+                        <span>
+                          <span x-show="r.quality_score !== null" class="sca-score"
+                                :class="scoreClass(r.quality_score)"
+                                x-text="r.quality_score + ' / 100'"></span>
+                          <span x-show="r.quality_score === null" class="sca-ni"
+                                :title="r.quality_reason || ''">—</span>
+                        </span>
+                      </template>
+                      <template x-if="c.key === 'trend'">
+                        <span>
+                          <span x-show="r.trend" class="sca-trend"
+                                :class="'sca-tr-' + (r.trend || '').toLowerCase()">
+                            <span x-text="trendIcon(r.trend)"></span><span x-text="r.trend"></span>
+                          </span>
+                          <span x-show="!r.trend" class="sca-ni"
+                                title="no earlier daily history to compare against">—</span>
+                        </span>
+                      </template>
+                      <template x-if="!SPECIAL.includes(c.key)">
+                        <span :class="signClass(r, c)" x-text="cell(r, c)"></span>
+                      </template>
+                    </td>
+                  </template>
+                </tr>
+              </template>
+              <tr x-show="!rows().length" x-cloak>
+                <td :colspan="cols.length" class="sca-empty">
+                  No scanner activity to attribute.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="sca-tbl-foot">
+          <span class="sca-showing" x-text="showing()"></span>
+          <a class="sca-more" href="/strategy-health">View Scanner Drilldown <span>→</span></a>
+        </div>
+      </section>
+
+      {# ── ACTIVITY METRICS · SCANNER RANKING · TREND SUMMARY ──────────────── #}
+      <div class="sca-row2">
+        <section class="panel sca-activity">
+          <h3 class="panel-title">ACTIVITY METRICS</h3>
+          <div class="sca-am-wrap">
+            <table class="cap-table sca-amtbl">
+              <thead><tr>
+                <th class="lbl">Strategy</th>
+                <th class="lbl ctr">Signals Today</th>
+                <th class="lbl ctr" x-text="'Signals Last ' + (data.activity_days || 7) + 'd'"></th>
+                <th class="lbl ctr">Last Signal Time</th>
+                <th class="lbl ctr">Last Trade Time</th>
+              </tr></thead>
+              <tbody>
+                <template x-for="r in activity()" :key="r.strategy">
+                  <tr>
+                    <td><span class="sca-hs" :class="'sca-hs-' + (r.health||'').toLowerCase()"
+                              :title="r.health"><i class="dot"></i></span><span
+                          class="sca-nm" x-text="r.display_name"></span></td>
+                    <td class="ctr mono" x-text="fmt(r.signals_today)"></td>
+                    <td class="ctr mono" x-text="fmt(r.signals_week)"></td>
+                    <td class="ctr mono" x-text="hhmmss(r.last_signal) || '—'"></td>
+                    <td class="ctr mono" x-text="hhmmss(r.last_trade) || '—'"></td>
+                  </tr>
+                </template>
+                <tr x-show="!activity().length" x-cloak>
+                  <td colspan="5" class="sca-empty">No activity recorded today.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel sca-rankp">
+          <h3 class="panel-title">SCANNER RANKING</h3>
+          {# ⭐ THE FIVE APPROVED TABS. All five lists arrive precomputed, so a
+             tab click costs no request and ⛔ never reorders the main table. #}
+          <div class="sca-mode-btns">
+            <template x-for="m in modes()" :key="m.key">
+              <button class="sca-mode" type="button" :class="mode === m.key ? 'is-on' : ''"
+                      @click="mode = m.key" x-text="m.label"></button>
+            </template>
+          </div>
+          <div class="sca-rk-wrap">
+          <table class="cap-table sca-rtbl">
+            <thead><tr>
+              <th class="lbl ctr">Rank</th><th class="lbl">Strategy</th>
+              <th class="lbl ctr">Net P&amp;L</th><th class="lbl ctr">ROI</th>
+              <th class="lbl ctr">Win %</th><th class="lbl ctr">Profit Factor</th>
+              <th class="lbl ctr">Trades</th>
+            </tr></thead>
+            <tbody>
+              <template x-for="r in ranking()" :key="r.strategy">
+                <tr>
+                  <td class="ctr"><span class="sca-rank" :class="'sca-medal-' + r.rank"
+                                        x-text="r.rank"></span></td>
+                  <td><span class="sca-nm" x-text="r.display_name"></span></td>
+                  <td class="ctr mono" :class="sign(r.net)" x-text="money(r.net)"></td>
+                  <td class="ctr mono" :class="sign(r.roi_pct)" x-text="pct(r.roi_pct)"></td>
+                  <td class="ctr mono" x-text="pct(r.win_rate)"></td>
+                  <td class="ctr mono" x-text="num(r.profit_factor)"></td>
+                  <td class="ctr mono" x-text="fmt(r.trades)"></td>
+                </tr>
+              </template>
+              <tr x-show="!ranking().length" x-cloak>
+                <td colspan="7" class="sca-empty">
+                  No strategy has a completed trade under this measure today.</td>
+              </tr>
+            </tbody>
+          </table>
+          </div>
+        </section>
+
+        <section class="panel sca-trends">
+          <h3 class="panel-title">TREND SUMMARY</h3>
+          <ul class="sca-trend-list">
+            <template x-for="t in TRENDS" :key="t.key">
+              <li>
+                <span class="sca-trend-ico" :class="'sca-tr-' + t.key" x-text="t.icon"></span>
+                <span class="sca-trend-body">
+                  <span class="sca-trend-l" :class="'sca-tr-' + t.key" x-text="t.label"></span>
+                  <span class="sca-trend-s" x-text="t.hint"></span>
+                </span>
+                <b class="sca-trend-n" x-text="trendCount(t.label) + ' Scanners'"></b>
+              </li>
+            </template>
+          </ul>
+          <p class="sca-note" x-show="trendUnavailable()" x-cloak
+             x-text="trendUnavailable() + ' have no earlier daily history to compare against.'"></p>
+        </section>
+      </div>
+
+      {# ── QUALITY SCORE · DRILLDOWN · HEALTH TIMELINE ─────────────────────── #}
+      <div class="sca-row3">
+        <section class="panel sca-quality">
+          <h3 class="panel-title">OPPORTUNITY QUALITY SCORE</h3>
+          <div class="sca-q-body">
+            <div class="sca-q-parts">
+              <span class="sca-q-h">Scoring Components</span>
+              <template x-for="w in weights()" :key="w.key">
+                <div class="sca-q-row">
+                  <span class="sca-q-l" x-text="w.label"></span>
+                  <span class="sca-q-bar"><i :class="'sca-q-' + w.key"
+                        :style="'width:' + w.pct + '%'"></i></span>
+                  <span class="sca-q-n mono" x-text="w.pct + '%'"></span>
+                </div>
+              </template>
+            </div>
+            {# the gauge — a 270° arc, drawn with x-html for the same SVG reason.
+               ⛔ THE CAPTION SITS IN NORMAL FLOW BELOW THE DIAL, ⛔ not absolutely
+               positioned inside it: measured in the browser, an absolute caption
+               overflowed the 148px box 214>148. #}
+            <div class="sca-gauge-wrap">
+              <div class="sca-gauge-box">
+                <svg class="sca-gauge" viewBox="0 0 100 100" aria-hidden="true">
+                  <path class="sca-g-bg" d="M 18 82 A 45 45 0 1 1 82 82" fill="none"
+                        stroke-width="10" stroke-linecap="round"></path>
+                  <g x-html="gaugeMarkup()"></g>
+                </svg>
+                <div class="sca-g-centre">
+                  <b class="sca-g-v" :class="scoreClass(qScore())" x-text="qScore() === null ? '—' : qScore()"></b>
+                  <span class="sca-g-d">/ 100</span>
+                </div>
+              </div>
+              <span class="sca-g-cap" x-text="qCaption()"></span>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel sca-drill">
+          <h3 class="panel-title">SCANNER DRILLDOWN QUICK ACCESS</h3>
+          <div class="sca-drill-grid">
+            <template x-for="d in drilldown()" :key="d.label">
+              <a class="sca-tile" :href="d.href">
+                <span class="sca-tile-ico" x-html="tileIcon(d.label)"></span>
+                <span class="sca-tile-l" x-text="d.label"></span>
+              </a>
+            </template>
+          </div>
+        </section>
+
+        {# ⛔⛔ THE PANEL WITH NO SOURCE. It keeps its approved footprint and says
+           what is missing; the artwork's own heading marks it "(Example: …)" and
+           those values are NOT rendered as data. #}
+        <section class="panel sca-timeline">
+          <h3 class="panel-title">HEALTH TIMELINE</h3>
+          <div class="sca-gapbox" :title="gap('health_timeline').reason">
+            <span class="sca-gap-tag">NOT INSTRUMENTED</span>
+            <span class="sca-gap-t" x-text="gap('health_timeline').short"></span>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    {# ── the right rail ───────────────────────────────────────────────────── #}
+    <div class="sca-rail">
+      <section class="panel sca-funnel">
+        <h3 class="panel-title">SIGNAL FUNNEL <span class="panel-sub">(TODAY)</span></h3>
+        <div class="sca-fn-body">
+          <svg class="sca-fn-svg" viewBox="0 0 100 118" preserveAspectRatio="none"
+               aria-hidden="true" x-html="funnelMarkup()"></svg>
+          <ul class="sca-fn-legend">
+            <template x-for="(s, i) in stages()" :key="s.label">
+              <li>
+                <i class="dot" :class="'sca-fn-' + i"></i>
+                <span class="sca-fn-n mono" x-text="fmt(s.n) + (i ? ' (' + pct(s.pct) + ')' : '')"></span>
+                <span class="sca-fn-l" x-text="s.label"></span>
+              </li>
+            </template>
+          </ul>
+        </div>
+        <p class="sca-note" x-show="data.funnel && data.funnel.monotonic === false" x-cloak
+           x-text="data.funnel ? data.funnel.carryover_note : ''"></p>
+      </section>
+
+      <section class="panel sca-reject">
+        <h3 class="panel-title">REJECTION ANALYSIS <span class="panel-sub">(TODAY)</span></h3>
+        <div class="sca-rj-body">
+          <svg class="sca-donut" viewBox="0 0 42 42" aria-hidden="true">
+            <circle class="sca-donut-bg" cx="21" cy="21" r="15.9155"
+                    fill="none" stroke-width="6"></circle>
+            <g transform="rotate(-90 21 21)" x-html="donutMarkup()"></g>
+          </svg>
+          <ul class="sca-rj-legend">
+            <template x-for="(b, i) in buckets()" :key="b.label">
+              <li>
+                <i class="dot" :class="'sca-rj-' + i"></i>
+                <span class="sca-rj-c" x-text="b.label"></span>
+                <span class="sca-rj-n mono"
+                      x-text="fmt(b.n) + ' (' + pct(b.pct) + ')'"></span>
+              </li>
+            </template>
+          </ul>
+        </div>
+        <div class="sca-rj-total">
+          <span>Total Rejections:</span>
+          <b class="mono" x-text="fmt(rejTotal())"></b>
+        </div>
+        <p class="sca-note" x-text="rejBase()"></p>
+      </section>
+
+      <section class="panel sca-prof">
+        <h3 class="panel-title">PROFITABILITY OVERVIEW <span class="panel-sub">(TODAY)</span></h3>
+        <div class="sca-prof-grid">
+          <template x-for="p in profitCards()" :key="p.label">
+            <div class="sca-prof-cell">
+              <span class="sca-prof-ico" :class="'sca-ico-' + p.tone" x-html="p.ico"></span>
+              <span class="sca-prof-l" x-text="p.label"></span>
+              <b class="sca-prof-v" :class="p.cls" :title="p.title" x-text="p.value"></b>
+            </div>
+          </template>
+        </div>
+      </section>
+
+      <section class="panel sca-map">
+        <h3 class="panel-title">SCANNER MAPPING</h3>
+        {# ⭐ THE ONE PLACE THE SCANNER NAME BELONGS — naming the mapping IS this
+           panel's purpose. URLs are read from `config/scan_webhook_map.yaml`;
+           ⛔ none is constructed, and an entry without one prints the marker. #}
+        <div class="sca-map-wrap">
+          <table class="cap-table sca-maptbl">
+            <thead><tr>
+              <th class="lbl">Scanner Name</th><th class="lbl">Scanner URL</th>
+              <th class="lbl">Linked Strategy</th>
+            </tr></thead>
+            <tbody>
+              <template x-for="m in mapping()" :key="m.scanner">
+                <tr>
+                  <td><span class="sca-map-n" :title="m.scanner" x-text="m.scanner"></span></td>
+                  <td>
+                    <template x-if="m.url">
+                      <a class="sca-map-u" :href="m.url" :title="m.url"
+                         target="_blank" rel="noopener noreferrer" x-text="m.url"></a>
+                    </template>
+                    <template x-if="!m.url">
+                      <span class="sca-ni" title="this scanner has no chartink_url in scan_webhook_map.yaml">—</span>
+                    </template>
+                  </td>
+                  <td>
+                    <span class="sca-map-s" :class="m.strategy_configured ? '' : 'sca-ni'"
+                          :title="m.strategy_configured ? '' : 'no YAML exists for this strategy'"
+                          x-text="m.display_name || '—'"></span>
+                  </td>
+                </tr>
+              </template>
+              <tr x-show="!mapping().length" x-cloak>
+                <td colspan="3" class="sca-empty">No scanner mapping is configured.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="sca-note" x-text="mapNote()"></p>
+      </section>
+
+      <section class="panel sca-export">
+        <h3 class="panel-title">EXPORT</h3>
+        <p class="sca-exp-sub">Export scanner attribution data — the rows this screen is showing.</p>
+        <a class="btn-primary sca-exp-btn" :href="exportUrl()">
+          <span class="sca-exp-ico">⇩</span><span>Export to XLSX</span></a>
+      </section>
+    </div>
+  </div>
+
+  <div class="sca-foot-note">
+    <span class="sca-i">ⓘ</span>
+    <span x-text="footNote()"></span>
+    <span class="sca-conn"><i class="dot sca-ins-pos"></i>Live data connected</span>
   </div>
 </div>
+
 <script>
 function scannerPage() {
-  return Object.assign(pageBase("/api/scanner-attribution"), periodMixin("today"), {
-    qs() { return this.pQuery(); },
-    topQuality() {
-      const rs = (this.data.rows || []).slice().sort((a,b) => b.quality_score - a.quality_score);
-      return rs.length ? (rs[0].scanner + ' (' + rs[0].quality_score + ')') : "—";
+  return Object.assign(pageBase("/api/scanner-attribution/screen"),
+    (typeof tableMixin === "function" ? tableMixin({defaultSize: 100, pageSizes: [100]}) : {}), {
+
+    /* the six approved KPI cards, in the approved order */
+    KPIS: [
+      { key: "total_scanners", label: "TOTAL SCANNERS", tone: "info", kind: "count",
+        sub: "All configured scanners",
+        ico: '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="7" cy="7" r="4.5"/><path d="M10.4 10.4L14 14M7 4.8v4.4M4.8 7h4.4"/></svg>' },
+      { key: "active_scanners", label: "ACTIVE SCANNERS", tone: "pos", kind: "count",
+        ico: '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6.2"/><path d="M5.3 8.2l1.9 1.9 3.5-3.9"/></svg>' },
+      { key: "best", label: "BEST SCANNER", tone: "pos", kind: "name", metric: "money", pre: "Net P&L: ",
+        ico: '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4.5 2h7v3a3.5 3.5 0 0 1-7 0z"/><path d="M4.5 3H3a1.5 1.5 0 0 0 1.5 3M11.5 3H13a1.5 1.5 0 0 1-1.5 3"/><path d="M8 8.5V11M6 13.5h4"/></svg>' },
+      { key: "worst", label: "WORST SCANNER", tone: "neg", kind: "name", metric: "money", pre: "Net P&L: ",
+        ico: '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4l4.5 5 3-2.5L14 12"/><path d="M14 12h-3.5M14 12V8.5"/></svg>' },
+      { key: "highest_win_rate", label: "HIGHEST WIN RATE", tone: "info", kind: "name", metric: "pct", pre: "",
+        ico: '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6"/><circle cx="8" cy="8" r="2.5"/><path d="M8 2v1.5M8 12.5V14M2 8h1.5M12.5 8H14"/></svg>' },
+      { key: "highest_profit_factor", label: "HIGHEST PROFIT FACTOR", tone: "purple", kind: "name", metric: "num", pre: "",
+        ico: '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 2.5v11M4 5h8M3 5l-1.5 4h3zM13 5l1.5 4h-3zM5.5 13.5h5"/></svg>' },
+    ],
+
+    TRENDS: [
+      { key: "improving", label: "Improving", icon: "↗", hint: "Performance getting better" },
+      { key: "stable", label: "Stable", icon: "→", hint: "Performance stable" },
+      { key: "declining", label: "Declining", icon: "↘", hint: "Performance getting worse" },
+    ],
+
+    /* ⭐ THE APPROVED COLUMN ORDER WITH `Scanner` REMOVED (Rama, 16-Aug) and
+       `Strategy (Primary)` renamed to `Strategy`. ⛔ No other approved column
+       moved, and `Health` keeps the position the artwork gives it.
+       `w` is a FIXED-LAYOUT width bound to the COLUMN KEY, not to a position, so
+       a drag cannot hand Rank's width to Net P&L. */
+    DEFAULT_COLS: [
+      { key: "rank",          label: "Rank",          ctr: true, w: "62px" },
+      { key: "display_name",  label: "Strategy",                 w: "184px" },
+      { key: "health",        label: "Health",        ctr: true, w: "104px" },
+      { key: "signals",       label: "Signals",       ctr: true, num: true, w: "84px" },
+      { key: "accepted",      label: "Accepted",      ctr: true, num: true, w: "92px" },
+      { key: "rejected",      label: "Rejected",      ctr: true, num: true, w: "88px" },
+      { key: "orders",        label: "Orders",        ctr: true, num: true, w: "78px" },
+      { key: "trades",        label: "Trades",        ctr: true, num: true, w: "80px" },
+      { key: "win_rate",      label: "Win %",         ctr: true, num: true, w: "78px" },
+      { key: "profit_factor", label: "Profit Factor", ctr: true, num: true, w: "104px" },
+      { key: "net",           label: "Net P&L",       ctr: true, num: true, w: "104px" },
+      { key: "quality_score", label: "Quality Score", ctr: true, w: "104px" },
+      { key: "trend",         label: "Trend",         ctr: true, w: "108px" },
+    ],
+    SPECIAL: ["rank", "display_name", "health", "quality_score", "trend"],
+    cols: [], dragKey: "", overKey: "", _dragEndAt: 0,
+    COLS_KEY: "screen21.scanner.colOrder.v1",
+
+    mode: "net_pnl",
+
+    init() { this.initCols(); this.load(); },
+    qs() { return ""; },
+    exportUrl() { return "/api/export/scanner-attribution"; },
+
+    /* ── payload accessors ───────────────────────────────────────────────── */
+    rows() { return this.data.rows || []; },
+    modes() { return this.data.modes || []; },
+    weights() { return this.data.score_weights || []; },
+    drilldown() { return this.data.drilldown || []; },
+    stages() { return ((this.data.funnel || {}).stages) || []; },
+    buckets() { return ((this.data.rejection_analysis || {}).buckets) || []; },
+    rejTotal() { return ((this.data.rejection_analysis || {}).total) || 0; },
+    mapping() { return ((this.data.mapping || {}).rows) || []; },
+    ranking() { return ((this.data.ranking || {})[this.mode]) || []; },
+    trendCount(label) { return ((this.data.trend_summary || {})[label]) || 0; },
+    trendUnavailable() { return ((this.data.trend_summary || {}).unavailable) || 0; },
+    qScore() { const q = this.data.quality || {}; return (q.score === undefined) ? null : q.score; },
+    gap(key) { return ((this.data.gaps || {})[key]) || {reason: "", short: ""}; },
+
+    /* ACTIVITY METRICS keeps the table's own order and shows the busiest first
+       so the panel answers "who is producing" at a glance. */
+    activity() {
+      return this.rows().slice().sort((a, b) =>
+        (b.signals_today - a.signals_today) || a.strategy.localeCompare(b.strategy));
+    },
+
+    /* ── formatting ──────────────────────────────────────────────────────── */
+    fmt(n) { return (n === null || n === undefined) ? "—" : Number(n).toLocaleString("en-IN"); },
+    num(v, dp) {
+      if (v === null || v === undefined || v === "") return "—";
+      return Number(v).toLocaleString("en-IN", {minimumFractionDigits: dp === undefined ? 2 : dp,
+                                                maximumFractionDigits: dp === undefined ? 2 : dp});
+    },
+    pct(v) { return (v === null || v === undefined || v === "") ? "—" : this.num(v) + "%"; },
+    money(v) {
+      if (v === null || v === undefined || v === "") return "—";
+      const n = Number(v);
+      return (n < 0 ? "-₹ " : "₹ ") + Math.abs(n).toLocaleString("en-IN",
+        {minimumFractionDigits: 0, maximumFractionDigits: 0});
+    },
+    hhmmss(ts) { return ts ? String(ts).replace("T", " ").slice(11, 19) : ""; },
+    sign(v) {
+      if (v === null || v === undefined) return "";
+      return Number(v) > 0 ? "sca-pos" : (Number(v) < 0 ? "sca-neg" : "");
+    },
+
+    cell(r, c) {
+      const v = r[c.key];
+      if (v === null || v === undefined || v === "") return "—";
+      if (c.key === "net") return this.money(v);
+      if (c.key === "win_rate") return this.pct(v);
+      if (c.key === "profit_factor") return this.num(v);
+      return this.fmt(v);
+    },
+    signClass(r, c) { return c.key === "net" ? this.sign(r.net) : ""; },
+    scoreClass(s) {
+      if (s === null || s === undefined) return "";
+      if (s >= 75) return "sca-sc-hi";
+      if (s >= 50) return "sca-sc-mid";
+      return "sca-sc-lo";
+    },
+    trendIcon(t) { return {Improving: "↗", Stable: "→", Declining: "↘"}[t] || ""; },
+    nameTitle(r) {
+      const sc = (r.scanners || []).join(", ");
+      return sc ? (r.display_name + " · scanner: " + sc) : r.display_name;
+    },
+
+    /* ── KPI ─────────────────────────────────────────────────────────────── */
+    kpiVal(k) {
+      const kpi = this.data.kpi || {};
+      if (k.kind === "count") return this.fmt(kpi[k.key]);
+      const c = kpi[k.key];
+      return c ? (c.display_name || c.strategy) : "—";
+    },
+    kpiSub(k) {
+      const kpi = this.data.kpi || {};
+      if (k.key === "total_scanners") return k.sub;
+      if (k.key === "active_scanners") {
+        const p = kpi.active_pct;
+        return (p === null || p === undefined) ? "no scanner configured" : this.num(p) + "% of total";
+      }
+      const c = kpi[k.key];
+      if (!c) return "no completed trade today";
+      let v = c.value;
+      if (k.metric === "money") v = this.money(v);
+      else if (k.metric === "pct") v = this.pct(v);
+      else v = this.num(v);
+      return k.pre + v;
+    },
+
+    showing() {
+      const d = this.data;
+      if (!d.rows) return "";
+      return "Showing " + d.count + " of " + d.total + " strategies";
+    },
+    rejBase() {
+      const r = this.data.rejection_analysis || {};
+      if (!r.base) return "";
+      const top = r.top ? (" · leading reason: " + top_label(r.top)) : "";
+      return "Base: " + r.base + top;
+    },
+    mapNote() {
+      const m = this.data.mapping || {};
+      if (!m.count) return "";
+      return m.count + " scanners mapped, " + m.with_url + " with a screener URL · source: " + m.source;
+    },
+    qCaption() {
+      const q = this.data.quality || {};
+      if (q.score === null || q.score === undefined) return "no source has signals today";
+      return "Overall Quality Score · " + q.scored + " scored"
+             + (q.unscored ? ", " + q.unscored + " with no signals" : "");
+    },
+    footNote() {
+      return "Scanner and Strategy are 1:1 in this system, so Strategy is the "
+             + "identity shown; the scanner name and its screener URL are in "
+             + "SCANNER MAPPING. Signals, Accepted and Rejected share the "
+             + "stored-signal base. All times are IST (Asia/Kolkata).";
+    },
+
+    profitCards() {
+      const p = this.data.profitability || {};
+      return [
+        { label: "Gross P&L", value: this.money(p.gross), tone: "pos",
+          cls: this.sign(p.gross), title: "sum of gross P&L over today's trades",
+          ico: '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 1.5v13M5 4h4.5a2 2 0 0 1 0 4H5m0 0h5.5"/></svg>' },
+        { label: "Net P&L", value: this.money(p.net), tone: "info",
+          cls: this.sign(p.net), title: "gross P&L less charges",
+          ico: '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="3.5" width="12" height="9" rx="1.5"/><path d="M2 6.5h12M4.5 9.5h3"/></svg>' },
+        { label: "ROI", value: this.pct(p.roi_pct), tone: "pos",
+          cls: this.sign(p.roi_pct), title: p.roi_base || "",
+          ico: '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6"/><path d="M5.5 9.5l5-5M6 6.2h.01M10 9.8h.01"/></svg>' },
+        { label: "Profit Factor", value: this.num(p.profit_factor), tone: "warn",
+          cls: "", title: p.profit_factor_base || "",
+          ico: '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 13V6.5M8 13V3M13 13V9"/></svg>' },
+      ];
+    },
+
+    tileIcon(label) {
+      const m = {
+        Overview: '<svg viewBox="0 0 16 16" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg>',
+        Signals: '<svg viewBox="0 0 16 16" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M8 1.8v12.4M4.5 4.6l7 6.8M11.5 4.6l-7 6.8"/><circle cx="8" cy="8" r="2"/></svg>',
+        Orders: '<svg viewBox="0 0 16 16" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="3" y="1.8" width="10" height="12.4" rx="1.5"/><path d="M5.5 5h5M5.5 8h5M5.5 11h3"/></svg>',
+        Trades: '<svg viewBox="0 0 16 16" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 11l4-4 3 3 5-6"/><path d="M14 4h-3.2M14 4v3.2"/></svg>',
+        Performance: '<svg viewBox="0 0 16 16" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.5 13.5h11"/><rect x="3.5" y="8" width="2.6" height="4"/><rect x="7" y="5" width="2.6" height="7"/><rect x="10.5" y="2.5" width="2.6" height="9.5"/></svg>',
+        Health: '<svg viewBox="0 0 16 16" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M8 13.7S2 10.2 2 6.2A3.2 3.2 0 0 1 8 4.6a3.2 3.2 0 0 1 6 1.6c0 4-6 7.5-6 7.5z"/></svg>',
+      };
+      return m[label] || "";
+    },
+
+    /* ── the funnel: four stacked trapezoids, width ∝ share of Signals ────── */
+    funnelMarkup() {
+      const st = this.stages();
+      if (!st.length) return "";
+      /* ⭐ Each band's width is its OWN share of Signals, so the shape tells the
+         truth even when a later stage exceeds an earlier one (which it can —
+         see the payload's `carryover_note`). ⛔ Widths are never clamped to
+         force a tidy taper. A floor of 6% keeps a tiny-but-nonzero stage
+         visible rather than invisible. */
+      const base = st[0].n || 0;
+      let out = "", y = 2, h = 26, gap = 2;
+      st.forEach((s, i) => {
+        const share = base > 0 ? Math.max(0, Math.min(1, (s.n || 0) / base)) : 0;
+        const nextShare = (i + 1 < st.length && base > 0)
+          ? Math.max(0, Math.min(1, (st[i + 1].n || 0) / base)) : share * 0.55;
+        const w = s.n > 0 ? Math.max(0.06, share) : 0.04;
+        const w2 = st[i + 1] && st[i + 1].n > 0 ? Math.max(0.06, nextShare) : Math.max(0.04, w * 0.55);
+        const x1 = 50 - (w * 48), x2 = 50 + (w * 48);
+        const x3 = 50 + (w2 * 48), x4 = 50 - (w2 * 48);
+        out += '<polygon class="sca-fnp sca-fn-' + i + '" points="'
+             + x1.toFixed(2) + ',' + y + ' ' + x2.toFixed(2) + ',' + y + ' '
+             + x3.toFixed(2) + ',' + (y + h) + ' ' + x4.toFixed(2) + ',' + (y + h)
+             + '"></polygon>';
+        y += h + gap;
+      });
+      return out;
+    },
+
+    /* ── the rejection donut ─────────────────────────────────────────────── */
+    donutMarkup() {
+      const bs = this.buckets();
+      const total = bs.reduce((a, b) => a + (b.n || 0), 0);
+      if (!total) return "";
+      let out = "", off = 25;      /* 25 = start at 12 o'clock */
+      bs.forEach((seg, i) => {
+        const p = Math.max(0, (100 * (seg.n || 0)) / total);
+        if (p <= 0) return;
+        out += '<circle class="sca-arc sca-rj-' + i
+             + '" cx="21" cy="21" r="15.9155" fill="none" stroke-width="6"'
+             + ' stroke-dasharray="' + p.toFixed(3) + ' ' + (100 - p).toFixed(3) + '"'
+             + ' stroke-dashoffset="' + off.toFixed(3) + '"></circle>';
+        off = (off - p + 100) % 100;
+      });
+      return out;
+    },
+
+    /* ── the quality gauge: a 270° arc filled to the score ────────────────── */
+    gaugeMarkup() {
+      const s = this.qScore();
+      if (s === null || s === undefined) return "";
+      const LEN = 212;                 /* path length of the 270° arc, measured */
+      const on = Math.max(0, Math.min(100, Number(s))) / 100 * LEN;
+      const cls = s >= 75 ? "sca-g-hi" : (s >= 50 ? "sca-g-mid" : "sca-g-lo");
+      return '<path class="sca-g-fg ' + cls + '" d="M 18 82 A 45 45 0 1 1 82 82"'
+           + ' fill="none" stroke-width="10" stroke-linecap="round"'
+           + ' stroke-dasharray="' + on.toFixed(2) + ' ' + LEN + '"></path>';
+    },
+
+    /* ── column order: the Screens 04/05/07/11-15/18/19 convention, reused ── */
+    initCols() {
+      this.cols = this.DEFAULT_COLS.slice();
+      let saved = null;
+      try { saved = JSON.parse(window.localStorage.getItem(this.COLS_KEY) || "null"); }
+      catch (e) { saved = null; }
+      if (!Array.isArray(saved) || !saved.length) return;
+      const byKey = {};
+      this.DEFAULT_COLS.forEach(c => { byKey[c.key] = c; });
+      const next = [];
+      saved.forEach(k => { if (byKey[k] && next.indexOf(byKey[k]) === -1) next.push(byKey[k]); });
+      this.DEFAULT_COLS.forEach(c => { if (next.indexOf(c) === -1) next.push(c); });
+      if (next.length === this.DEFAULT_COLS.length) this.cols = next;
+    },
+    saveCols() {
+      try { window.localStorage.setItem(this.COLS_KEY, JSON.stringify(this.cols.map(c => c.key))); }
+      catch (e) {}
+    },
+    onDragStart(key, ev) {
+      this.dragKey = key;
+      if (ev && ev.dataTransfer) {
+        ev.dataTransfer.effectAllowed = "move";
+        try { ev.dataTransfer.setData("text/plain", key); } catch (e) {}
+      }
+    },
+    onDrop(targetKey) {
+      const from = this.cols.findIndex(c => c.key === this.dragKey);
+      const to = this.cols.findIndex(c => c.key === targetKey);
+      this.overKey = "";
+      if (from < 0 || to < 0 || from === to) return;
+      const next = this.cols.slice();
+      next.splice(to, 0, next.splice(from, 1)[0]);
+      this.cols = next;
+      this.saveCols();
+      this._dragEndAt = Date.now();
+    },
+    onDragEnd() { this.dragKey = ""; this.overKey = ""; this._dragEndAt = Date.now(); },
+    headClick(key) {
+      if (Date.now() - this._dragEndAt < 250) return;   /* drag, not a sort click */
+      this.tSort(key);
     },
   });
+}
+
+/* the leading rejection reason, rendered as "<label> (<pct>%)" */
+function top_label(top) {
+  if (!top) return "—";
+  return top.label + (top.pct === null || top.pct === undefined ? "" : " " + top.pct + "%");
 }
 </script>
 {% endblock %}

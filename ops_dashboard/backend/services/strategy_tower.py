@@ -261,6 +261,13 @@ def build_strategy_tower(cfg: dict, today: Optional[str] = None, now=None) -> di
                 "best_trade": p["best_trade"], "worst_trade": p["worst_trade"],
                 "expectancy": expectancy,
                 "profit_factor": profit_factor,       # G5b (additive)
+                # ⭐ ADDITIVE (16-Aug, Screen 21): the two OPERANDS behind
+                # profit_factor, published so a consumer can build a bounded
+                # profit share without re-deriving them from rounded averages.
+                # ⛔ Screen 21's Profitability component reads these; computing
+                # it from `avg_win × wins` would inherit two 2-dp roundings.
+                "win_sum": round(float(p["win_sum"]), 2),
+                "loss_sum": round(float(p["loss_sum"]), 2),   # ≤ 0 by construction
             },
             "risk": {
                 "capital_used": round(float(oc["margin"]), 2),   # open reservations now

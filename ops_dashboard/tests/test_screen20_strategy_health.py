@@ -564,6 +564,12 @@ def test_no_alpine_x_for_template_sits_inside_an_svg():
 def test_the_screen_css_is_scoped_to_this_page():
     css = _css()
     block = css[css.index("SCREEN 20 —") if "SCREEN 20 —" in css else css.index("SCREEN 20"):]
+    # ⭐ BOUNDED AT THE NEXT SCREEN'S HEADER (16-Aug, Screens 21/22).
+    # ⛔ Reading to END OF FILE made this window swallow whatever screen
+    # was appended after it and judge its rules as Screen 20's own — the
+    # same defect the Screen-12 and Screen-18 windows were corrected for.
+    # The PROPERTY is unchanged; only the window is.
+    block = block[:block.index("SCREEN 21")]
     for line in block.splitlines():
         line = line.strip()
         if not line or line.startswith(("/*", "*", "@", "}")) or "{" not in line:
@@ -577,6 +583,12 @@ def test_the_readability_floor_holds_for_text():
     EFFECTIVE size, ⛔ not the raw declaration."""
     css = _css()
     block = css[css.index("SCREEN 20"):]
+    # ⭐ BOUNDED AT THE NEXT SCREEN'S HEADER (16-Aug, Screens 21/22).
+    # ⛔ Reading to END OF FILE made this window swallow whatever screen
+    # was appended after it and judge its rules as Screen 20's own — the
+    # same defect the Screen-12 and Screen-18 windows were corrected for.
+    # The PROPERTY is unchanged; only the window is.
+    block = block[:block.index("SCREEN 21")]
     for rule in re.finditer(r"([^{}]+)\{([^{}]*)\}", block):
         selector, body = rule.group(1), rule.group(2)
         m = re.search(r"font-size:\s*([\d.]+)px", body)
@@ -659,6 +671,12 @@ def test_the_filters_use_the_established_language_not_a_one_off():
         assert shared in css, shared
 
     block = css[css.index("SCREEN 20"):]
+    # ⭐ BOUNDED AT THE NEXT SCREEN'S HEADER (16-Aug, Screens 21/22).
+    # ⛔ Reading to END OF FILE made this window swallow whatever screen
+    # was appended after it and judge its rules as Screen 20's own — the
+    # same defect the Screen-12 and Screen-18 windows were corrected for.
+    # The PROPERTY is unchanged; only the window is.
+    block = block[:block.index("SCREEN 21")]
     for line in block.splitlines():
         if ".sel" in line and "height" in line:
             raise AssertionError("one-off control sizing: " + line.strip())
@@ -669,6 +687,12 @@ def test_every_approved_heading_fits_on_one_line():
     second line read as a column of repeated TODAY (Rama, 16-Aug)."""
     css = _css()
     block = css[css.index("SCREEN 20"):]
+    # ⭐ BOUNDED AT THE NEXT SCREEN'S HEADER (16-Aug, Screens 21/22).
+    # ⛔ Reading to END OF FILE made this window swallow whatever screen
+    # was appended after it and judge its rules as Screen 20's own — the
+    # same defect the Screen-12 and Screen-18 windows were corrected for.
+    # The PROPERTY is unchanged; only the window is.
+    block = block[:block.index("SCREEN 21")]
     th = block[block.index(".sh-page .sh-tbl th"):]
     th = th[:th.index("}")]
     assert "white-space: nowrap" in th, th

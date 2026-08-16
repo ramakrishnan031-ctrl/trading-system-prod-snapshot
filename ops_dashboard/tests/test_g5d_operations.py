@@ -75,10 +75,32 @@ def test_positions_template_broker_unavailable():
 
 
 def test_holdings_template_broker_first_two_state():
+    """⚠️⚠️ CORRECTED 16-Aug-2026 (Screen 22). This asserted the G5d stub's
+    "Pending Broker Source (G4/P1)", i.e. that the broker side had no source and
+    would "activate when P1 ships". THAT CLAIM WAS STALE, and the test was
+    keeping it alive:
+
+      · P1 (`eod_broker_reconciliation`) is a DATE-LEVEL verdict table — one row
+        per day, no symbols — so it was never the source this screen needed.
+      · The PER-SYMBOL source, `position_reconciliation` (core/schema.sql TABLE
+        23, v20), has existed all along and was simply not read.
+
+    ⭐ THE INTENT SURVIVES AND IS WHAT IS PINNED HERE: the screen still shows
+    Broker Qty / Delta Qty / Reconciliation Status, and it still fabricates
+    nothing — what has no source now is the LIVE PRICE (Current Price / Market
+    Value / Unrealized P&L), and the screen says so in those words.
+    """
     src = open(os.path.join(_FRONTEND, "templates", "holdings.html"), encoding="utf-8").read()
-    assert "Pending Broker Source (G4/P1)" in src
-    # broker/delta/recon columns are honest placeholders, not computed numbers
+    # the broker-first columns are still there — now computed, from a real source
     assert "Broker Qty" in src and "Delta Qty" in src
+    assert "Reconciliation Status" in src
+    assert "position_reconciliation" in src
+    # ⛔ and the fields that genuinely have no source are still declared as gaps
+    assert "NOT INSTRUMENTED" in src
+    for field in ("Current Price", "Market Value", "Unrealized P&L"):
+        assert field in src, field
+    # ⛔ the retired claim must not come back by accident
+    assert "Pending Broker Source (G4/P1)" not in src
 
 
 def test_holdings_endpoint_system_side(client):

@@ -4077,3 +4077,110 @@ def activity_pulse(cfg: dict, today: str) -> dict:
             rows = conn.execute(sql, (today + "%",)).fetchall()
             out[key] = {str(r["m"]): int(r["n"]) for r in rows if r["m"]}
     return out
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# SCREEN 21 — SCANNER ATTRIBUTION  ·  SCREEN 22 — HOLDINGS   (16-Aug-2026)
+# ADDITIVE and READ-ONLY. Nothing above is modified.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def signals_rejected_by_status(cfg: dict, today: str) -> list:
+    """[{strategy, status, n}] for every REJECTED-family signal STORED today.
+
+    ⭐ THE POPULATION IS EXACTLY `_bucket_case_sql() == 'rejected'` — the same
+    definition the Screen-03/20 funnel already uses — so Screen 21's Rejected
+    column, its rejection donut and Screen 20's rejection monitoring can never
+    describe different sets. The caller classifies the STATUS into the approved
+    reason buckets; ⛔ it never reads `signals.rejection_reason`, which is free
+    text (see reports/signal_status.py for the incident that rule comes from).
+    """
+    fam = _bucket_case_sql()
+    with _ro(cfg) as conn:
+        rows = conn.execute(
+            "SELECT strategy, status, COUNT(*) AS n FROM signals "
+            "WHERE received_at LIKE ? AND " + fam + " = 'rejected' "
+            "GROUP BY strategy, status",
+            (today + "%",),
+        ).fetchall()
+    return [{"strategy": r["strategy"], "status": r["status"], "n": int(r["n"])}
+            for r in rows]
+
+
+def position_reconciliation_latest(cfg: dict) -> list:
+    """The MOST RECENT reconciliation run's rows, whole.
+
+    ⭐ `scripts/reconcile_positions.py` INSERTS (it never upserts), so a re-run
+    appends a second full set of rows for the same date. Selecting on the date
+    alone would therefore return two verdicts per symbol. Every row of one run
+    shares the run's single `created_at` stamp (`now_ist().isoformat()`, taken
+    once before the loop), so that stamp IS the run key. ⛔ MAX(date) is not the
+    key and would mix runs.
+    """
+    with _ro(cfg) as conn:
+        rows = conn.execute(
+            "SELECT id, date, symbol, broker_qty, system_qty, status, "
+            "resolved_at, created_at FROM position_reconciliation "
+            "WHERE created_at = (SELECT MAX(created_at) FROM position_reconciliation) "
+            "ORDER BY symbol"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def position_reconciliation_timeline(cfg: dict) -> dict:
+    """{last_run, last_mismatch, last_correction, rows_in_last_run, runs}.
+
+    The three stamps the approved RECONCILIATION TIMELINE panel asks for, each
+    read from the column that actually records it. ⛔ `last_correction` is
+    `MAX(resolved_at)` and is None until a row is manually resolved — the schema
+    says so in as many words ("null until manually resolved"), so a None here is
+    a real "never", ⛔ not a missing feature.
+    """
+    with _ro(cfg) as conn:
+        row = conn.execute(
+            "SELECT MAX(created_at) AS last_run, "
+            "       MAX(CASE WHEN status <> 'OK' THEN created_at END) AS last_mismatch, "
+            "       MAX(resolved_at) AS last_correction, "
+            "       COUNT(DISTINCT created_at) AS runs "
+            "FROM position_reconciliation"
+        ).fetchone()
+        n = _scalar(
+            conn,
+            "SELECT COUNT(*) FROM position_reconciliation "
+            "WHERE created_at = (SELECT MAX(created_at) FROM position_reconciliation)"
+        ) or 0
+    d = dict(row) if row else {}
+    return {"last_run": d.get("last_run"), "last_mismatch": d.get("last_mismatch"),
+            "last_correction": d.get("last_correction"),
+            "runs": int(d.get("runs") or 0), "rows_in_last_run": int(n)}
+
+
+def holdings_system_rows(cfg: dict) -> list:
+    """The SYSTEM side of Screen 22: every CURRENTLY OPEN position, all dates.
+
+    ⭐ ALL DATES, deliberately — the same base `position_open_set` uses and for
+    the same reason: a delivery position carried from an earlier day is still a
+    holding today and must not vanish because its entry date is not today's.
+
+    ⛔⛔ PRODUCT LIVES ON `orders`, ⛔ NOT ON `trades` — there is no
+    `trades.product` column. It is reached by `LEFT JOIN orders … leg='ENTRY'`,
+    and the join is LEFT on purpose: a trade whose ENTRY order row is missing
+    keeps `product` NULL rather than dropping out of the holdings list entirely.
+    The caller must therefore treat NULL as UNKNOWN and never as a product —
+    an INNER join here would silently hide exactly the positions most worth
+    seeing.
+    """
+    states = _OPEN_STATES
+    with _ro(cfg) as conn:
+        rows = conn.execute(
+            "SELECT t.trade_id, t.symbol, t.strategy, t.direction, t.status, "
+            "t.qty_planned, t.qty_filled, t.entry_target_price, "
+            "t.entry_actual_price, t.margin_reserved, t.actual_position_value_rs, "
+            "t.created_at, t.entry_time, "
+            "o.product AS product, o.order_id AS entry_order_id "
+            "FROM trades t "
+            "LEFT JOIN orders o ON o.trade_id = t.trade_id AND o.leg = 'ENTRY' "
+            "WHERE t.status IN (" + _in_clause(states) + ") "
+            "ORDER BY COALESCE(t.entry_time, t.created_at) DESC LIMIT ?",
+            (*states, _LIST_CAP),
+        ).fetchall()
+    return [dict(r) for r in rows]

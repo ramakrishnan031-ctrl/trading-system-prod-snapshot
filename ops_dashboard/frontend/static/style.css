@@ -509,6 +509,11 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
    `--t-*`, `--card*` or `--ink` token is page-scoped to a screen the audit page
    is not (measured across the file), so on `.aud-page` these definitions stay
    inert until something references them. */
+/* ⭐ Screens 21 (.sca-page) and 22 (.hld-page) JOIN FOR THE SAME REASON,
+   16-Aug — and it is the SAME measured defect, not a precaution: without this
+   line every `rgba(var(--t-*), …)` tint on them resolves to an invalid colour
+   and falls back to transparent, and `var(--card)` / `var(--card-bd)` on the
+   Holdings filter controls resolve to nothing. ⛔ NO VALUE IS INTRODUCED. */
 /* ⭐ Screens 19 (.sr-page) and 20 (.sh-page) JOIN THE SAME BLOCK, 16-Aug.
    🔴 MEASURED DEFECT, not a preference: these tokens are PAGE-SCOPED, and the
    two new screens had never joined — so every `rgba(var(--t-*), …)` tint they
@@ -519,7 +524,8 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
    made the two screens read as a different application (Rama, item 4).
    ⛔ NO VALUE IS INTRODUCED HERE — they take the same tokens every other screen
    already uses, exactly as `.aud-page`/`.tlg-page`/`.slg-page` did before. */
-.dash-page, .aud-page, .tlg-page, .slg-page, .sr-page, .sh-page {
+.dash-page, .aud-page, .tlg-page, .slg-page, .sr-page, .sh-page,
+.sca-page, .hld-page {
   --t-blue: 56,139,253;  --t-green: 46,160,67;   --t-red: 218,54,51;
   --t-orange: 219,109,40; --t-purple: 163,113,247; --t-yellow: 210,153,34;
   --t-gray: 139,148,158;
@@ -750,11 +756,11 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
    .flt-actions); only the scope was missing, which is why its controls fell back
    to browser defaults. ⛔ No value changed — Screen-03 renders byte-identically. */
 .strat-page .flt-row, .sig-page .flt-row, .ord-page .flt-row,
-.sr-page .flt-row, .sh-page .flt-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 14px; }
+.sr-page .flt-row, .sh-page .flt-row, .hld-page .flt-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 14px; }
 .strat-page .flt-field, .sig-page .flt-field, .ord-page .flt-field,
-.sr-page .flt-field, .sh-page .flt-field { display: flex; flex-direction: column; gap: 5px; min-width: 150px; flex: 1 1 150px; }
+.sr-page .flt-field, .sh-page .flt-field, .hld-page .flt-field { display: flex; flex-direction: column; gap: 5px; min-width: 150px; flex: 1 1 150px; }
 .strat-page .flt-k, .sig-page .flt-k, .ord-page .flt-k,
-.sr-page .flt-k, .sh-page .flt-k { font-size: 12px; font-weight: 600; color: var(--muted); }
+.sr-page .flt-k, .sh-page .flt-k, .hld-page .flt-k { font-size: 12px; font-weight: 600; color: var(--muted); }
 /* ⭐ Screen-13's FILTERS panel joins the SAME rule, by its own class name, for
    exactly the reason recorded above: `.sel` was never defined ANYWHERE in this
    file, so its dates and dropdowns fell back to native browser widgets — pale,
@@ -778,6 +784,7 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 .tlg-page .sel,
 .sr-page .sel,
 .sh-page .sel,
+.hld-page .sel,
 .slg-page .sel { height: 36px; padding: 0 10px; font-size: 13px; color: var(--text);
   background: var(--card); border: 1px solid var(--card-bd); border-radius: 8px; font-family: inherit; }
 .strat-page .flt-c:focus, .sig-page .flt-c:focus, .ord-page .flt-c:focus,
@@ -785,10 +792,11 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 .tlg-page .sel:focus,
 .sr-page .sel:focus,
 .sh-page .sel:focus,
+.hld-page .sel:focus,
 .slg-page .sel:focus { outline: none; border-color: var(--blue); }
 .strat-page .flt-sm, .sig-page .flt-sm { height: 30px; padding: 0 8px; width: auto; min-width: 58px; }
 .strat-page .flt-actions, .sig-page .flt-actions, .ord-page .flt-actions,
-.sr-page .flt-actions, .sh-page .flt-actions { display: flex; gap: 10px; align-items: flex-end; margin-left: auto; }
+.sr-page .flt-actions, .sh-page .flt-actions, .hld-page .flt-actions { display: flex; gap: 10px; align-items: flex-end; margin-left: auto; }
 /* ⭐ Screen-13's two filter actions join the SAME pair, so they cannot drift from
    Screens 03/04/05. ⛔ Deliberately NOT extended to `.rt-btn`: that pill is a
    real app-wide component and Screen-13 still uses it for the AUDIT EVENTS
@@ -807,21 +815,27 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 .tlg-page .btn-ghost, .tlg-page .btn-primary,
 .sr-page .btn-ghost, .sr-page .btn-primary,
 .sh-page .btn-ghost, .sh-page .btn-primary,
+.sca-page .btn-ghost, .sca-page .btn-primary,
+.hld-page .btn-ghost, .hld-page .btn-primary,
 .slg-page .btn-ghost, .slg-page .btn-primary { height: 36px; padding: 0 16px; font-size: 13px; font-weight: 600;
   border-radius: 8px; cursor: pointer; font-family: inherit; }
 .strat-page .btn-ghost, .sig-page .btn-ghost, .ord-page .btn-ghost,
 .aud-page .btn-ghost, .tlg-page .btn-ghost, .sr-page .btn-ghost,
-.sh-page .btn-ghost, .slg-page .btn-ghost { background: transparent; color: var(--muted); border: 1px solid var(--card-bd); }
+.sh-page .btn-ghost, .sca-page .btn-ghost, .hld-page .btn-ghost,
+.slg-page .btn-ghost { background: transparent; color: var(--muted); border: 1px solid var(--card-bd); }
 .strat-page .btn-ghost:hover, .sig-page .btn-ghost:hover, .ord-page .btn-ghost:hover,
 .aud-page .btn-ghost:hover, .tlg-page .btn-ghost:hover,
 .sr-page .btn-ghost:hover, .sh-page .btn-ghost:hover,
+.sca-page .btn-ghost:hover, .hld-page .btn-ghost:hover,
 .slg-page .btn-ghost:hover { color: var(--text); border-color: var(--blue); }
 .strat-page .btn-primary, .sig-page .btn-primary, .ord-page .btn-primary,
 .aud-page .btn-primary, .tlg-page .btn-primary, .sr-page .btn-primary,
-.sh-page .btn-primary, .slg-page .btn-primary { background: var(--blue); color: #fff; border: 1px solid var(--blue); }
+.sh-page .btn-primary, .sca-page .btn-primary, .hld-page .btn-primary,
+.slg-page .btn-primary { background: var(--blue); color: #fff; border: 1px solid var(--blue); }
 .strat-page .btn-primary:hover, .sig-page .btn-primary:hover, .ord-page .btn-primary:hover,
 .aud-page .btn-primary:hover, .tlg-page .btn-primary:hover,
 .sr-page .btn-primary:hover, .sh-page .btn-primary:hover,
+.sca-page .btn-primary:hover, .hld-page .btn-primary:hover,
 .slg-page .btn-primary:hover { filter: brightness(1.08); }
 
 /* Strategy hierarchy */
@@ -4389,4 +4403,700 @@ main.content:has(> .sh-page) { width: 100%; max-width: none; margin: 0;
   .sh-page .sh-main { grid-template-columns: 1fr; }
   .sh-page .sh-rail { display: grid; grid-template-columns: 1fr 1fr; }
   .sh-page .sh-row4 { grid-template-columns: 1fr 1fr; }
+}
+
+/* ═════════════════════════════════════════════════════════════════════════════
+   SCREEN 21 — SCANNER ATTRIBUTION  (`gui/21. Scanner_Attribution.png` is BINDING)
+   Every rule is scoped to `.sca-page`, so nothing here can reach another screen.
+   The 13px readability floor is held throughout (Rama, Screens 11-20).
+   ═══════════════════════════════════════════════════════════════════════════ */
+main.content:has(> .sca-page) { width: 100%; max-width: none; margin: 0;
+  padding: 12px 16px 10px 12px; }
+
+.sca-page { display: flex; flex-direction: column; gap: 14px; }
+.sca-page .panel { margin-bottom: 0; }
+.sca-page .panel-sub { font-size: 13px; color: var(--dim); font-weight: 500; }
+.sca-page .mono { font-size: 13px; }
+.sca-page th { font-size: 13px; }
+
+/* ── head ────────────────────────────────────────────────────────────────── */
+.sca-page .sca-head { display: flex; align-items: flex-start;
+  justify-content: space-between; gap: 16px; }
+.sca-page .sca-title { font-size: 1.5rem; font-weight: 800; margin: 0;
+  letter-spacing: .04em; }
+.sca-page .sca-sub { font-size: 13px; color: var(--muted); margin-top: 2px; }
+.sca-page .sca-lastcheck { display: flex; flex-direction: column; align-items: flex-end; }
+.sca-page .sca-lc-l { font-size: 13px; color: var(--dim); letter-spacing: .06em; }
+.sca-page .sca-lc-v { font-size: 13px; color: var(--muted); }
+
+/* ── the six KPI cards ───────────────────────────────────────────────────── */
+.sca-page .sca-kpis { display: grid; gap: 12px;
+  grid-template-columns: repeat(6, minmax(0, 1fr)); }
+.sca-page .sca-kpi { display: flex; align-items: flex-start; gap: 12px;
+  padding: 13px 14px; min-height: 84px; min-width: 0; }
+.sca-page .sca-kpi-ico { width: 34px; height: 34px; border-radius: 9px; flex: none;
+  display: inline-flex; align-items: center; justify-content: center; }
+.sca-page .sca-ico-pos    { background: rgba(var(--t-green), .16);  color: var(--pos); }
+.sca-page .sca-ico-neg    { background: rgba(var(--t-red), .16);    color: var(--neg); }
+.sca-page .sca-ico-info   { background: rgba(var(--t-blue), .15);   color: var(--blue); }
+.sca-page .sca-ico-purple { background: rgba(var(--t-purple), .16); color: var(--purple); }
+.sca-page .sca-ico-warn   { background: rgba(var(--t-yellow), .16); color: var(--yellow); }
+.sca-page .sca-kpi-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.sca-page .sca-kpi-l { font-size: 13px; color: var(--muted); letter-spacing: .05em; }
+/* ⛔ a truncated strategy name names nothing — the card exists to say WHICH
+   source leads, so it wraps rather than clipping. */
+.sca-page .sca-kpi-v { font-size: 1.15rem; font-weight: 800; line-height: 1.25;
+  overflow-wrap: anywhere; }
+.sca-page .sca-v-pos    { color: var(--pos); }
+.sca-page .sca-v-neg    { color: var(--neg); }
+.sca-page .sca-v-info   { color: var(--blue); }
+.sca-page .sca-v-purple { color: var(--purple); }
+.sca-page .sca-v-warn   { color: var(--yellow); }
+.sca-page .sca-kpi-s { font-size: 13px; color: var(--dim); line-height: 1.4;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ── the two-column body: work area + the approved right rail ────────────── */
+/* ⭐ `minmax(0, …)` ON EVERY TRACK AND `min-width: 0` ON EVERY CHILD.
+   🔴 MEASURED DEFECT, ⛔ not a precaution: a grid item defaults to
+   `min-width: auto` = MIN-CONTENT, so a nowrap table inside one refuses to
+   shrink and pushes the whole row wider than its track. At 1440 that made
+   the document 1548px wide against a 1440px viewport — a real page
+   overflow. With this, the table scrolls inside its own wrapper instead. */
+.sca-page .sca-main { display: grid; gap: 14px; align-items: start;
+  grid-template-columns: minmax(0, 1fr) minmax(316px, 348px); }
+.sca-page .sca-left, .sca-page .sca-rail { display: flex; flex-direction: column;
+  gap: 14px; min-width: 0; }
+.sca-page .sca-main > * { min-width: 0; }
+
+/* ── SCANNER PERFORMANCE TABLE ───────────────────────────────────────────── */
+.sca-page .sca-panel-head { display: flex; align-items: center;
+  justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.sca-page .sca-panel-head .panel-title { margin: 0; }
+.sca-page .sca-tbl-wrap { overflow-x: auto; }
+.sca-page .sca-tbl { width: 100%; table-layout: fixed; }
+.sca-page .sca-tbl td { padding: 7px 6px; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+/* the HEADER wraps rather than truncating — a clipped column name is a defect,
+   and the approved labels must be readable in full. */
+.sca-page .sca-tbl th { padding: 7px 6px; text-align: left;
+  white-space: normal; line-height: 1.25; vertical-align: bottom; }
+.sca-page .sca-tbl th.ctr, .sca-page .sca-tbl td.ctr { text-align: center; }
+.sca-page .sca-th { cursor: grab; user-select: none; }
+.sca-page .sca-th.is-drag { opacity: .5; }
+.sca-page .sca-th.is-over { box-shadow: inset 2px 0 0 var(--blue); }
+.sca-page .sca-arrow { margin-left: 3px; color: var(--dim); }
+.sca-page .sca-tbl tbody tr:hover { background: rgba(var(--t-blue), .07); }
+.sca-page .sca-empty { color: var(--dim); text-align: center; padding: 22px 0; }
+.sca-page .sca-nm { display: inline-block; max-width: 100%; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+.sca-page .sca-tbl-foot { display: flex; align-items: center;
+  justify-content: space-between; gap: 12px; margin-top: 10px;
+  font-size: 13px; color: var(--dim); }
+.sca-page .sca-more { font-size: 13px; font-weight: 600; color: var(--blue);
+  text-decoration: none; white-space: nowrap; }
+.sca-page .sca-more:hover { text-decoration: underline; }
+.sca-page .sca-note { font-size: 13px; color: var(--dim); margin: 8px 0 0;
+  line-height: 1.5; }
+
+/* rank medals — gold / silver / bronze for 1-3, plain thereafter */
+.sca-page .sca-rank { display: inline-flex; align-items: center;
+  justify-content: center; width: 23px; height: 23px; border-radius: 50%;
+  font-size: 13px; font-weight: 700; color: var(--muted); }
+.sca-page .sca-medal-1 { background: rgba(212, 175, 55, .22); color: #e8c65c;
+  border: 1px solid rgba(212, 175, 55, .55); }
+.sca-page .sca-medal-2 { background: rgba(176, 186, 197, .20); color: #c6cfd8;
+  border: 1px solid rgba(176, 186, 197, .50); }
+.sca-page .sca-medal-3 { background: rgba(191, 123, 66, .22); color: #d99a63;
+  border: 1px solid rgba(191, 123, 66, .55); }
+
+/* the five approved health states — the SAME state machine as Screen 20 */
+.sca-page .sca-hs { display: inline-flex; align-items: center; gap: 6px;
+  font-size: 13px; font-weight: 600; }
+.sca-page .sca-hs .dot { width: 8px; height: 8px; border-radius: 50%; flex: none;
+  background: currentColor; }
+.sca-page .sca-hs-healthy  { color: var(--pos); }
+.sca-page .sca-hs-quiet    { color: var(--yellow); }
+.sca-page .sca-hs-warning  { color: var(--orange); }
+.sca-page .sca-hs-silent   { color: var(--neg); }
+.sca-page .sca-hs-disabled { color: var(--dim); }
+
+.sca-page .sca-score { display: inline-block; padding: 2px 9px; border-radius: 6px;
+  font-size: 13px; font-weight: 700; }
+.sca-page .sca-sc-hi  { background: rgba(var(--t-green), .16);  color: var(--pos); }
+.sca-page .sca-sc-mid { background: rgba(var(--t-yellow), .16); color: var(--yellow); }
+.sca-page .sca-sc-lo  { background: rgba(var(--t-red), .16);    color: var(--neg); }
+
+.sca-page .sca-trend { display: inline-flex; align-items: center; gap: 5px;
+  font-size: 13px; font-weight: 600; }
+.sca-page .sca-tr-improving { color: var(--pos); }
+.sca-page .sca-tr-stable    { color: var(--blue); }
+.sca-page .sca-tr-declining { color: var(--neg); }
+.sca-page .sca-pos { color: var(--pos); }
+.sca-page .sca-neg { color: var(--neg); }
+.sca-page .sca-ni { font-size: 13px; color: var(--dim); letter-spacing: .02em; }
+
+/* ── row 2: ACTIVITY · RANKING · TREND ───────────────────────────────────── */
+.sca-page .sca-row2 { display: grid; gap: 14px; align-items: stretch;
+  grid-template-columns: minmax(0, 356fr) minmax(0, 402fr) minmax(0, 218fr); }
+/* ⭐ APPROVED CARD FOOTPRINT FLOORS (Rama, Screen 18): an empty window must not
+   collapse a panel, and a full one must not need a scrollbar. */
+.sca-page .sca-row2 > .panel { min-height: 208px; display: flex;
+  flex-direction: column; min-width: 0; }
+/* ⭐ THE ARTWORK'S FOOTPRINT IS HELD AT ANY STRATEGY COUNT. Production has
+   16 strategies against the artwork's 5, and an uncapped list would stretch
+   this row and open a dead band under the two panels beside it. ⛔ Nothing
+   is hidden — the list scrolls. */
+.sca-page .sca-am-wrap, .sca-page .sca-rk-wrap { overflow-x: auto;
+  flex: 1 1 auto; min-width: 0; }
+.sca-page .sca-am-wrap { max-height: 246px; overflow-y: auto; }
+.sca-page .sca-amtbl, .sca-page .sca-rtbl { width: 100%; }
+.sca-page .sca-amtbl td, .sca-page .sca-rtbl td { padding: 6px 6px;
+  white-space: nowrap; }
+.sca-page .sca-amtbl th, .sca-page .sca-rtbl th { padding: 6px 6px;
+  white-space: nowrap; }
+.sca-page .sca-amtbl .ctr, .sca-page .sca-rtbl .ctr { text-align: center; }
+.sca-page .sca-amtbl .sca-hs { margin-right: 7px; }
+
+/* ⛔ `max-width: 100%` IS LOAD-BEARING: `align-self: flex-start` stops the
+   row stretching but does NOT stop it growing, so the five pills measured
+   576px inside a 543px panel. */
+.sca-page .sca-mode-btns { display: flex; flex-wrap: wrap; gap: 0;
+  border: 1px solid var(--border-soft); border-radius: 9px; overflow: hidden;
+  align-self: flex-start; max-width: 100%; margin-bottom: 10px; }
+.sca-page .sca-mode { background: transparent; border: none;
+  border-right: 1px solid var(--border-soft); color: var(--muted);
+  font-size: 13px; font-weight: 600; padding: 8px 13px; cursor: pointer;
+  white-space: nowrap; font-family: inherit; }
+.sca-page .sca-mode:last-child { border-right: none; }
+.sca-page .sca-mode:hover { color: var(--text); background: rgba(var(--t-blue), .08); }
+.sca-page .sca-mode.is-on { background: var(--blue); color: #fff; }
+
+.sca-page .sca-trend-list { list-style: none; margin: 0; padding: 0;
+  flex: 1 1 auto; display: flex; flex-direction: column; justify-content: center;
+  gap: 10px; }
+.sca-page .sca-trend-list li { display: flex; align-items: center; gap: 10px;
+  flex-wrap: wrap; }
+.sca-page .sca-trend-ico { width: 32px; height: 32px; border-radius: 8px; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 1.05rem; font-weight: 700; }
+.sca-page .sca-trend-ico.sca-tr-improving { background: rgba(var(--t-green), .16); }
+.sca-page .sca-trend-ico.sca-tr-stable    { background: rgba(var(--t-blue), .15); }
+.sca-page .sca-trend-ico.sca-tr-declining { background: rgba(var(--t-red), .16); }
+.sca-page .sca-trend-body { display: flex; flex-direction: column;
+  min-width: 0; flex: 1 1 60px; }
+.sca-page .sca-trend-l { font-size: 13px; font-weight: 700; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.sca-page .sca-trend-s { font-size: 13px; color: var(--dim); white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; }
+.sca-page .sca-trend-n { margin-left: auto; font-size: 13px; font-weight: 700;
+  color: var(--text); white-space: nowrap; }
+
+/* ── row 3: QUALITY · DRILLDOWN · TIMELINE ───────────────────────────────── */
+.sca-page .sca-row3 { display: grid; gap: 14px; align-items: stretch;
+  grid-template-columns: minmax(0, 372fr) minmax(0, 306fr) minmax(0, 298fr); }
+.sca-page .sca-row3 > .panel { min-height: 190px; display: flex;
+  flex-direction: column; min-width: 0; }
+/* ⭐ The components WRAP BELOW the dial when the panel is too narrow to
+   hold both — measured at 1440, where they overflowed 189 into 117. ⛔ The
+   label is not truncated: a component whose name is cut off cannot be read
+   against its own bar. */
+.sca-page .sca-q-body { display: flex; align-items: center; gap: 16px;
+  flex: 1 1 auto; flex-wrap: wrap; justify-content: center; }
+.sca-page .sca-q-parts { display: flex; flex-direction: column; gap: 7px;
+  flex: 1 1 190px; min-width: 0; }
+.sca-page .sca-q-h { font-size: 13px; font-weight: 700; color: var(--ink);
+  margin-bottom: 2px; }
+.sca-page .sca-q-row { display: flex; align-items: center; gap: 9px; }
+.sca-page .sca-q-l { font-size: 13px; color: var(--muted); flex: 0 0 108px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sca-page .sca-q-bar { flex: 1 1 auto; height: 6px; border-radius: 3px;
+  background: var(--card); overflow: hidden; min-width: 40px; }
+.sca-page .sca-q-bar i { display: block; height: 100%; border-radius: 3px; }
+.sca-page .sca-q-acceptance_rate  { background: var(--blue); }
+.sca-page .sca-q-trade_conversion { background: var(--pos); }
+.sca-page .sca-q-win_rate         { background: var(--purple); }
+.sca-page .sca-q-profitability    { background: var(--orange); }
+.sca-page .sca-q-n { font-size: 13px; color: var(--muted); flex: none; }
+/* ⛔ THE CAPTION IS IN NORMAL FLOW, ⛔ not absolutely positioned inside
+   the dial: an absolute caption is wider than the 148px box it sits in, and
+   its overflow measured 214>148 in the browser. */
+.sca-page .sca-gauge-wrap { flex: 0 0 auto; min-width: 0; display: flex;
+  flex-direction: column; align-items: center; gap: 6px; }
+.sca-page .sca-gauge-box { position: relative; width: 148px; height: 148px;
+  flex: none; }
+.sca-page .sca-gauge { width: 148px; height: 148px; display: block;
+  overflow: visible; }
+.sca-page .sca-g-bg { stroke: var(--card); }
+.sca-page .sca-g-hi  { stroke: var(--pos); }
+.sca-page .sca-g-mid { stroke: var(--yellow); }
+.sca-page .sca-g-lo  { stroke: var(--neg); }
+.sca-page .sca-g-centre { position: absolute; inset: 0; display: flex;
+  flex-direction: column; align-items: center; justify-content: center;
+  pointer-events: none; }
+.sca-page .sca-g-v { font-size: 2.1rem; font-weight: 800; line-height: 1;
+  color: var(--text); }
+.sca-page .sca-g-v.sca-sc-hi  { background: none; color: var(--pos); padding: 0; }
+.sca-page .sca-g-v.sca-sc-mid { background: none; color: var(--yellow); padding: 0; }
+.sca-page .sca-g-v.sca-sc-lo  { background: none; color: var(--neg); padding: 0; }
+.sca-page .sca-g-d { font-size: 13px; color: var(--dim); }
+.sca-page .sca-g-cap { font-size: 13px; color: var(--dim); text-align: center;
+  line-height: 1.35; max-width: 22ch; }
+
+.sca-page .sca-drill-grid { display: grid; grid-template-columns: repeat(3, 1fr);
+  gap: 10px; flex: 1 1 auto; align-content: center; }
+.sca-page .sca-tile { display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 7px; padding: 12px 6px; border-radius: 9px;
+  background: var(--card); border: 1px solid var(--card-bd); min-height: 66px;
+  color: var(--muted); text-decoration: none; }
+.sca-page .sca-tile:hover { border-color: var(--blue); color: var(--blue); }
+.sca-page .sca-tile-ico { display: inline-flex; color: var(--blue); }
+.sca-page .sca-tile-l { font-size: 13px; font-weight: 600; }
+
+.sca-page .sca-gapbox { flex: 1 1 auto; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 9px; text-align: center;
+  border: 1px dashed var(--card-bd); border-radius: 9px; padding: 14px 12px; }
+.sca-page .sca-gap-tag { font-size: 13px; font-weight: 700; letter-spacing: .06em;
+  color: var(--dim); background: var(--card); border: 1px solid var(--card-bd);
+  border-radius: 6px; padding: 3px 9px; }
+.sca-page .sca-gap-t { font-size: 13px; color: var(--muted); line-height: 1.5;
+  max-width: 34ch; }
+
+/* ── the right rail ──────────────────────────────────────────────────────── */
+.sca-page .sca-fn-body { display: flex; align-items: center; gap: 12px; }
+.sca-page .sca-fn-svg { width: 148px; height: 128px; flex: none; }
+.sca-page .sca-fnp { stroke: none; }
+.sca-page .sca-fn-0 { fill: var(--blue); }
+.sca-page .sca-fn-1 { fill: var(--pos); }
+.sca-page .sca-fn-2 { fill: var(--yellow); }
+.sca-page .sca-fn-3 { fill: var(--purple); }
+.sca-page i.sca-fn-0 { background: var(--blue); }
+.sca-page i.sca-fn-1 { background: var(--pos); }
+.sca-page i.sca-fn-2 { background: var(--yellow); }
+.sca-page i.sca-fn-3 { background: var(--purple); }
+.sca-page .sca-fn-legend { list-style: none; margin: 0; padding: 0;
+  flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 9px; }
+.sca-page .sca-fn-legend li { display: grid; grid-template-columns: 10px 1fr;
+  grid-template-rows: auto auto; column-gap: 8px; align-items: center; }
+.sca-page .sca-fn-legend .dot { width: 9px; height: 9px; border-radius: 50%;
+  grid-row: 1 / span 2; }
+.sca-page .sca-fn-n { font-size: 13px; font-weight: 700; color: var(--text); }
+.sca-page .sca-fn-l { font-size: 13px; color: var(--dim); }
+
+.sca-page .sca-rj-body { display: flex; align-items: center; gap: 14px; }
+.sca-page .sca-donut { width: 104px; height: 104px; flex: none;
+  overflow: visible; }
+.sca-page .sca-donut-bg { stroke: var(--card); }
+.sca-page .sca-rj-legend { list-style: none; margin: 0; padding: 0;
+  flex: 1 1 auto; min-width: 0; }
+.sca-page .sca-rj-legend li { display: flex; align-items: center; gap: 9px;
+  font-size: 13px; color: var(--muted); padding: 4px 0; }
+.sca-page .sca-rj-legend .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+.sca-page .sca-rj-c { min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }
+.sca-page .sca-rj-n { margin-left: auto; color: var(--text); font-weight: 600;
+  white-space: nowrap; }
+.sca-page circle.sca-rj-0 { stroke: var(--blue); }
+.sca-page circle.sca-rj-1 { stroke: var(--pos); }
+.sca-page circle.sca-rj-2 { stroke: var(--yellow); }
+.sca-page circle.sca-rj-3 { stroke: var(--purple); }
+.sca-page i.sca-rj-0 { background: var(--blue); }
+.sca-page i.sca-rj-1 { background: var(--pos); }
+.sca-page i.sca-rj-2 { background: var(--yellow); }
+.sca-page i.sca-rj-3 { background: var(--purple); }
+.sca-page .sca-rj-total { display: flex; align-items: center; gap: 8px;
+  justify-content: center; margin-top: 10px; padding-top: 10px;
+  border-top: 1px solid var(--border-soft); font-size: 13px; color: var(--muted); }
+.sca-page .sca-rj-total b { color: var(--text); font-size: 13px; }
+
+.sca-page .sca-prof-grid { display: grid; grid-template-columns: repeat(4, 1fr);
+  gap: 8px; }
+.sca-page .sca-prof-cell { display: flex; flex-direction: column;
+  align-items: center; gap: 5px; text-align: center; min-width: 0; }
+.sca-page .sca-prof-ico { width: 30px; height: 30px; border-radius: 8px;
+  display: inline-flex; align-items: center; justify-content: center; }
+.sca-page .sca-prof-l { font-size: 13px; color: var(--muted); white-space: nowrap; }
+.sca-page .sca-prof-v { font-size: 13px; font-weight: 700; color: var(--text);
+  white-space: nowrap; }
+
+.sca-page .sca-map-wrap { overflow-x: auto; }
+.sca-page .sca-maptbl { width: 100%; table-layout: fixed; }
+.sca-page .sca-maptbl td { padding: 5px 6px; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+/* ⛔ THE HEADER WRAPS RATHER THAN TRUNCATING — measured in the browser,
+   `SCANNER NAME` clipped 121>105 and `LINKED STRATEGY` 133>105. A clipped
+   column name is a defect; the main table already wraps for this reason. */
+.sca-page .sca-maptbl th { padding: 5px 6px; font-size: 13px;
+  white-space: normal; line-height: 1.25; vertical-align: bottom; }
+.sca-page .sca-map-u { color: var(--blue); text-decoration: none; }
+.sca-page .sca-map-u:hover { text-decoration: underline; }
+.sca-page .sca-map-n, .sca-page .sca-map-s { display: inline-block;
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  vertical-align: bottom; }
+
+.sca-page .sca-exp-sub { font-size: 13px; color: var(--dim); margin: 0 0 10px;
+  line-height: 1.5; }
+.sca-page .sca-exp-btn { display: flex; align-items: center; justify-content: center;
+  gap: 9px; width: 100%; text-decoration: none; }
+.sca-page .sca-exp-ico { font-size: 1rem; }
+
+.sca-page .sca-foot-note { display: flex; align-items: center; gap: 8px;
+  flex-wrap: wrap; font-size: 13px; color: var(--muted); line-height: 1.6; }
+.sca-page .sca-i { color: var(--blue); }
+.sca-page .sca-conn { margin-left: auto; display: inline-flex; align-items: center;
+  gap: 7px; color: var(--dim); white-space: nowrap; }
+.sca-page .sca-conn .dot { width: 8px; height: 8px; border-radius: 50%; }
+.sca-page .sca-ins-pos { background: var(--pos); }
+
+/* ⭐ THE TWO-COLUMN SHAPE HOLDS AT 1440 — the approved artwork puts the
+   rail BESIDE the work area, and collapsing at 1500 stacked it underneath
+   and doubled the page height. It collapses only when the work area can no
+   longer hold a row of panels. */
+@media (max-width: 1180px) {
+  .sca-page .sca-main { grid-template-columns: minmax(0, 1fr); }
+  .sca-page .sca-row2, .sca-page .sca-row3 {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+}
+@media (max-width: 1000px) {
+  .sca-page .sca-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .sca-page .sca-row2, .sca-page .sca-row3 {
+    grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ═════════════════════════════════════════════════════════════════════════════
+   SCREEN 22 — HOLDINGS  (`gui/22. Holdings.png` is BINDING)
+   Every rule is scoped to `.hld-page`. 13px readability floor held throughout.
+   ═══════════════════════════════════════════════════════════════════════════ */
+main.content:has(> .hld-page) { width: 100%; max-width: none; margin: 0;
+  padding: 12px 16px 10px 12px; }
+
+.hld-page { display: flex; flex-direction: column; gap: 14px; }
+.hld-page .panel { margin-bottom: 0; }
+.hld-page .panel-sub { font-size: 13px; color: var(--dim); font-weight: 500; }
+.hld-page .mono { font-size: 13px; }
+.hld-page th { font-size: 13px; }
+
+/* ── head ────────────────────────────────────────────────────────────────── */
+.hld-page .hld-head { display: flex; align-items: flex-start;
+  justify-content: space-between; gap: 16px; }
+.hld-page .hld-title { font-size: 1.5rem; font-weight: 800; margin: 0;
+  letter-spacing: .04em; }
+.hld-page .hld-subline { display: flex; align-items: center; gap: 12px;
+  flex-wrap: wrap; margin-top: 3px; }
+.hld-page .hld-sub { font-size: 13px; color: var(--muted); }
+.hld-page .hld-badge { font-size: 13px; font-weight: 600; color: var(--blue);
+  background: rgba(var(--t-blue), .13); border: 1px solid rgba(var(--t-blue), .38);
+  border-radius: 7px; padding: 3px 11px; }
+.hld-page .hld-lastcheck { display: flex; flex-direction: column; align-items: flex-end; }
+.hld-page .hld-lc-l { font-size: 13px; color: var(--dim); letter-spacing: .06em; }
+.hld-page .hld-lc-v { font-size: 13px; color: var(--muted); }
+
+/* ── the six KPI cards ───────────────────────────────────────────────────── */
+.hld-page .hld-kpis { display: grid; gap: 12px;
+  grid-template-columns: repeat(6, minmax(0, 1fr)); }
+.hld-page .hld-kpi { display: flex; align-items: flex-start; gap: 12px;
+  padding: 13px 14px; min-height: 84px; min-width: 0; }
+.hld-page .hld-kpi-ico { width: 34px; height: 34px; border-radius: 9px; flex: none;
+  display: inline-flex; align-items: center; justify-content: center; }
+.hld-page .hld-ico-pos    { background: rgba(var(--t-green), .16);  color: var(--pos); }
+.hld-page .hld-ico-neg    { background: rgba(var(--t-red), .16);    color: var(--neg); }
+.hld-page .hld-ico-info   { background: rgba(var(--t-blue), .15);   color: var(--blue); }
+.hld-page .hld-ico-purple { background: rgba(var(--t-purple), .16); color: var(--purple); }
+.hld-page .hld-ico-warn   { background: rgba(var(--t-yellow), .16); color: var(--yellow); }
+.hld-page .hld-kpi-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.hld-page .hld-kpi-l { font-size: 13px; color: var(--muted); letter-spacing: .05em; }
+.hld-page .hld-kpi-v { font-size: 1.55rem; font-weight: 800; line-height: 1.15;
+  color: var(--text); }
+/* ⛔ THE SUB WRAPS RATHER THAN ELLIPSISING. It carries the measured value
+   AT COST beside the NOT INSTRUMENTED marker, and "₹ 2,64,04…" is a
+   truncated rupee figure — the one thing a money column must never be. */
+.hld-page .hld-kpi-s { font-size: 13px; color: var(--dim); line-height: 1.35;
+  overflow-wrap: anywhere; }
+.hld-page .hld-v-pos { color: var(--pos); }
+.hld-page .hld-v-neg { color: var(--neg); }
+
+/* ── body: work area + the approved right rail ───────────────────────────── */
+/* ⭐ `minmax(0, …)` ON EVERY TRACK AND `min-width: 0` ON EVERY CHILD.
+   🔴 MEASURED DEFECT, ⛔ not a precaution: a grid item defaults to
+   `min-width: auto` = MIN-CONTENT, so a nowrap table inside one refuses to
+   shrink and pushes the whole row wider than its track. At 1440 that made
+   the document 1548px wide against a 1440px viewport — a real page
+   overflow. With this, the table scrolls inside its own wrapper instead. */
+.hld-page .hld-main { display: grid; gap: 14px; align-items: start;
+  grid-template-columns: minmax(0, 1fr) minmax(292px, 330px); }
+.hld-page .hld-left, .hld-page .hld-rail { display: flex; flex-direction: column;
+  gap: 14px; min-width: 0; }
+.hld-page .hld-main > * { min-width: 0; }
+
+.hld-page .hld-filters { padding-top: 12px; padding-bottom: 12px; }
+
+/* ── HOLDINGS RECONCILIATION TABLE ───────────────────────────────────────── */
+.hld-page .hld-panel-head { display: flex; align-items: center;
+  justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.hld-page .hld-panel-head .panel-title { margin: 0; }
+.hld-page .hld-recon-note { font-size: 13px; color: var(--dim); white-space: nowrap; }
+.hld-page .hld-tbl-wrap { overflow-x: auto; }
+.hld-page .hld-tbl { width: 100%; table-layout: fixed; }
+.hld-page .hld-tbl td { padding: 7px 6px; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.hld-page .hld-tbl th { padding: 7px 6px; text-align: left;
+  white-space: normal; line-height: 1.25; vertical-align: bottom; }
+.hld-page .hld-tbl th.ctr, .hld-page .hld-tbl td.ctr { text-align: center; }
+.hld-page .hld-th { cursor: grab; user-select: none; }
+.hld-page .hld-th.is-drag { opacity: .5; }
+.hld-page .hld-th.is-over { box-shadow: inset 2px 0 0 var(--blue); }
+.hld-page .hld-arrow { margin-left: 3px; color: var(--dim); }
+.hld-page .hld-tbl tbody tr:hover { background: rgba(var(--t-blue), .07); }
+.hld-page .hld-empty { color: var(--dim); text-align: center; padding: 22px 0; }
+.hld-page .hld-nm { display: inline-block; max-width: 100%; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+.hld-page .hld-tbl-foot { display: flex; align-items: center;
+  justify-content: space-between; gap: 12px; margin-top: 10px;
+  font-size: 13px; color: var(--dim); }
+/* ⭐ 13px, ⛔ not the app-wide `.rt-btn` 11.84px: this is a NEW screen and
+   the readability floor applies to every glyph on it. Scoped, so the pill
+   keeps its approved size everywhere else. */
+.hld-page .hld-pager { display: inline-flex; align-items: center; gap: 8px; }
+.hld-page .hld-pager .rt-btn { font-size: 13px; line-height: 1.2; }
+.hld-page .hld-pg { color: var(--muted); }
+.hld-page .hld-note { font-size: 13px; color: var(--dim); margin: 8px 0 0;
+  line-height: 1.5; }
+.hld-page .hld-warn { color: var(--orange); }
+.hld-page .hld-ni { color: var(--dim); font-weight: 500; }
+.hld-page .hld-pos { color: var(--pos); }
+.hld-page .hld-neg { color: var(--neg); }
+
+.hld-page .hld-prod { display: inline-block; padding: 2px 9px; border-radius: 6px;
+  font-size: 13px; font-weight: 600; }
+.hld-page .hld-pr-mis   { background: rgba(var(--t-blue), .16);   color: var(--blue); }
+.hld-page .hld-pr-cnc   { background: rgba(var(--t-purple), .16); color: var(--purple); }
+.hld-page .hld-pr-nrml  { background: rgba(var(--t-orange), .16); color: var(--orange); }
+.hld-page .hld-pr-other { background: rgba(var(--t-gray), .16);   color: var(--muted); }
+
+.hld-page .hld-rs { display: inline-flex; align-items: center; gap: 6px;
+  font-size: 13px; font-weight: 600; }
+.hld-page .hld-rs .dot { width: 8px; height: 8px; border-radius: 50%; flex: none;
+  background: currentColor; }
+.hld-page .hld-rs-ok    { color: var(--pos); }
+.hld-page .hld-rs-minor { color: var(--yellow); }
+.hld-page .hld-rs-bad   { color: var(--neg); }
+.hld-page .hld-shared { color: var(--dim); font-weight: 700; cursor: help; }
+.hld-page .hld-src { font-size: 13px; }
+.hld-page .hld-src-b { color: var(--orange); background: rgba(var(--t-orange), .14);
+  border-radius: 6px; padding: 2px 8px; font-weight: 600; }
+.hld-page .hld-src-s { color: var(--blue); background: rgba(var(--t-blue), .14);
+  border-radius: 6px; padding: 2px 8px; font-weight: 600; }
+
+/* ── row 2: PRODUCT · HEALTH · DELIVERY · ORPHAN ─────────────────────────── */
+.hld-page .hld-row2 { display: grid; gap: 14px; align-items: stretch;
+  grid-template-columns: minmax(0, 314fr) minmax(0, 322fr) minmax(0, 236fr)
+                         minmax(0, 206fr); }
+.hld-page .hld-row2 > .panel { min-height: 190px; display: flex;
+  flex-direction: column; min-width: 0; }
+/* ⭐ The legend WRAPS BELOW the dial when the column is too narrow to hold
+   both — measured at 1440, where the legend clipped 103>86. ⛔ It is never
+   truncated, because the whole point of the panel is to name the split. */
+.hld-page .hld-pr-body { display: flex; align-items: center; gap: 14px;
+  flex: 1 1 auto; flex-wrap: wrap; justify-content: center; }
+.hld-page .hld-donut { width: 112px; height: 112px; flex: none;
+  overflow: visible; }
+.hld-page .hld-donut-bg { stroke: var(--card); }
+/* ⚠️ SVG user units, not px: the 42-unit viewBox is painted at 112px, so
+   4.9 units render at 13.07px — the same readability floor as the rest. */
+.hld-page .hld-donut-t1 { fill: var(--text); font-size: 7.5px; font-weight: 800; }
+.hld-page .hld-donut-t2 { fill: var(--dim); font-size: 4.9px; font-weight: 600; }
+.hld-page .hld-pr-legend { list-style: none; margin: 0; padding: 0;
+  flex: 1 1 132px; min-width: 0; }
+.hld-page .hld-pr-legend li { display: flex; align-items: center; gap: 9px;
+  font-size: 13px; color: var(--muted); padding: 5px 0; min-width: 0; }
+.hld-page .hld-pr-legend .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+.hld-page .hld-pr-legend .hld-pr-c { min-width: 0; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.hld-page .hld-pr-n { margin-left: auto; color: var(--text); font-weight: 600;
+  white-space: nowrap; }
+.hld-page circle.hld-pr-c0 { stroke: var(--blue); }
+.hld-page circle.hld-pr-c1 { stroke: var(--purple); }
+.hld-page circle.hld-pr-c2 { stroke: var(--orange); }
+.hld-page circle.hld-pr-c3 { stroke: var(--yellow); }
+.hld-page i.hld-pr-c0 { background: var(--blue); }
+.hld-page i.hld-pr-c1 { background: var(--purple); }
+.hld-page i.hld-pr-c2 { background: var(--orange); }
+.hld-page i.hld-pr-c3 { background: var(--yellow); }
+
+.hld-page .hld-h-grid { display: grid; grid-template-columns: repeat(3, 1fr);
+  gap: 9px; flex: 1 1 auto; align-content: center; }
+.hld-page .hld-h-cell { display: flex; flex-direction: column; align-items: center;
+  gap: 3px; padding: 10px 6px; border-radius: 9px; background: var(--card);
+  border: 1px solid var(--card-bd); min-height: 72px; justify-content: center; }
+.hld-page .hld-h-neg    { border-color: rgba(var(--t-red), .45); }
+.hld-page .hld-h-warn   { border-color: rgba(var(--t-orange), .45); }
+.hld-page .hld-h-yellow { border-color: rgba(var(--t-yellow), .45); }
+.hld-page .hld-h-orange { border-color: rgba(var(--t-orange), .45); }
+.hld-page .hld-h-info   { border-color: rgba(var(--t-blue), .45); }
+.hld-page .hld-h-gray   { border-color: var(--card-bd); }
+.hld-page .hld-h-l { font-size: 13px; font-weight: 600; text-align: center;
+  line-height: 1.2; overflow-wrap: anywhere; }
+.hld-page .hld-h-neg    .hld-h-l { color: var(--neg); }
+.hld-page .hld-h-warn   .hld-h-l { color: var(--orange); }
+.hld-page .hld-h-yellow .hld-h-l { color: var(--yellow); }
+.hld-page .hld-h-orange .hld-h-l { color: var(--orange); }
+.hld-page .hld-h-info   .hld-h-l { color: var(--blue); }
+.hld-page .hld-h-gray   .hld-h-l { color: var(--muted); }
+.hld-page .hld-h-n { font-size: 1.4rem; font-weight: 800; color: var(--text);
+  line-height: 1.1; }
+.hld-page .hld-h-p { font-size: 13px; color: var(--dim); }
+
+.hld-page .hld-d-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px;
+  flex: 1 1 auto; align-content: center; }
+.hld-page .hld-d-cell { display: flex; flex-direction: column; gap: 2px;
+  padding: 9px 10px; border-radius: 9px; background: var(--card);
+  border: 1px solid var(--card-bd); min-width: 0; }
+/* ⛔ THESE CAPTIONS WRAP, ⛔ they do not ellipsise: "Total Delivery V…" and
+   "Average Holdin…" name nothing, and the cell exists to name the figure. */
+.hld-page .hld-d-l { font-size: 13px; color: var(--muted);
+  line-height: 1.25; overflow-wrap: anywhere; }
+.hld-page .hld-d-v { font-size: 1.05rem; font-weight: 800; color: var(--text);
+  overflow-wrap: anywhere; }
+.hld-page .hld-d-s { font-size: 13px; color: var(--dim); line-height: 1.25;
+  overflow-wrap: anywhere; }
+.hld-page .hld-more { font-size: 13px; font-weight: 600; color: var(--blue);
+  text-decoration: none; margin-top: 10px; align-self: flex-end;
+  white-space: nowrap; }
+.hld-page .hld-more:hover { text-decoration: underline; }
+
+.hld-page .hld-o-list { display: flex; flex-direction: column; gap: 10px;
+  flex: 1 1 auto; justify-content: center; }
+.hld-page .hld-o-cell { display: flex; align-items: center; gap: 10px;
+  padding: 10px 11px; border-radius: 9px; background: var(--card);
+  border: 1px solid var(--card-bd); }
+.hld-page .hld-o-broker { border-color: rgba(var(--t-red), .45); }
+.hld-page .hld-o-system { border-color: rgba(var(--t-blue), .45); }
+.hld-page .hld-o-body { display: flex; flex-direction: column; min-width: 0; }
+.hld-page .hld-o-l { font-size: 13px; font-weight: 600; color: var(--text); }
+.hld-page .hld-o-s { font-size: 13px; color: var(--dim); }
+.hld-page .hld-o-n { margin-left: auto; font-size: 1.4rem; font-weight: 800;
+  line-height: 1; }
+.hld-page .hld-o-broker .hld-o-n { color: var(--neg); }
+.hld-page .hld-o-system .hld-o-n { color: var(--blue); }
+
+/* ── row 3: SIDE-BY-SIDE · CATEGORIES · REJECTION INSIGHTS ───────────────── */
+.hld-page .hld-row3 { display: grid; gap: 14px; align-items: stretch;
+  grid-template-columns: minmax(0, 318fr) minmax(0, 336fr) minmax(0, 424fr); }
+.hld-page .hld-row3 > .panel { min-height: 166px; display: flex;
+  flex-direction: column; min-width: 0; }
+.hld-page .hld-sbs-grid { display: flex; align-items: stretch; gap: 10px;
+  flex: 1 1 auto; }
+.hld-page .hld-sbs-col { flex: 1 1 0; min-width: 0; display: flex;
+  flex-direction: column; gap: 2px; padding: 10px 11px; border-radius: 9px;
+  background: var(--card); border: 1px solid var(--card-bd);
+  overflow-wrap: anywhere; }
+.hld-page .hld-sbs-b { border-color: rgba(var(--t-blue), .40); }
+.hld-page .hld-sbs-s { border-color: rgba(var(--t-green), .40); }
+.hld-page .hld-sbs-h { font-size: 13px; font-weight: 700; letter-spacing: .04em; }
+.hld-page .hld-sbs-b .hld-sbs-h { color: var(--blue); }
+.hld-page .hld-sbs-s .hld-sbs-h { color: var(--pos); }
+.hld-page .hld-sbs-n { font-size: 13px; color: var(--muted); }
+.hld-page .hld-sbs-v { font-size: 1.05rem; font-weight: 800; color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hld-page .hld-sbs-t { font-size: 13px; color: var(--muted); margin-top: 4px; }
+.hld-page span.hld-sbs-s { font-size: 13px; color: var(--dim); font-weight: 400; }
+.hld-page .hld-sbs-vs { align-self: center; flex: none; width: 34px; height: 34px;
+  border-radius: 50%; display: inline-flex; align-items: center;
+  justify-content: center; font-size: 13px; font-weight: 800;
+  color: var(--muted); background: var(--card); border: 1px solid var(--card-bd); }
+
+.hld-page .hld-cat-grid { display: grid; grid-template-columns: repeat(4, 1fr);
+  gap: 9px; flex: 1 1 auto; align-content: center; }
+.hld-page .hld-cat-cell { display: flex; flex-direction: column; align-items: center;
+  gap: 4px; min-width: 0; }
+.hld-page .hld-cat-ico { width: 34px; height: 34px; border-radius: 9px;
+  display: inline-flex; align-items: center; justify-content: center; }
+.hld-page .hld-cat-i0 { background: rgba(var(--t-blue), .15);   color: var(--blue); }
+.hld-page .hld-cat-i1 { background: rgba(var(--t-purple), .16); color: var(--purple); }
+.hld-page .hld-cat-i2 { background: rgba(var(--t-orange), .16); color: var(--orange); }
+.hld-page .hld-cat-i3 { background: rgba(var(--t-yellow), .16); color: var(--yellow); }
+.hld-page .hld-cat-l { font-size: 13px; font-weight: 600; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.hld-page .hld-cat-n { font-size: 1.4rem; font-weight: 800; line-height: 1.1; }
+.hld-page .hld-cat-t0 { color: var(--blue); }
+.hld-page .hld-cat-t1 { color: var(--purple); }
+.hld-page .hld-cat-t2 { color: var(--orange); }
+.hld-page .hld-cat-t3 { color: var(--yellow); }
+.hld-page .hld-cat-p { font-size: 13px; color: var(--dim); }
+
+.hld-page .hld-rej-grid { display: grid; grid-template-columns: repeat(4, 1fr);
+  gap: 10px; flex: 1 1 auto; align-content: center; }
+.hld-page .hld-rej-cell { display: flex; flex-direction: column; gap: 3px;
+  min-width: 0; padding-right: 10px; border-right: 1px solid var(--border-soft); }
+.hld-page .hld-rej-cell:last-child { border-right: none; }
+.hld-page .hld-rej-l { font-size: 13px; color: var(--muted); line-height: 1.25;
+  overflow-wrap: anywhere; }
+/* ⛔ A TRUNCATED FIGURE IS NOT A FIGURE. "17 (36…" and "Low Sc…" are what
+   this strip rendered at 1440 before the cells were allowed to wrap. */
+.hld-page .hld-rej-v { font-size: 1.05rem; font-weight: 800; color: var(--text);
+  line-height: 1.25; overflow-wrap: anywhere; }
+.hld-page .hld-rej-s { font-size: 13px; color: var(--dim); }
+
+/* ── the right rail ──────────────────────────────────────────────────────── */
+.hld-page .hld-dl-eq { display: flex; align-items: stretch; gap: 7px; }
+.hld-page .hld-dl-box { flex: 1 1 0; min-width: 0; display: flex;
+  flex-direction: column; align-items: center; gap: 2px; padding: 9px 6px;
+  border-radius: 9px; background: var(--card); border: 1px solid var(--card-bd); }
+.hld-page .hld-dl-box.is-off { border-color: rgba(var(--t-red), .50);
+  background: rgba(var(--t-red), .07); }
+.hld-page .hld-dl-l { font-size: 13px; color: var(--muted); white-space: nowrap; }
+.hld-page .hld-dl-v { font-size: 1.2rem; font-weight: 800; color: var(--text);
+  line-height: 1.15; }
+.hld-page .hld-dl-op { align-self: center; font-size: 13px; color: var(--dim);
+  flex: none; }
+
+.hld-page .hld-kv { list-style: none; margin: 0; padding: 0; }
+.hld-page .hld-kv li { display: flex; align-items: center; gap: 9px;
+  padding: 6px 0; font-size: 13px; }
+.hld-page .hld-k { color: var(--muted); min-width: 0; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.hld-page .hld-v { margin-left: auto; color: var(--text); font-weight: 600;
+  white-space: nowrap; }
+.hld-page .hld-live { display: inline-flex; align-items: center; gap: 5px;
+  flex: none; font-size: 13px; font-weight: 700; color: var(--pos);
+  background: rgba(var(--t-green), .14); border-radius: 6px; padding: 1px 7px; }
+.hld-page .hld-live .dot { width: 7px; height: 7px; border-radius: 50%;
+  background: currentColor; }
+.hld-page .hld-sync { display: flex; align-items: center; gap: 10px;
+  margin-top: 10px; flex-wrap: wrap; }
+.hld-page .hld-sync-btn[disabled] { opacity: .55; cursor: not-allowed; }
+.hld-page .hld-sync-s { font-size: 13px; color: var(--dim); }
+
+.hld-page .hld-exp-sub { font-size: 13px; color: var(--dim); margin: 0 0 10px;
+  line-height: 1.5; }
+.hld-page .hld-exp-btn { display: flex; align-items: center; justify-content: center;
+  gap: 9px; width: 100%; text-decoration: none; }
+.hld-page .hld-exp-ico { font-size: 1rem; }
+
+.hld-page .hld-foot-note { display: flex; align-items: center; gap: 8px;
+  flex-wrap: wrap; font-size: 13px; color: var(--muted); line-height: 1.6; }
+.hld-page .hld-i { color: var(--blue); }
+.hld-page .hld-conn { margin-left: auto; display: inline-flex; align-items: center;
+  gap: 7px; color: var(--dim); white-space: nowrap; }
+.hld-page .hld-conn .dot { width: 8px; height: 8px; border-radius: 50%; }
+.hld-page .hld-dot-pos { background: var(--pos); }
+
+/* ⭐ The MAIN two-column shape holds at 1440 — see the Screen-21 note — but
+   the four-up and three-up rows inside it go two-up first: at 1440 each of
+   the four panels would be ~219px, and the health tiles measured 268 into
+   219. ⛔ Two breakpoints, because they answer two different questions. */
+@media (max-width: 1560px) {
+  .hld-page .hld-row2 { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .hld-page .hld-row3 { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  /* ⭐ THREE PANELS IN A TWO-COLUMN ROW LEAVE THE THIRD BESIDE A HOLE. The
+     last one spans instead — no invented widget fills the gap, and the
+     four-cell strip is the panel that most wants the extra width. */
+  .hld-page .hld-row3 > :last-child { grid-column: 1 / -1; }
+}
+@media (max-width: 1180px) {
+  .hld-page .hld-main { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 1000px) {
+  .hld-page .hld-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .hld-page .hld-row2, .hld-page .hld-row3 {
+    grid-template-columns: minmax(0, 1fr); }
 }

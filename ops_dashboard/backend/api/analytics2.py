@@ -19,6 +19,10 @@ routes and never touch any existing endpoint):
   GET /api/strategy-health/screen  ?state&trade_type   live snapshot (⛔ no period)
   GET /api/export/strategy-health  same args           XLSX of the SAME view
   GET /api/export/live-activity ?category              XLSX of the SAME feed
+  GET /api/scanner-attribution/screen ?health&trade_type  (Screen 21, ⛔ no period)
+  GET /api/export/scanner-attribution same args        XLSX of the SAME view
+  GET /api/holdings/screen ?symbol&product&status&source&trade_type (Screen 22)
+  GET /api/export/holdings         same args           XLSX of the SAME view
 Every builder is read-only over db_reader.*_range (mode=ro); NO schema. The
 existing /api/pnl, /api/strategies, /api/slippage, /api/execution, Reports stay
 UNTOUCHED.
@@ -31,7 +35,8 @@ from flask import Blueprint, current_app, jsonify, request, send_file
 
 from ..auth import login_required
 from ..services import (audit, analytics_period, execution_analytics,
-                        live_activity, slippage_analytics, strategy_health,
+                        holdings, live_activity, scanner_attribution,
+                        slippage_analytics, strategy_health,
                         strategy_ranking, system_health, system_logs,
                         trade_logs)
 
@@ -596,3 +601,87 @@ def export_strategy_health():
     rows = strategy_health.export_rows(payload)
     return _xlsx([("Strategy Health", rows[0], rows[1:])],
                  "strategy_health_%s.xlsx" % payload["today"])
+
+
+# ── SCREEN 21 — SCANNER ATTRIBUTION ──────────────────────────────────────────
+# ⭐ ADDITIVE: the G5c `/api/scanner-attribution` endpoint is deliberately
+# UNTOUCHED and its contract test still passes — including its own three-factor
+# `quality_score`, which this screen does NOT use (Screen 21 computes the
+# artwork's four-component composite instead, exactly as Screen 20 left the
+# legacy 5-value health score alone).
+#
+# ⚠️ NOT period-scoped: the artwork labels the funnel, the rejection donut and
+# the profitability panel "(TODAY)" and draws no date filter. ACTIVITY METRICS
+# carries its own explicit second window.
+def _scanner_kwargs() -> dict:
+    def _arg(name):
+        return (request.args.get(name) or "").strip() or None
+
+    return {"health": _arg("health"), "trade_type": _arg("trade_type")}
+
+
+@analytics2_api.route("/api/scanner-attribution/screen", methods=["GET"])
+@login_required
+def get_scanner_attribution_screen():
+    """Screen 21. Read-only. ONE tower build feeds the KPI strip, the table, the
+    funnel, the rejection donut, the rankings, the quality gauge and the export,
+    so no panel can describe a different set from the table beside it."""
+    cfg = current_app.config["GUI_CONFIG"]
+    return jsonify(scanner_attribution.build_scanner_attribution_screen(
+        cfg, **_scanner_kwargs()))
+
+
+@analytics2_api.route("/api/export/scanner-attribution", methods=["GET"])
+@login_required
+def export_scanner_attribution():
+    """XLSX of the FILTERED, RANKED view only (approved: "Export filtered
+    results only").
+
+    ⛔ NO SCANNER COLUMN in the main sheet — the same removal the screen makes,
+    and a test asserts its absence in the generated file. ⭐ The scanner identity
+    is on the SCANNER MAPPING sheet, which is where it belongs.
+    """
+    cfg = current_app.config["GUI_CONFIG"]
+    payload = scanner_attribution.build_scanner_attribution_screen(
+        cfg, **_scanner_kwargs())
+    return _xlsx(scanner_attribution.export_sheets(payload),
+                 "scanner_attribution_%s.xlsx" % payload["today"])
+
+
+# ── SCREEN 22 — HOLDINGS ─────────────────────────────────────────────────────
+# ⭐ ADDITIVE: the G5d `/api/holdings` gtt_state-mirror endpoint is deliberately
+# UNTOUCHED and its contract test still passes.
+#
+# ⚠️ NOT period-scoped: holdings are a LIVE POSITION STATE, and the broker side
+# is whatever the most recent 15:45 reconciliation run measured.
+def _holdings_kwargs() -> dict:
+    def _arg(name):
+        return (request.args.get(name) or "").strip() or None
+
+    return {"symbol": _arg("symbol"), "product": _arg("product"),
+            "status": _arg("status"), "source": _arg("source"),
+            "trade_type": _arg("trade_type")}
+
+
+@analytics2_api.route("/api/holdings/screen", methods=["GET"])
+@login_required
+def get_holdings_screen():
+    """Screen 22. Read-only. Broker is the final source of truth, the system is
+    the expected state and Delta is the difference — all three from ONE system
+    read and ONE reconciliation run, so the panels describe the same instant."""
+    cfg = current_app.config["GUI_CONFIG"]
+    return jsonify(holdings.build_holdings_screen(cfg, **_holdings_kwargs()))
+
+
+@analytics2_api.route("/api/export/holdings", methods=["GET"])
+@login_required
+def export_holdings_screen():
+    """XLSX of the FILTERED view only (approved: "Export filtered results only").
+
+    ⛔ Current Price, Market Value and Unrealized P&L export as NOT INSTRUMENTED
+    on every row — never blank, which a spreadsheet reader would total as zero.
+    """
+    cfg = current_app.config["GUI_CONFIG"]
+    payload = holdings.build_holdings_screen(cfg, **_holdings_kwargs())
+    return _xlsx(holdings.export_sheets(payload),
+                 "holdings_%s.xlsx" % payload["today"])

@@ -111,6 +111,15 @@ DDL = [
     """CREATE TABLE reconciliation_log (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT,
         check_name TEXT, tier TEXT, symbol TEXT, trade_id TEXT, description TEXT,
         action_taken TEXT, success INTEGER)""",
+    # Screen-22: the PER-SYMBOL broker-vs-system comparison. Exists in
+    # core/schema.sql:1509 (TABLE 23, v20) and was simply absent here — a reader
+    # against a fixture without it raises "no such table" while the same reader
+    # works in production, so the fixture's own contract requires it. Columns and
+    # the status vocabulary are schema.sql's, verbatim.
+    """CREATE TABLE position_reconciliation (id INTEGER PRIMARY KEY AUTOINCREMENT,
+        date TEXT NOT NULL, symbol TEXT NOT NULL, broker_qty INTEGER,
+        system_qty INTEGER, status TEXT NOT NULL, resolved_at TEXT,
+        created_at TEXT NOT NULL)""",
     """CREATE TABLE eod_verification (date TEXT PRIMARY KEY, open_trades INTEGER DEFAULT 0,
         pending_orders INTEGER DEFAULT 0, pnl_variance REAL DEFAULT 0.0,
         status TEXT DEFAULT 'VERIFIED', verified_at TEXT)""",
@@ -509,6 +518,33 @@ def _seed(conn: sqlite3.Connection, schema_version: int) -> None:
     c.execute("INSERT INTO eod_verification(date,open_trades,pending_orders,pnl_variance,"
               "status,verified_at) VALUES(?,?,?,?,?,?)",
               (TODAY, 0, 0, 0.0, "VERIFIED", _ts("15:55:30")))
+
+    # ── SCREEN 22 (16-Aug-2026): the 15:45 broker-vs-system reconciliation ────
+    # ⭐ ONE ROW OF EVERY STATUS THE WRITER CAN PRODUCE, because a fixture where
+    # every symbol reconciles OK cannot tell a working three-way classifier from
+    # one that returns "Matched" unconditionally:
+    #     AAA  OK                 — the four open trades' symbol, both sides agree
+    #     BBB  QTY_MISMATCH       — both sides hold it, the sizes differ
+    #     ZZZ  ORPHAN_AT_BROKER   — at the broker, NO system record  (Broker Only)
+    #     CCC  MISSING_AT_BROKER  — a system record, nothing at the broker
+    # ⚠️ TWO RUNS ARE SEEDED, an OLDER one and the CURRENT one, and the older run
+    # disagrees (AAA QTY_MISMATCH). `reconcile_positions` INSERTs rather than
+    # upserts, so a reader that keyed on MAX(date) instead of the run stamp would
+    # return BOTH verdicts for AAA and this fixture makes that visible.
+    # ⭐ ZZZ carries a `resolved_at`, so the "Last Correction" stamp has a real
+    # value AND the null case is still exercised by the other three.
+    _older_run, _last_run = _ts("15:45:02"), _ts("15:45:07")
+    for _sym, _b, _s, _st in (("AAA", 40, 30, "QTY_MISMATCH"),):
+        c.execute("INSERT INTO position_reconciliation(date,symbol,broker_qty,"
+                  "system_qty,status,resolved_at,created_at) VALUES(?,?,?,?,?,?,?)",
+                  (YDAY, _sym, _b, _s, _st, None, _older_run))
+    for _sym, _b, _s, _st, _res in (("AAA", 40, 40, "OK", None),
+                                    ("BBB", 25, 20, "QTY_MISMATCH", None),
+                                    ("ZZZ", 10, 0, "ORPHAN_AT_BROKER", _ts("16:02:11")),
+                                    ("CCC", 0, 15, "MISSING_AT_BROKER", None)):
+        c.execute("INSERT INTO position_reconciliation(date,symbol,broker_qty,"
+                  "system_qty,status,resolved_at,created_at) VALUES(?,?,?,?,?,?,?)",
+                  (TODAY, _sym, _b, _s, _st, _res, _last_run))
     c.execute("INSERT INTO preflight_runs(run_id,run_date,phase,started_at,completed_at,"
               "total_checks,passed,overall_status) VALUES(?,?,?,?,?,?,?,?)",
               ("pf_a_1", TODAY, "A", _ts("08:30:00"), _ts("08:31:00"), 12, 12, "READY"))

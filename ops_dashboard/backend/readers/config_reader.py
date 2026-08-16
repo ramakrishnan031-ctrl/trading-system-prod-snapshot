@@ -240,3 +240,48 @@ def config_meta(cfg: dict, today: str) -> dict:
             "config_hash": (snap.get("config_hash") or "")[:12],
         }
     return {"source": "yaml_fallback", "snapshot_date": None, "snapshot_ts": None}
+
+
+# ── SCREEN 21 — SCANNER MAPPING (16-Aug-2026) ────────────────────────────────
+# ADDITIVE: `get_scan_webhook_map` above is byte-unchanged and keeps its callers.
+# It returns {scanner: strategy} and DISCARDS `chartink_url`, which is exactly
+# the field the approved SCANNER MAPPING panel needs.
+def get_scanner_registry(cfg: dict) -> list:
+    """The scanner registry, verbatim: [{scanner, strategy, chartink_url}].
+
+    ⭐ THE URL IS REAL AND READ FROM `config/scan_webhook_map.yaml`. The approved
+    artwork draws a Scanner URL column with `https://chartink.com/screener/123`
+    placeholders; the production file carries the actual screener URLs (measured
+    16-Aug: 16 scanners, every one with a `chartink_url`). ⛔ No URL is ever
+    constructed, guessed or templated from a scanner name — an entry without one
+    comes back None and the panel prints the unavailable marker.
+
+    ⭐ SCANNER AND STRATEGY ARE 1:1 IN THIS SYSTEM (measured 16-Aug: 16 scanners
+    → 16 DISTINCT strategies, and every scanner name IS its strategy name). That
+    measurement is why Screen 21's main table carries STRATEGY ONLY — a Scanner
+    column beside it would print the same identity twice. This panel is the ONE
+    place the scanner name legitimately appears, because naming the mapping is
+    the panel's whole purpose. The loader permits N:1, so nothing here assumes
+    the 1:1 holds; `strategy` is read per entry.
+    """
+    path = os.path.join(cfg["paths"]["config_dir"], "scan_webhook_map.yaml")
+    if not os.path.isfile(path):
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            raw = yaml.safe_load(fh) or {}
+    except (OSError, yaml.YAMLError):
+        return []
+    scanners = raw.get("scanners") or {}
+    if not isinstance(scanners, dict):
+        return []
+    out = []
+    for scanner, entry in sorted(scanners.items()):
+        if isinstance(entry, dict):
+            strategy, url = entry.get("strategy"), entry.get("chartink_url")
+        else:
+            strategy, url = entry, None
+        out.append({"scanner": str(scanner),
+                    "strategy": str(strategy) if strategy else None,
+                    "chartink_url": str(url) if url else None})
+    return out
