@@ -479,11 +479,39 @@ def test_no_write_route_exists_in_the_whole_dashboard() -> None:
                 for n, line in enumerate(fh, 1):
                     if _re.search(r'methods\s*=\s*\[[^\]]*["\']POST["\']', line):
                         posts.append(f"{os.path.relpath(p, root)}:{n}")
-    # login + logout are the only two, and both are SESSION routes — neither
-    # writes trading data, and there is no order path anywhere.
-    assert all("auth.py" in p for p in posts), \
-        f"a write route appeared outside auth — the dialog's claim must be revisited: {posts}"
-    assert len(posts) == 2, f"expected exactly login+logout, got: {posts}"
+    # ── NARROWED 17-Aug-2026, ⛔ NOT relaxed ────────────────────────────────
+    # 📜 Rama's ruling makes Screen 17 the operational control surface, so
+    # "login+logout are the ONLY POSTs" can no longer hold. What this test was
+    # actually protecting is UNCHANGED and is re-pinned below:
+    #   (a) the dashboard writes NOTHING itself — no DB write, no broker path;
+    #   (b) any POST beyond the session routes must be the SINGLE control
+    #       forwarder, which validates against an allowlist and hands off to the
+    #       trading process's own control plane;
+    #   (c) there is still no order path anywhere.
+    # ⛔ A NEW POST appearing anywhere else still fails this test.
+    allowed = ("auth.py", "operations.py")
+    assert all(any(a in p for a in allowed) for p in posts), \
+        f"a write route appeared outside auth/operations: {posts}"
+    non_auth = [p for p in posts if "auth.py" not in p]
+    assert len(posts) - len(non_auth) == 2, f"expected exactly login+logout in auth: {posts}"
+    assert len(non_auth) == 1, f"exactly ONE control forwarder is permitted, got: {non_auth}"
+
+    # (b) the forwarder must be the allowlisted control route, and must not write.
+    ops = open(os.path.join(root, "backend", "api", "operations.py"),
+               encoding="utf-8").read()
+    assert "/api/controls/action" in ops
+    assert "_CONTROL_ACTIONS" in ops, "the forwarder must use an allowlist, not a passthrough"
+    assert "control_client.post_action" in ops, "it must hand off, not act locally"
+    for forbidden in ("INSERT ", "UPDATE ", "DELETE ", "commit()"):
+        assert forbidden not in ops, f"the control route must not write: {forbidden!r}"
+
+    # (c) still no broker/order path anywhere in the dashboard.
+    for dirpath, _d, files in os.walk(os.path.join(root, "backend")):
+        for name in files:
+            if name.endswith(".py"):
+                txt = open(os.path.join(dirpath, name), encoding="utf-8",
+                           errors="ignore").read()
+                assert "place_order" not in txt, f"an order path appeared in {name}"
 
 
 # ── 11 · Total Capital Used — the corrected formula ─────────────────────────

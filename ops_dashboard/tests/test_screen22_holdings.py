@@ -61,8 +61,23 @@ def _s(client, qs=""):
 
 
 def _css_block() -> str:
+    """Screen 22's CSS block ONLY — bounded at the next screen's header.
+
+    🔴 CORRECTED 17-Aug-2026, ⛔ property unchanged. This window used to run to
+    END OF FILE, which was invisible while Screen 22 was the last block in
+    style.css. When Screen 17's block was appended after it, this window silently
+    adopted Screen 17's rules and reported them as Screen 22's own unscoped
+    selectors.
+
+    📌 This is the SAME defect the Screen-12, Screen-18 and Screen-20 windows were
+    corrected for on 16-Aug — *"a CSS window that ends at EOF silently adopts
+    whatever is appended after it."* Screen 22's was never bounded only because
+    nothing had followed it yet. ⛔ Screen 22's CSS and rendering are untouched.
+    """
     css = _css()
-    return css[css.index("SCREEN 22 — HOLDINGS"):]
+    start = css.index("SCREEN 22 — HOLDINGS")
+    nxt = css.find("\n   SCREEN ", start + 10)
+    return css[start:] if nxt == -1 else css[start:nxt]
 
 
 def _conn(gui_config):

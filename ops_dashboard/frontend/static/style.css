@@ -5214,3 +5214,164 @@ main.content:has(> .hld-page) { width: 100%; max-width: none; margin: 0;
   .hld-page .hld-row2, .hld-page .hld-row3 {
     grid-template-columns: minmax(0, 1fr); }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SCREEN 17 — CONTROLS  (`gui/17. Controls.png` is BINDING)
+   Every rule is scoped to `.ctl-page`. 13px readability floor held throughout.
+   Colour semantics follow the artwork: GREEN = enabled, RED = disabled.
+   ⛔ No new colour is introduced — every value below is an existing token.
+   ═══════════════════════════════════════════════════════════════════════════ */
+main.content:has(> .ctl-page) { width: 100%; max-width: none; margin: 0;
+  padding: 12px 16px 10px 12px; }
+
+.ctl-page { display: flex; flex-direction: column; gap: 14px; }
+.ctl-page .panel { margin-bottom: 0; }
+.ctl-page .panel-sub { font-size: 13px; color: var(--dim); font-weight: 500; }
+.ctl-page .mono { font-size: 13px; }
+.ctl-page .dt-td { font-size: 13px; }
+.ctl-page .dt-th { font-size: 13px; color: var(--muted); }
+
+/* The honesty banner: the screen must state whether controls are live. */
+.ctl-page .ctl-banner { display: flex; align-items: baseline; gap: 12px;
+  padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border);
+  font-size: 13px; font-weight: 700; }
+.ctl-page .ctl-banner-ok { border-color: var(--green); color: var(--pos);
+  background: var(--pos-tint); }
+.ctl-page .ctl-banner-off { border-color: var(--red); color: var(--neg);
+  background: var(--neg-tint); }
+.ctl-page .ctl-banner-sub { font-weight: 500; color: var(--muted); font-size: 13px; }
+
+/* Shell: main column + right rail, mirroring the artwork's composition. */
+.ctl-page .ctl-shell { display: grid; grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 14px; align-items: start; }
+.ctl-page .ctl-main { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.ctl-page .ctl-rail { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.ctl-page .ctl-row { display: grid; gap: 14px; align-items: start; }
+.ctl-page .ctl-row1 { grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr); }
+.ctl-page .ctl-row2 { grid-template-columns: minmax(0, .8fr) minmax(0, 1.1fr) minmax(0, 1.1fr); }
+.ctl-page .ctl-row3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.ctl-page .ctl-row4 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+/* Trading-mode block */
+.ctl-page .ctl-modegrid { display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, .7fr); gap: 12px; }
+.ctl-page .ctl-sub { font-size: 13px; color: var(--dim); text-transform: uppercase;
+  letter-spacing: .04em; margin-bottom: 6px; font-weight: 700; }
+.ctl-page .ctl-trow { display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; padding: 8px 10px; background: var(--panel2);
+  border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; }
+.ctl-page .ctl-tlabel { font-size: 13px; }
+.ctl-page .ctl-state { font-size: 13px; font-weight: 800; letter-spacing: .03em; }
+.ctl-page .ctl-on  { color: var(--pos); }
+.ctl-page .ctl-off { color: var(--neg); }
+.ctl-page .ctl-radio { display: flex; align-items: center; gap: 8px; font-size: 13px;
+  padding: 3px 0; }
+.ctl-page .ctl-dot { width: 11px; height: 11px; border-radius: 50%;
+  border: 2px solid var(--border); display: inline-block; flex: none; }
+.ctl-page .ctl-dot-on { border-color: var(--green); background: var(--green); }
+.ctl-page .ctl-lrow { display: flex; align-items: center; gap: 8px; font-size: 13px;
+  padding: 3px 0; }
+
+/* The switch. GREEN = enabled, RED = disabled — the artwork's own semantics. */
+.ctl-page .ctl-sw { width: 34px; height: 18px; border-radius: 999px; flex: none;
+  border: 1px solid var(--border); position: relative; cursor: pointer;
+  padding: 0; display: inline-block; transition: background .12s ease; }
+.ctl-page .ctl-sw::after { content: ""; position: absolute; top: 1px; width: 14px;
+  height: 14px; border-radius: 50%; background: #fff; transition: left .12s ease; }
+.ctl-page .ctl-sw-on  { background: var(--green); }
+.ctl-page .ctl-sw-on::after  { left: 18px; }
+.ctl-page .ctl-sw-off { background: var(--red); }
+.ctl-page .ctl-sw-off::after { left: 1px; }
+.ctl-page .ctl-sw:disabled { opacity: .45; cursor: not-allowed; }
+
+.ctl-page .ctl-badge { font-size: 13px; padding: 1px 7px; border-radius: 5px;
+  background: var(--accent-tint); color: var(--blue); font-weight: 600; }
+.ctl-page .ctl-diverge { font-size: 13px; color: var(--orange); margin-left: 6px;
+  font-weight: 700; }
+.ctl-page .ctl-actcol { width: 64px; text-align: right; }
+.ctl-page .ctl-stratscroll { max-height: 268px; overflow-y: auto; }
+
+/* Runtime-limit inputs */
+.ctl-page .ctl-input { width: 92px; background: var(--panel2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px; padding: 4px 7px;
+  font-size: 13px; font-family: inherit; text-align: right; }
+.ctl-page .ctl-input:disabled { opacity: .45; cursor: not-allowed; }
+.ctl-page .ctl-confirminput { width: 100%; text-align: left; margin-top: 6px; }
+
+/* Market-protection action cards — visually distinct by blast radius. */
+.ctl-page .ctl-act { display: block; width: 100%; text-align: left; cursor: pointer;
+  background: var(--panel2); border: 1px solid var(--border); border-left-width: 3px;
+  border-radius: 8px; padding: 9px 11px; margin-bottom: 9px; color: var(--text);
+  font-family: inherit; }
+.ctl-page .ctl-act b { display: block; font-size: 13px; margin-bottom: 2px; }
+.ctl-page .ctl-act span { display: block; font-size: 13px; color: var(--muted); }
+.ctl-page .ctl-act-warn   { border-left-color: var(--orange); }
+.ctl-page .ctl-act-info   { border-left-color: var(--blue); }
+.ctl-page .ctl-act-muted  { border-left-color: var(--dim); }
+.ctl-page .ctl-act-danger { border-left-color: var(--red); }
+.ctl-page .ctl-act-danger b { color: var(--neg); }
+.ctl-page .ctl-act-state { cursor: default; }
+.ctl-page .ctl-act:disabled { opacity: .45; cursor: not-allowed; }
+
+/* Readiness tiles */
+.ctl-page .ctl-ready { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px; }
+.ctl-page .ctl-rtile { background: var(--panel2); border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px 6px; text-align: center; }
+.ctl-page .ctl-rname { font-size: 13px; color: var(--muted); }
+.ctl-page .ctl-rstate { font-size: 13px; font-weight: 800; margin-top: 3px; }
+.ctl-page .ctl-rdetail { font-size: 13px; color: var(--dim); margin-top: 3px;
+  line-height: 1.25; }
+.ctl-page .ctl-r-ok  .ctl-rstate { color: var(--pos); }
+.ctl-page .ctl-r-bad .ctl-rstate { color: var(--neg); }
+.ctl-page .ctl-r-unk .ctl-rstate { color: var(--muted); }
+
+/* Change preview / confirm */
+.ctl-page .ctl-arrowcol { width: 26px; text-align: center; color: var(--muted); }
+.ctl-page .ctl-new { color: var(--pos); font-weight: 700; }
+.ctl-page .ctl-warn { font-size: 13px; color: var(--orange); font-weight: 700;
+  margin: 0 0 6px; }
+.ctl-page .ctl-list { margin: 0 0 8px; padding-left: 18px; font-size: 13px; }
+.ctl-page .ctl-list li { margin-bottom: 3px; }
+.ctl-page .ctl-note { font-size: 13px; color: var(--dim); margin: 8px 0 0;
+  line-height: 1.35; }
+.ctl-page .ctl-err { font-size: 13px; color: var(--neg); margin: 8px 0 0; }
+.ctl-page .ctl-ok  { font-size: 13px; color: var(--pos); margin: 8px 0 0; }
+
+/* Rail: history, simulation mode, apply */
+.ctl-page .ctl-hist { display: flex; flex-direction: column; gap: 5px; }
+.ctl-page .ctl-hrow { display: flex; gap: 8px; font-size: 13px; align-items: baseline; }
+.ctl-page .ctl-htime { color: var(--dim); flex: none; }
+.ctl-page .ctl-simrow { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px; }
+.ctl-page .ctl-sim { background: var(--panel2); border: 1px solid var(--border);
+  border-radius: 8px; padding: 7px 5px; text-align: center; }
+.ctl-page .ctl-sim b { display: block; font-size: 13px; }
+.ctl-page .ctl-sim span { display: block; font-size: 13px; color: var(--dim); }
+.ctl-page .ctl-sim-on { border-color: var(--green); }
+.ctl-page .ctl-sim-on b { color: var(--pos); }
+.ctl-page .ctl-apply { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px; }
+.ctl-page .ctl-btn { font-size: 13px; font-family: inherit; font-weight: 700;
+  border-radius: 8px; padding: 9px 6px; cursor: pointer; color: var(--text);
+  background: var(--panel2); border: 1px solid var(--border); }
+.ctl-page .ctl-btn-ok     { border-color: var(--green); color: var(--pos); }
+.ctl-page .ctl-btn-mute   { color: var(--muted); }
+.ctl-page .ctl-btn-danger { border-color: var(--red); color: var(--neg); }
+.ctl-page .ctl-btn:disabled { opacity: .45; cursor: not-allowed; }
+.ctl-page .ctl-foot { font-size: 13px; color: var(--dim); margin: 2px 0 0; }
+
+/* Responsive: collapse toward the artwork's intent rather than stacking blindly. */
+@media (max-width: 1560px) {
+  .ctl-page .ctl-shell { grid-template-columns: minmax(0, 1fr); }
+  .ctl-page .ctl-rail  { display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 1180px) {
+  .ctl-page .ctl-row1, .ctl-page .ctl-row2,
+  .ctl-page .ctl-row3, .ctl-page .ctl-row4 {
+    grid-template-columns: minmax(0, 1fr); }
+  .ctl-page .ctl-rail { grid-template-columns: minmax(0, 1fr); }
+  .ctl-page .ctl-modegrid { grid-template-columns: minmax(0, 1fr); }
+  .ctl-page .ctl-ready { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
