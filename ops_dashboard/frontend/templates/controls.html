@@ -16,7 +16,11 @@
      scanner = strategy 1:1 (measured — 16 scanners → 16 distinct strategies,
      scanner-name == strategy-name on 16/16), so a separate scanner control would
      print one identity twice. The STRATEGY list IS the operational control list.
-     Remaining panels are renumbered contiguously.
+     ⛔ THE ARTWORK'S NUMBERING IS PRESERVED, ⛔ NOT made contiguous: every
+     remaining panel keeps its artwork number and 3 is simply absent, so Search
+     stays 13 and Export stays 14 exactly as the artwork draws them. There is
+     also NO scanner KPI and NO scanner row in the rail — a scanner count is
+     the strategy count under a second name.
 
   ⛔ NO CONTROL IS EVER RENDERED AS APPLIED ON THE BASIS OF THE REQUEST. Every
      control reads its state from `data`, which is re-loaded from the runtime
@@ -45,9 +49,14 @@
     {{ kpi_card("Trading Status", "summary('trading_status')", tone="info") }}
     {{ kpi_card("Trading Mode", "data.trading_mode ? data.trading_mode.label : '—'", tone="info") }}
     {{ kpi_card("Active Strategies", "summary('active_strategies')", tone="info") }}
+    {# ⛔ NO SCANNER KPI. scanner = strategy 1:1, so an "Active Scanners" card
+       would restate the strategy count under a second name. Rama, 17-Aug:
+       strategy is the authoritative identity; the artwork's scanner slot is
+       filled by the real, non-duplicative Paused Strategies count. #}
     {{ kpi_card("Paused Strategies", "summary('paused_strategies')", tone="warn") }}
     {{ kpi_card("Alerts", "summary('alert_status')", tone="info") }}
-    {{ kpi_card("Entries", "entriesLabel()", tone="info") }}
+    {# Artwork KPI. Real audit source; renders '—' when nothing is recorded. #}
+    {{ kpi_card("Last Control Change", "summary('last_control_change')", tone="info") }}
   {% endcall %}
 
   <div class="ctl-shell">
@@ -139,7 +148,7 @@
       <div class="ctl-row ctl-row2">
 
         <section class="panel">
-          <h3 class="panel-title">3. ALERT CONTROLS</h3>
+          <h3 class="panel-title">4. ALERT CONTROLS</h3>
           <div class="ctl-trow">
             <span class="ctl-tlabel">Telegram Alerts</span>
             <span class="ctl-state" :class="onoff(data.alerts && data.alerts.telegram_enabled)"
@@ -151,7 +160,7 @@
         </section>
 
         <section class="panel ctl-limits">
-          <h3 class="panel-title">4. RUNTIME LIMIT CONTROLS</h3>
+          <h3 class="panel-title">5. RUNTIME LIMIT CONTROLS</h3>
           <table class="dt-table">
             <thead><tr>
               <th class="dt-th">Parameter</th>
@@ -177,7 +186,7 @@
         </section>
 
         <section class="panel ctl-protect">
-          <h3 class="panel-title">5. MARKET PROTECTION CONTROLS</h3>
+          <h3 class="panel-title">6. MARKET PROTECTION CONTROLS</h3>
 
           <button type="button" class="ctl-act ctl-act-warn"
                   :disabled="!planeUp() || busy" @click="pauseEntries()">
@@ -209,7 +218,7 @@
       <div class="ctl-row ctl-row3">
 
         <section class="panel">
-          <h3 class="panel-title">6. READINESS CHECK</h3>
+          <h3 class="panel-title">7. READINESS CHECK</h3>
           <div class="ctl-ready">
             <template x-for="r in (data.readiness || [])" :key="r.name">
               <div class="ctl-rtile" :class="readyCls(r.state)">
@@ -222,7 +231,7 @@
         </section>
 
         <section class="panel">
-          <h3 class="panel-title">7. CHANGE PREVIEW</h3>
+          <h3 class="panel-title">8. CHANGE PREVIEW</h3>
           <table class="dt-table" x-show="pending().length" x-cloak>
             <thead><tr>
               <th class="dt-th">Parameter</th>
@@ -247,7 +256,7 @@
         </section>
 
         <section class="panel ctl-confirm">
-          <h3 class="panel-title">8. CONFIRM CHANGE</h3>
+          <h3 class="panel-title">9. CONFIRM CHANGE</h3>
           <div x-show="pending().length" x-cloak>
             <p class="ctl-warn">⚠ You are about to apply:</p>
             <ul class="ctl-list">
@@ -273,7 +282,7 @@
       <div class="ctl-row ctl-row4">
 
         <section class="panel">
-          <h3 class="panel-title">9. BROKER COSTS <span class="panel-sub">(per order)</span></h3>
+          <h3 class="panel-title">10. BROKER COSTS <span class="panel-sub">(per order)</span></h3>
           <table class="dt-table">
             <tbody>
               <template x-for="c in brokerCosts()" :key="c.k">
@@ -288,7 +297,7 @@
         </section>
 
         <section class="panel">
-          <h3 class="panel-title">10. CONFIGURATION COMPARISON</h3>
+          <h3 class="panel-title">11. CONFIGURATION COMPARISON</h3>
           <table class="dt-table">
             <thead><tr>
               <th class="dt-th">Parameter</th><th class="dt-th">Change</th>
@@ -306,7 +315,7 @@
         </section>
 
         <section class="panel">
-          <h3 class="panel-title">11. HISTORY <span class="panel-sub">(recent changes)</span></h3>
+          <h3 class="panel-title">12. HISTORY <span class="panel-sub">(recent changes)</span></h3>
           <div class="tbl-scroll">
             <table class="dt-table">
               <thead><tr>
@@ -396,9 +405,23 @@
       </section>
 
       <section class="panel">
-        <h3 class="panel-title">SEARCH CONTROLS</h3>
+        <h3 class="panel-title">13. SEARCH CONTROLS</h3>
         <input class="flt" placeholder="Search strategies / controls…"
                x-model.debounce.200ms="search">
+      </section>
+
+      {# ── 14. EXPORT — the artwork's own number, unchanged.
+             Uses the SAME workbook writer as every other screen
+             export — ⛔ no second export architecture. The route rebuilds the
+             SAME payload this screen was served, so a cell cannot disagree
+             with the panel above it. ⛔ Read-only: it never touches the
+             control plane. #}
+      <section class="panel">
+        <h3 class="panel-title">14. EXPORT</h3>
+        <p class="ctl-note">Export the control data this screen is showing.</p>
+        <a class="ctl-btn ctl-btn-ok ctl-exp-btn" :href="exportUrl()"
+           title="Download this screen's control data as XLSX">
+          <span>⇩</span><span>Export to XLSX</span></a>
       </section>
     </aside>
   </div>
@@ -412,6 +435,11 @@ function controlsPage() {
   return Object.assign(pageBase("/api/controls/screen"), {
     staged: {}, confirmText: "", busy: false, search: "",
     actionError: "", actionOk: "",
+
+    /* 14. EXPORT — the same builder the screen reads, so the workbook cannot
+       disagree with the panels. GET only; it never reaches the control plane. */
+    exportUrl() { return "/api/export/controls-screen"; },
+
     modeStates: [
       {k: "INTRADAY_ONLY", label: "Intraday Only"},
       {k: "DELIVERY_ONLY", label: "Delivery Only"},

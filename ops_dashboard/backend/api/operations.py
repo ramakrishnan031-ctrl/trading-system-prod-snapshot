@@ -87,6 +87,27 @@ def post_controls_action():
     }), (200 if status == 200 else status)
 
 
+@operations_api.route("/api/export/controls-screen", methods=["GET"])
+@login_required
+def export_controls_screen():
+    """XLSX of the control data this screen is currently showing (artwork panel
+    "EXPORT — Export to XLSX").
+
+    ⭐ SAME builder, SAME arguments as `/api/controls/screen`, so an exported row
+    can never disagree with the row on screen.
+    ⭐ Reuses the established `_xlsx` writer shared by the other screen exports —
+    ⛔ no second export architecture is introduced.
+    ⛔ READ-ONLY: this composes the same payload and writes a workbook. It does
+    not contact the control plane and cannot operate any control.
+    """
+    from .analytics2 import _xlsx          # the one shared workbook writer
+
+    cfg = current_app.config["GUI_CONFIG"]
+    payload = controls.build_controls_screen(cfg)
+    return _xlsx(controls.export_sheets(payload),
+                 "controls_%s.xlsx" % (payload.get("today") or "unknown"))
+
+
 @operations_api.route("/api/trade-logs", methods=["GET"])
 @login_required
 def get_trade_logs():

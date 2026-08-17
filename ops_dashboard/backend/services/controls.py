@@ -32,6 +32,20 @@ from . import audit as audit_svc
 from . import config_view, freshness
 
 
+def _last_change_ts(history: list) -> Optional[str]:
+    """Timestamp of the newest recorded control action, or None.
+
+    ⛔ Returns None rather than a placeholder when nothing is recorded: the
+    artwork's "Last Control Change" KPI must read as an explicit gap, never as
+    a time that no audit row supports.
+    """
+    for row in history or []:
+        ts = row.get("ts") or row.get("timestamp")
+        if ts:
+            return str(ts)
+    return None
+
+
 def _strategy_rows(strategies: dict, live_states: Optional[dict]) -> list:
     """One row per configured strategy.
 
@@ -207,6 +221,14 @@ def build_controls_screen(cfg: dict, today: Optional[str] = None) -> dict:
             "trading_mode": mode_label,
             "active_strategies": f"{enabled_now} / {len(rows)}",
             "paused_strategies": f"{len(rows) - enabled_now} / {len(rows)}",
+            # ⛔ NO `active_scanners` KEY. scanner = strategy 1:1, so a scanner
+            # count is the strategy count under a second name (Rama, 17-Aug:
+            # strategy is the authoritative identity). Emitting one would let a
+            # second scanner concept back in through the payload.
+            # ARTWORK KPI — "Last Control Change". Real audit source, newest first.
+            # ⛔ None when nothing is recorded; the UI renders that as an em-dash
+            # rather than inventing a time.
+            "last_control_change": _last_change_ts(history),
             "trading_status": (ks or {}).get("state") or "INACTIVE",
             "alert_status": ("ENABLED" if alerts_cfg.get("telegram_enabled")
                              else ("DISABLED" if alerts_cfg.get("telegram_enabled") is False
@@ -220,3 +242,68 @@ def build_controls_screen(cfg: dict, today: Optional[str] = None) -> dict:
         },
         "config_view": cv,
     }
+
+
+def export_sheets(payload: dict) -> list:
+    """[(sheet, header, rows)] from the SAME payload the screen was served, so an
+    exported row can never disagree with the row on screen.
+
+    ⛔ An unavailable value exports as an explicit marker, ⛔ never as a blank —
+    a blank spreadsheet cell reads as zero or as "nothing happened".
+    ⭐ Scanner rows are NOT emitted: scanner = strategy 1:1, so a scanner sheet
+    would print one identity twice. The strategy sheet IS the control inventory.
+    """
+    def _c(v):
+        return "UNAVAILABLE" if v is None else v
+
+    acs = payload.get("active_controls_summary") or {}
+    plane = payload.get("control_plane") or {}
+    mode = payload.get("trading_mode") or {}
+    lim = payload.get("limits") or {}
+    conf, live = (lim.get("configured") or {}), (lim.get("live") or {})
+
+    summary = [
+        ("Generated For (IST date)", _c(payload.get("today"))),
+        ("Runtime As Of", _c(payload.get("as_of"))),
+        ("Control Plane Available", plane.get("available")),
+        ("Control Plane Reason", _c(plane.get("reason"))),
+        ("", ""),
+        ("Trading Mode", _c(acs.get("trading_mode"))),
+        ("Active Strategies", _c(acs.get("active_strategies"))),
+        ("Paused Strategies", _c(acs.get("paused_strategies"))),
+        ("Trading Status", _c(acs.get("trading_status"))),
+        ("Alert Status", _c(acs.get("alert_status"))),
+        ("Last Control Change", _c(acs.get("last_control_change"))),
+        ("", ""),
+        ("Simulation Mode", _c((payload.get("simulation_mode") or {}).get("mode"))),
+    ]
+
+    strat = [[r.get("label"), r.get("trade_type"), r.get("direction"),
+              r.get("configured_enabled"),
+              _c(r.get("live_enabled")), r.get("diverged")]
+             for r in (payload.get("strategies") or {}).get("rows", [])]
+
+    limits = [[k,
+               _c(conf.get(k)),
+               _c((live or {}).get(k))]
+              for k in ("max_daily_trades", "max_open_positions",
+                        "max_concentration_pct", "daily_loss_limit_pct")]
+
+    ready = [[r.get("name"), r.get("state"), r.get("detail")]
+             for r in (payload.get("readiness") or [])]
+
+    hist = [[_c(h.get("ts") or h.get("timestamp")),
+             _c(h.get("module")),
+             _c(h.get("action") or h.get("event_type")),
+             _c(h.get("user") or h.get("actor"))]
+            for h in (payload.get("control_history") or [])]
+
+    return [
+        ("Active Controls Summary", ["Item", "Value"], summary),
+        ("Strategy Controls",
+         ["Strategy", "Trade Type", "Direction", "Configured", "Live", "Diverged"],
+         strat),
+        ("Runtime Limits", ["Parameter", "Configured", "Live"], limits),
+        ("Readiness Check", ["Check", "State", "Detail"], ready),
+        ("Control History", ["Time", "Module", "Action", "By"], hist),
+    ]

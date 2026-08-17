@@ -5361,6 +5361,25 @@ main.content:has(> .ctl-page) { width: 100%; max-width: none; margin: 0;
 .ctl-page .ctl-btn:disabled { opacity: .45; cursor: not-allowed; }
 .ctl-page .ctl-foot { font-size: 13px; color: var(--dim); margin: 2px 0 0; }
 
+/* ── Browser-QA fix (17-Aug-2026), SCOPED TO `.ctl-page` ────────────────────
+   The right rail reused the GLOBAL Configuration-screen classes `.cfg-row` /
+   `.cfg-key`, which are sized for a full-width page:
+     · `.cfg-row` pins a 220px label column — inside a ~300px rail that leaves
+       too little for the value, so "Intraday Only" and "15 / 16" WRAPPED at
+       1920 where the artwork shows one line each.
+     · `.cfg-key` is `.76rem` = 12.16px against the artwork's 13px floor.
+   ⛔ The global rules are NOT touched — Screen 16 Configuration keeps its own
+   220px column and its own sizing. Verified at 1920x1080 and 1440x900. */
+.ctl-page .cfg-row { grid-template-columns: 1fr auto; }
+.ctl-page .cfg-key,
+.ctl-page .cfg-val { font-size: 13px; }
+
+/* 13. EXPORT — `.ctl-btn` is authored for <button>; the export control is an
+   <a href> (a real download link, so it degrades without JS). This only makes
+   the anchor lay out like its sibling buttons. */
+.ctl-page .ctl-exp-btn { display: inline-flex; align-items: center;
+  justify-content: center; gap: 8px; text-decoration: none; width: 100%; }
+
 /* Responsive: collapse toward the artwork's intent rather than stacking blindly. */
 @media (max-width: 1560px) {
   .ctl-page .ctl-shell { grid-template-columns: minmax(0, 1fr); }
