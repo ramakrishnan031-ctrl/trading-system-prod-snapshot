@@ -5394,3 +5394,168 @@ main.content:has(> .ctl-page) { width: 100%; max-width: none; margin: 0;
   .ctl-page .ctl-modegrid { grid-template-columns: minmax(0, 1fr); }
   .ctl-page .ctl-ready { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SCREEN 16 — CONFIGURATION  (`gui/16. Configuration.png` is BINDING)
+   Every rule is scoped to `.cfg16-page`. 13px readability floor held throughout.
+   ⛔ No new colour is introduced — every value below is an existing token.
+   📌 This header also CLOSES Screen 17's CSS window: its test bounds the block
+      at the next "\n   SCREEN " header and, while Screen 17 was last in the
+      file, that window ran to EOF. Same correction Screens 12/18/20/22 received.
+   ═══════════════════════════════════════════════════════════════════════════ */
+main.content:has(> .cfg16-page) { width: 100%; max-width: none; margin: 0;
+  padding: 12px 16px 10px 12px; }
+
+.cfg16-page { display: flex; flex-direction: column; gap: 12px; }
+.cfg16-page .panel { margin-bottom: 0; }
+.cfg16-page .panel-sub { font-size: 13px; color: var(--dim); font-weight: 500; }
+.cfg16-page .mono { font-size: 13px; }
+.cfg16-page .dt-td { font-size: 13px; }
+.cfg16-page .dt-th { font-size: 13px; color: var(--muted); }
+.cfg16-page code { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 13px; color: var(--muted); }
+
+/* Provenance strip — which configuration this page is showing. */
+.cfg16-page .cfg16-prov { display: flex; flex-wrap: wrap; align-items: center;
+  gap: 14px; padding: 7px 12px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--panel2); font-size: 13px; color: var(--muted); }
+.cfg16-page .cfg16-provtag { font-weight: 700; letter-spacing: .03em;
+  padding: 2px 9px; border-radius: 999px; font-size: 13px; }
+.cfg16-page .cfg16-ok { background: var(--pos-tint); color: var(--pos); }
+.cfg16-page .cfg16-warn { background: var(--warn-tint); color: var(--yellow); }
+
+/* KPI strip: the shared card, plus the artwork's sub-line. */
+.cfg16-page .cfg16-kpis .kpi-card { min-width: 0; }
+.cfg16-page .cfg16-kpisub { display: block; margin-top: 3px; font-size: 13px;
+  color: var(--muted); font-weight: 500; line-height: 1.35; }
+.cfg16-page .kpi-warn .cfg16-kpisub { color: var(--orange); }
+
+/* Shell: main column + right rail, mirroring the artwork's composition. */
+.cfg16-page .cfg16-shell { display: grid; grid-template-columns: minmax(0, 1fr) 380px;
+  gap: 12px; align-items: start; }
+.cfg16-page .cfg16-main { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.cfg16-page .cfg16-rail { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+
+/* Category tabs — the artwork's horizontal strip. It SCROLLS rather than
+   wrapping: the artwork shows one row, and a wrapped second row would move
+   every panel below it down by a line at some widths. */
+.cfg16-page .cfg16-tabs { display: flex; gap: 6px; overflow-x: auto;
+  padding: 2px 0 8px; border-bottom: 1px solid var(--border); margin-bottom: 10px; }
+.cfg16-page .cfg16-tab { flex: 0 0 auto; background: transparent; color: var(--muted);
+  border: 1px solid var(--border); border-radius: 999px; padding: 5px 12px;
+  font-size: 13px; font-weight: 600; font-family: inherit; cursor: pointer;
+  white-space: nowrap; }
+.cfg16-page .cfg16-tab:hover { color: var(--text); border-color: var(--blue); }
+.cfg16-page .cfg16-tab.is-on { background: var(--accent-tint); color: var(--blue);
+  border-color: var(--blue); }
+
+.cfg16-page .cfg16-secttl { margin: 0 0 9px; font-size: 13px; font-weight: 700;
+  letter-spacing: .05em; color: var(--muted); text-transform: uppercase; }
+
+/* SYSTEM CONFIGURATION quad — four cards across, exactly as drawn. */
+.cfg16-page .cfg16-cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px; }
+.cfg16-page .cfg16-card { border: 1px solid var(--border); border-radius: 8px;
+  background: var(--panel2); padding: 10px 11px; min-width: 0; }
+.cfg16-page .cfg16-cardttl { margin: 0 0 8px; font-size: 13px; font-weight: 700;
+  letter-spacing: .04em; color: var(--text); }
+.cfg16-page .cfg16-kv { display: flex; align-items: baseline; justify-content: space-between;
+  gap: 10px; padding: 4px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+.cfg16-page .cfg16-kv:last-child { border-bottom: 0; }
+.cfg16-page .cfg16-k { color: var(--muted); min-width: 0; flex: 1 1 auto; }
+/* ⚠️ FOUND BY RENDERING THE PAGE, not by the tests: `white-space: nowrap` here
+   made the Capital card's Leverage value — a per-product MAP, e.g. "INTRADAY 5x
+   / COVER_ORDER 6x / DELIVERY 1x / BRACKET_ORDER 5x" — overrun its card and
+   print on top of its own label at 1920 AND spill past the panel edge at 1440.
+   ⛔ The fix is to let a long value WRAP, ⛔ not to drop products from the map:
+   the leverage map is real configuration and truncating it would show a
+   partial one as if it were the whole. Numbers stay right-aligned and tabular. */
+.cfg16-page .cfg16-v { color: var(--text); font-weight: 600; text-align: right;
+  font-variant-numeric: tabular-nums; white-space: normal;
+  /* ⚠️ `break-word`, ⛔ NOT `anywhere`: `anywhere` split a SHORT value —
+     "22.00%" rendered as "22.0" / "0%" — when a long label squeezed its column.
+     `break-word` only breaks a token that cannot fit on a line of its own. */
+  overflow-wrap: break-word; flex: 0 1 auto; max-width: 68%; }
+
+.cfg16-page .cfg16-catscroll { max-height: 340px; overflow: auto; }
+
+/* Scoring + slippage side by side, as the artwork draws them. */
+.cfg16-page .cfg16-row2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px; align-items: start; }
+.cfg16-page .cfg16-thresh { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px; margin-bottom: 10px; }
+.cfg16-page .cfg16-th { display: flex; flex-direction: column; gap: 2px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--panel2);
+  padding: 7px 10px; }
+.cfg16-page .cfg16-th .cfg16-v { text-align: left; font-size: 15px; }
+.cfg16-page .cfg16-wcols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px; }
+.cfg16-page .cfg16-wtbl { width: 100%; }
+.cfg16-page .cfg16-total { display: flex; align-items: baseline;
+  justify-content: space-between; gap: 10px; margin-top: 9px; padding-top: 8px;
+  border-top: 1px solid var(--border); font-size: 13px; font-weight: 700; }
+.cfg16-page .cfg16-total .cfg16-k { color: var(--text); }
+
+.cfg16-page .cfg16-slipparams { display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 14px; margin-top: 10px;
+  padding-top: 8px; border-top: 1px solid var(--border); }
+.cfg16-page .cfg16-note { margin: 8px 0 0; font-size: 13px; color: var(--dim);
+  line-height: 1.45; }
+.cfg16-page .cfg16-foot { margin: 2px 0 0; font-size: 13px; color: var(--dim); }
+
+/* Strategy table: read-only pills, ⛔ never switches. */
+.cfg16-page .cfg16-stratscroll { max-height: 640px; overflow: auto; }
+.cfg16-page .cfg16-pill { display: inline-block; padding: 2px 10px; border-radius: 999px;
+  font-size: 13px; font-weight: 700; letter-spacing: .02em; }
+.cfg16-page .cfg16-on { background: var(--pos-tint); color: var(--pos); }
+.cfg16-page .cfg16-off { background: var(--neg-tint); color: var(--neg); }
+.cfg16-page .cfg16-badge { display: inline-block; padding: 2px 9px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--panel2); color: var(--muted);
+  font-size: 13px; font-weight: 600; }
+
+/* Rail: comparison + history. Old/new keep the dashboard's own semantics. */
+.cfg16-page .cfg16-cmphead { display: flex; flex-wrap: wrap; align-items: baseline;
+  gap: 8px; margin-bottom: 8px; font-size: 13px; color: var(--muted); }
+.cfg16-page .cfg16-cur { color: var(--blue); font-weight: 700; }
+.cfg16-page .cfg16-vs { color: var(--dim); }
+.cfg16-page .cfg16-old { color: var(--muted); }
+.cfg16-page .cfg16-new { color: var(--pos); font-weight: 600; }
+.cfg16-page .cfg16-cmpscroll { max-height: 240px; overflow: auto; }
+.cfg16-page .cfg16-histscroll { max-height: 280px; overflow: auto; }
+.cfg16-page .cfg16-more { margin-top: 8px; background: transparent; color: var(--blue);
+  border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px;
+  font-size: 13px; font-weight: 600; font-family: inherit; cursor: pointer; }
+.cfg16-page .cfg16-more:hover { border-color: var(--blue); }
+
+/* Search + export. */
+.cfg16-page .cfg16-search { width: 100%; font-size: 13px; }
+.cfg16-page .cfg16-chips { display: flex; flex-wrap: wrap; align-items: center;
+  gap: 6px; margin-top: 9px; }
+.cfg16-page .cfg16-chipslbl { font-size: 13px; color: var(--dim); margin-right: 2px; }
+.cfg16-page .cfg16-chip { background: var(--panel2); color: var(--muted);
+  border: 1px solid var(--border); border-radius: 6px; padding: 3px 10px;
+  font-size: 13px; font-weight: 600; font-family: inherit; cursor: pointer; }
+.cfg16-page .cfg16-chip:hover { color: var(--text); border-color: var(--blue); }
+.cfg16-page .cfg16-chip.is-on { background: var(--accent-tint); color: var(--blue);
+  border-color: var(--blue); }
+.cfg16-page .cfg16-exp { display: inline-flex; align-items: center; gap: 8px;
+  width: 100%; justify-content: center; padding: 8px 12px; border-radius: 8px;
+  border: 1px solid var(--green); background: var(--pos-tint); color: var(--pos);
+  font-size: 13px; font-weight: 700; text-decoration: none; }
+.cfg16-page .cfg16-exp:hover { background: var(--panel2); }
+
+/* Narrower viewports: the rail drops under the main column, the quad halves,
+   and the two side-by-side panels stack. ⛔ Nothing is hidden at any width —
+   a column behind a scroll is recoverable; a column that renders nothing is not. */
+@media (max-width: 1600px) {
+  .cfg16-page .cfg16-slipparams { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 1500px) {
+  .cfg16-page .cfg16-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 1280px) {
+  .cfg16-page .cfg16-shell { grid-template-columns: minmax(0, 1fr); }
+  .cfg16-page .cfg16-row2 { grid-template-columns: minmax(0, 1fr); }
+  .cfg16-page .cfg16-thresh { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .cfg16-page .cfg16-slipparams { grid-template-columns: minmax(0, 1fr); }
+}

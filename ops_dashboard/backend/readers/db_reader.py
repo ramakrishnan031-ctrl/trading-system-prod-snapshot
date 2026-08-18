@@ -4184,3 +4184,22 @@ def holdings_system_rows(cfg: dict) -> list:
             (*states, _LIST_CAP),
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+# ── SCREEN 16 — CONFIGURATION (18-Aug-2026) ──────────────────────────────────
+# ADDITIVE: `config_snapshot_history` above is byte-unchanged and keeps its
+# callers (M20 drift banner / last-change date). It selects date+ts+hash ONLY,
+# which is all the drift banner needs; the approved CONFIGURATION COMPARISON and
+# CONFIGURATION HISTORY panels need the SNAPSHOT BODY as well, because a real
+# "Parameter / Old Value / New Value" row can only come from diffing two
+# config_json trees. ⛔ Nothing here is derived from a hash — a hash says THAT
+# something changed, never WHAT.
+def config_snapshot_trail(cfg: dict, limit: int = 40) -> list:
+    """Recent snapshots newest-first WITH their config_json, for leaf diffing."""
+    with _ro(cfg) as conn:
+        rows = conn.execute(
+            "SELECT snapshot_date, snapshot_ts, mode, trade_type, config_hash, "
+            "config_json FROM config_snapshots ORDER BY snapshot_ts DESC LIMIT ?",
+            (int(limit),),
+        ).fetchall()
+    return [dict(r) for r in rows]

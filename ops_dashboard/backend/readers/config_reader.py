@@ -285,3 +285,52 @@ def get_scanner_registry(cfg: dict) -> list:
                     "strategy": str(strategy) if strategy else None,
                     "chartink_url": str(url) if url else None})
     return out
+
+
+# ── SCREEN 16 — CONFIGURATION (18-Aug-2026) ──────────────────────────────────
+# ADDITIVE. Two approved panels — SCORING ENGINE (WEIGHTS) and BROKER COSTS —
+# read files that no reader exposed yet. ⛔ Neither is inside `config_json`:
+# scoring lives in `config/scoring_weights.yaml` and broker costs in
+# `config/broker_costs.yaml`, so a snapshot-only screen could not have shown
+# either. Both return {} when the file is missing, and the screen then renders
+# its unavailable state — ⛔ no default weight and no default cost is ever
+# invented, because a fabricated cost reads exactly like a measured one.
+def get_scoring_weights(cfg: dict) -> dict:
+    """`config/scoring_weights.yaml` verbatim, read-only. {} if unreadable."""
+    path = os.path.join(cfg["paths"]["config_dir"], "scoring_weights.yaml")
+    if not os.path.isfile(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            raw = yaml.safe_load(fh) or {}
+    except (OSError, yaml.YAMLError):
+        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def get_broker_costs(cfg: dict, broker: Optional[str] = None) -> dict:
+    """`config/broker_costs.yaml` for ONE broker, read-only. {} if unreadable.
+
+    The file is keyed by broker name (measured 18-Aug: a single `zerodha` key).
+    `broker` selects the block; when it is absent or unknown the SOLE key is used
+    if there is exactly one, otherwise {} — ⛔ never an arbitrary first key,
+    which would silently show another broker's costs as this broker's.
+    """
+    path = os.path.join(cfg["paths"]["config_dir"], "broker_costs.yaml")
+    if not os.path.isfile(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            raw = yaml.safe_load(fh) or {}
+    except (OSError, yaml.YAMLError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    if broker:
+        block = raw.get(str(broker).strip().lower())
+        if isinstance(block, dict):
+            return block
+    if len(raw) == 1:
+        only = next(iter(raw.values()))
+        return only if isinstance(only, dict) else {}
+    return {}
