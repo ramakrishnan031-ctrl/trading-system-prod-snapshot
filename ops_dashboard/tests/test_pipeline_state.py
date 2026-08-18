@@ -6,26 +6,49 @@ import pytest
 from backend.services import pipeline_state as ps
 
 
-# ── Pure color function: table-driven ──
-@pytest.mark.parametrize("kind,count,failures,age,expected,color", [
-    ("intake",           0, 0, None, False, "GRAY"),
-    ("intake",           5, 0, None, False, "BLUE"),
-    ("validated",        0, 0, None, False, "GRAY"),
-    ("validated",        5, 0, 9999, True,  "GREEN"),
-    ("duplicate",        0, 0, None, False, "GRAY"),
-    ("duplicate",        3, 0, None, False, "PURPLE"),
-    ("reject",           0, 0, None, False, "GRAY"),
-    ("reject",           2, 0, None, False, "RED"),
-    ("validation_issue", 0, 0, None, False, "GRAY"),
-    ("validation_issue", 1, 0, None, False, "ORANGE"),
-    ("success",          0, 0, None, False, "GRAY"),
-    ("success",          5, 0, 9999, True,  "GREEN"),
-    ("success",          5, 2, 10,   True,  "RED"),     # failures override
-    ("success",          5, 0, 30,   True,  "YELLOW"),  # fresh + expected → processing
-    ("success",          5, 0, 30,   False, "GREEN"),   # not expected → no yellow
+# ── Pure colour function: table-driven ──
+# ⭐ THE RULE CHANGED ON 18-Aug AND THIS TABLE CHANGED WITH IT, ⛔ not to make a
+# red test green: the approved Screen-02 artwork does not tint a card by
+# freshness (its Orders Filled at 7 s is GREEN while its SL Hit at 141 s is
+# AMBER), so `derive_color` now takes the stage's FIXED semantic colour and gates
+# it on count/failures alone. The clock left the signature entirely — the freshest
+# stage is marked by `active`, a ring, not a colour.
+@pytest.mark.parametrize("semantic,count,failures,colour", [
+    # a zero stage is neutral WHATEVER its semantic colour
+    ("ORANGE", 0, 0, "GRAY"),
+    ("GREEN",  0, 0, "GRAY"),
+    ("BLUE",   0, 0, "GRAY"),
+    ("PURPLE", 0, 0, "GRAY"),
+    ("RED",    0, 0, "GRAY"),
+    # a counted stage wears its own semantic colour
+    ("ORANGE", 5, 0, "ORANGE"),
+    ("GREEN",  5, 0, "GREEN"),
+    ("BLUE",   5, 0, "BLUE"),
+    ("PURPLE", 3, 0, "PURPLE"),
+    ("RED",    2, 0, "RED"),
+    ("GRAY",   7, 0, "GRAY"),
+    # failures override every semantic colour
+    ("GREEN",  5, 2, "RED"),
+    ("BLUE",   5, 1, "RED"),
+    # ⛔ a zero stage with failures is still RED — failures outrank the zero rule
+    ("GREEN",  0, 3, "RED"),
 ])
-def test_derive_color(kind, count, failures, age, expected, color):
-    assert ps.derive_color(kind, count, failures, age, expected) == color
+def test_derive_colour(semantic, count, failures, colour):
+    assert ps.derive_color(semantic, count, failures) == colour
+
+
+def test_colour_does_not_depend_on_any_clock():
+    """⛔ THE SIGNATURE ITSELF must not accept a freshness reading again.
+
+    A regression here would not show up as a wrong colour in any fixture — it
+    would show up months later as a card that changes colour because a poll
+    landed. So the guard is on the signature, not on one sampled output.
+    """
+    import inspect
+    params = list(inspect.signature(ps.derive_color).parameters)
+    assert params == ["semantic", "count", "failures"]
+    for banned in ("age", "last_event_age_sec", "expected_activity", "now"):
+        assert banned not in params
 
 
 # ── Full pipeline build against the fixture ──

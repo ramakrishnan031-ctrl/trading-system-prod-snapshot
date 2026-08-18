@@ -544,26 +544,34 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 .dash-page .mc-title { margin: 0; font-size: 15px; font-weight: 700; letter-spacing: .06em;
   text-transform: uppercase; color: var(--ink); }
 .dash-page .mc-arw { color: var(--blue); font-weight: 700; }
-.dash-page .mc-flow { font-size: 12px; font-weight: 600; color: var(--blue); }
-.dash-page .mc-today { font-size: 12px; font-weight: 500; color: var(--dim);
+.dash-page .mc-flow { font-size: 13px; font-weight: 600; color: var(--blue); }
+.dash-page .mc-today { font-size: 13px; font-weight: 500; color: var(--dim);
   text-transform: none; letter-spacing: 0; }
-.dash-page .mc-link { margin-left: auto; font-size: 12px; font-weight: 600; color: var(--blue);
+.dash-page .mc-link { margin-left: auto; font-size: 13px; font-weight: 600; color: var(--blue);
   text-decoration: none; white-space: nowrap; }
 .dash-page .mc-link:hover { text-decoration: underline; }
 .dash-page .mc-link-foot { display: inline-block; margin: 12px 0 0; }
-.dash-page .mc-hint { margin-top: 12px; font-size: 12px; color: var(--dim); }
+.dash-page .mc-hint { margin-top: 12px; font-size: 13px; color: var(--dim); }
 .dash-page .mc-hint-ic { margin-right: 5px; }
 
 /* ── TODAY'S TRADING SUMMARY — 12 KPI cards ── */
-.dash-page .kpi-deck { display: grid; grid-template-columns: repeat(12, 1fr); gap: 10px; }
-@media (max-width: 1400px) { .dash-page .kpi-deck { grid-template-columns: repeat(6, 1fr); } }
-@media (max-width: 1000px) { .dash-page .kpi-deck { grid-template-columns: repeat(4, 1fr); } }
-@media (max-width: 760px)  { .dash-page .kpi-deck { grid-template-columns: repeat(3, 1fr); } }
-@media (max-width: 520px)  { .dash-page .kpi-deck { grid-template-columns: repeat(2, 1fr); } }
+.dash-page .kpi-deck { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 10px; }
+/* ⭐ 1600, ⛔ not 1400. The old breakpoint sat just BELOW 1440, so a 1440
+   viewport kept twelve tracks, could not fit them, and pushed the entire page
+   into a horizontal overflow. Six across keeps the cards readable at 1440-1600;
+   the artwork's twelve-across survives at its own 1920 design width. */
+@media (max-width: 1600px) { .dash-page .kpi-deck { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
+@media (max-width: 1000px) { .dash-page .kpi-deck { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+@media (max-width: 760px)  { .dash-page .kpi-deck { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 520px)  { .dash-page .kpi-deck { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
+/* ⭐ THE APPROVED ARTWORK DRAWS A FULL BORDER ON ALL FOUR SIDES OVER A TINTED
+   FILL — ⛔ not a 3px rail along the top of an untinted card, which is what this
+   deck shipped until 18-Aug. The tone paints `border-color` + `background`
+   below; the base keeps the neutral pair so an untoned card still reads. */
 .dash-page .kc { display: flex; flex-direction: column; gap: 9px; min-height: 108px;
   padding: 12px 12px 11px; background: var(--card); border: 1px solid var(--card-bd);
-  border-top: 3px solid var(--gray); border-radius: 10px; color: var(--text);
+  border-radius: 10px; color: var(--text);
   text-decoration: none; transition: transform .12s ease, border-color .12s ease; }
 .dash-page .kc:hover { transform: translateY(-2px); }
 .dash-page .kc-top { display: flex; align-items: center; gap: 7px; }
@@ -571,54 +579,89 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
   display: inline-flex; align-items: center; justify-content: center; }
 .dash-page .kc-ic svg { width: 15px; height: 15px; }
 .dash-page .kc-label { font-size: 13px; font-weight: 600; color: var(--muted); line-height: 1.15; }
+/* ⛔ THE VALUE IS NEVER TINTED. All twelve numbers on the artwork are WHITE —
+   the tone lives in the border and the icon chip, so the deck reads as one row
+   of figures instead of twelve competing colours. */
 .dash-page .kc-val { font-size: 29px; font-weight: 800; line-height: 1.02;
-  font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+  color: var(--text); font-variant-numeric: tabular-nums; letter-spacing: -.01em;
+  min-width: 0; overflow-wrap: break-word; }
+/* Length-stepped, so the artwork's 29px survives for every value that fits.
+   ⛔ `break-word` above and NOT `anywhere`: `anywhere` splits SHORT values too
+   (Screen 16 measured "22.00%" breaking into "22.0"/"0%"). */
+.dash-page .kc-val-md { font-size: 24px; }
+.dash-page .kc-val-sm { font-size: 20px; }
+.dash-page .kc-val-xs { font-size: 17px; }
 .dash-page .kc-foot { display: flex; align-items: flex-end; justify-content: space-between;
   gap: 6px; margin-top: auto; }
-.dash-page .kc-sub { font-size: 11px; color: var(--dim); }
+.dash-page .kc-sub { font-size: 13px; color: var(--dim); }
 .dash-page .kc-spark { width: 56px; height: 20px; }
 .dash-page .kc-spark .spark-line { stroke: var(--pos); stroke-width: 1.5; }
-/* tone families: top rail + icon chip + value color */
-.dash-page .kc-info { border-top-color: var(--blue); }
+.dash-page .kc-spark.spark-signals .spark-line { stroke: var(--blue); }
+/* tone families: full border + tinted fill + icon chip. ⭐ `neutral` is the
+   artwork's own treatment for Open Trades / Closed Trades / Profit Factor —
+   a plain card with a BLUE icon, ⛔ not a blue card. */
+.dash-page .kc-neutral { border-color: var(--card-bd); }
+.dash-page .kc-neutral .kc-ic { background: rgba(var(--t-blue), .15); color: var(--blue); }
+.dash-page .kc-info { border-color: rgba(var(--t-blue), .5); background: rgba(var(--t-blue), .07); }
 .dash-page .kc-info .kc-ic { background: rgba(var(--t-blue), .15); color: var(--blue); }
-.dash-page .kc-info .kc-val { color: #7cb2ff; }
-.dash-page .kc-pos { border-top-color: var(--green); }
+.dash-page .kc-pos { border-color: rgba(var(--t-green), .5); background: rgba(var(--t-green), .07); }
 .dash-page .kc-pos .kc-ic { background: rgba(var(--t-green), .16); color: var(--pos); }
-.dash-page .kc-pos .kc-val { color: var(--pos); }
-.dash-page .kc-neg { border-top-color: var(--red); }
+.dash-page .kc-neg { border-color: rgba(var(--t-red), .5); background: rgba(var(--t-red), .07); }
 .dash-page .kc-neg .kc-ic { background: rgba(var(--t-red), .16); color: var(--neg); }
-.dash-page .kc-neg .kc-val { color: var(--neg); }
-.dash-page .kc-warn { border-top-color: var(--orange); }
+.dash-page .kc-warn { border-color: rgba(var(--t-orange), .5); background: rgba(var(--t-orange), .07); }
 .dash-page .kc-warn .kc-ic { background: rgba(var(--t-orange), .16); color: var(--orange); }
-.dash-page .kc-warn .kc-val { color: var(--orange); }
 
 /* ── SIGNAL → TRADE PIPELINE — 13 stage cards, colored top-rail, arrows ── */
-.dash-page .pl-rail { display: flex; gap: 14px; overflow-x: auto; padding: 2px 2px 8px; }
-.dash-page .pl-card { position: relative; flex: 1 1 0; min-width: 90px; padding: 13px 9px;
-  background: var(--card); border: 1px solid var(--card-bd); border-top: 3px solid var(--gray);
+.dash-page .pl-rail { display: flex; gap: 10px; overflow-x: auto; padding: 2px 2px 8px; }
+/* Same correction as the KPI deck: the artwork's stage cards carry a full
+   coloured border over a tinted fill, ⛔ not a top rail. */
+.dash-page .pl-card { position: relative; flex: 1 1 0; min-width: 92px; padding: 13px 7px;
+  background: var(--card); border: 1px solid var(--card-bd);
   border-radius: 9px; display: flex; flex-direction: column; gap: 5px; }
-.dash-page .pl-card:not(:last-child)::after { content: "→"; position: absolute; right: -11px;
+.dash-page .pl-card:not(:last-child)::after { content: "→"; position: absolute; right: -9px;
   top: 50%; transform: translateY(-50%); color: var(--dim); font-size: 13px; line-height: 1; z-index: 1; }
-.dash-page .pl-name { font-size: 13.5px; font-weight: 600; color: var(--muted);
-  line-height: 1.12; min-height: 2.24em; display: -webkit-box; -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical; overflow: hidden; }
+/* ⭐ ONE LINE, as the artwork draws every stage. The two-line reservation here
+   existed only to hold "Capital-Rejected" and "Manual/Other-Exit"; both names
+   were the build's own hyphenation, and with the artwork's spellings the
+   longest label fits on one line. */
+.dash-page .pl-name { font-size: 13px; font-weight: 600; color: var(--muted);
+  line-height: 1.15; min-height: 1.15em; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; letter-spacing: -.005em; }
 .dash-page .pl-count { font-size: 26px; font-weight: 800; line-height: 1;
   font-variant-numeric: tabular-nums; }
-.dash-page .pl-last { font-size: 11px; color: var(--dim); white-space: nowrap; }
+.dash-page .pl-last { font-size: 13px; color: var(--dim); white-space: nowrap; }
+/* ⭐ The freshest stage keeps a RING, ⛔ not a colour — that is how the live
+   signal survives a palette the artwork fixes per stage. */
 .dash-page .pl-active { box-shadow: 0 0 0 1px rgba(var(--t-yellow), .45); }
-.dash-page .pl-GRAY   { border-top-color: #3a4048; }        .dash-page .pl-GRAY .pl-count   { color: var(--dim); }
-.dash-page .pl-BLUE   { border-top-color: var(--blue); }    .dash-page .pl-BLUE .pl-count   { color: #7cb2ff; }
-.dash-page .pl-YELLOW { border-top-color: var(--yellow); }  .dash-page .pl-YELLOW .pl-count { color: var(--yellow); }
-.dash-page .pl-ORANGE { border-top-color: var(--orange); }  .dash-page .pl-ORANGE .pl-count { color: var(--orange); }
-.dash-page .pl-GREEN  { border-top-color: var(--green); }   .dash-page .pl-GREEN .pl-count  { color: var(--pos); }
-.dash-page .pl-RED    { border-top-color: var(--red); }     .dash-page .pl-RED .pl-count    { color: var(--neg); }
-.dash-page .pl-PURPLE { border-top-color: var(--purple); }  .dash-page .pl-PURPLE .pl-count { color: var(--purple); }
+/* ⛔ A ZERO STAGE IS NEUTRAL, and its count is WHITE — exactly as the artwork
+   draws Duplicate 0 and Manual Exit 0. A counted stage wears its own colour. */
+.dash-page .pl-GRAY   { border-color: var(--card-bd); }
+.dash-page .pl-GRAY .pl-count   { color: var(--text); }
+.dash-page .pl-BLUE   { border-color: rgba(var(--t-blue), .55);   background: rgba(var(--t-blue), .07); }
+.dash-page .pl-BLUE .pl-count   { color: #7cb2ff; }
+.dash-page .pl-YELLOW { border-color: rgba(var(--t-yellow), .55); background: rgba(var(--t-yellow), .07); }
+.dash-page .pl-YELLOW .pl-count { color: var(--yellow); }
+.dash-page .pl-ORANGE { border-color: rgba(var(--t-orange), .6);  background: rgba(var(--t-orange), .08); }
+.dash-page .pl-ORANGE .pl-count { color: var(--orange); }
+.dash-page .pl-GREEN  { border-color: rgba(var(--t-green), .55);  background: rgba(var(--t-green), .07); }
+.dash-page .pl-GREEN .pl-count  { color: var(--pos); }
+.dash-page .pl-RED    { border-color: rgba(var(--t-red), .6);     background: rgba(var(--t-red), .08); }
+.dash-page .pl-RED .pl-count    { color: var(--neg); }
+.dash-page .pl-PURPLE { border-color: rgba(var(--t-purple), .55); background: rgba(var(--t-purple), .07); }
+.dash-page .pl-PURPLE .pl-count { color: var(--purple); }
 
 /* ── 3-COLUMN OPS ROW ── */
 /* Capacity + Service Health widened (single-line labels), Recent Events trimmed;
    margin-bottom matches the standard 16px section rhythm so Strategy Summary below
    isn't attached to this row. */
-.dash-page .mc-3col { display: grid; grid-template-columns: 46fr 29fr 25fr; gap: 16px;
+/* ⭐ `minmax(0, …)` IS LOAD-BEARING, ⛔ not tidying. An `fr` track's default
+   floor is min-content, so ONE long unbreakable string in Recent Events sized
+   the third column by itself: the measured render was 537/300/830px against the
+   46/29/25 written here, and the widened content column pushed every sibling
+   panel past the viewport at 1440. The feed now also bounds its own note
+   server-side, so this is the second of two independent guards. */
+.dash-page .mc-3col { display: grid;
+  grid-template-columns: minmax(0, 46fr) minmax(0, 29fr) minmax(0, 25fr); gap: 16px;
   align-items: start; margin-bottom: 16px; }
 @media (max-width: 1400px) { .dash-page .mc-3col { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 900px)  { .dash-page .mc-3col { grid-template-columns: 1fr; } }
@@ -626,34 +669,40 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 
 /* Capacity table */
 .dash-page .cap-tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
-.dash-page .cap-tbl th { text-align: left; padding: 0 8px 8px; font-size: 11px; font-weight: 600;
+.dash-page .cap-tbl th { text-align: left; padding: 0 8px 8px; font-size: 13px; font-weight: 600;
   text-transform: uppercase; letter-spacing: .04em; color: var(--dim); border-bottom: 1px solid var(--border); }
 .dash-page .cap-tbl td { padding: 9px 8px; border-bottom: 1px solid var(--border-soft); vertical-align: middle; }
 .dash-page .cap-tbl tr:last-child td { border-bottom: none; }
 .dash-page .cap-tbl .rt { text-align: right; }
 .dash-page .cap-lim { font-weight: 600; white-space: nowrap; }
-.dash-page .cap-new { margin-left: 6px; padding: 1px 5px; font-size: 9px; font-weight: 700;
+.dash-page .cap-new { margin-left: 6px; padding: 1px 5px; font-size: 13px; font-weight: 700;
   color: var(--blue); background: rgba(var(--t-blue), .14); border-radius: 4px; vertical-align: middle; }
 .dash-page .usage { display: flex; align-items: center; gap: 9px; min-width: 128px; }
-.dash-page .usage-pct { flex: 0 0 auto; width: 42px; text-align: right; font-size: 12px;
+/* ⭐ Below 1600 the usage cell gives width back to STATUS rather than pushing
+   it behind the panel's scroll as half a word. */
+@media (max-width: 1600px) {
+  .dash-page .usage { min-width: 84px; gap: 6px; }
+  .dash-page .cap-tbl th, .dash-page .cap-tbl td { padding-left: 5px; padding-right: 5px; }
+}
+.dash-page .usage-pct { flex: 0 0 auto; width: 42px; text-align: right; font-size: 13px;
   font-variant-numeric: tabular-nums; color: var(--muted); }
 .dash-page .usage-bar { flex: 1; height: 6px; background: var(--bg); border-radius: 4px; overflow: hidden; }
 .dash-page .usage-fill { display: block; height: 100%; border-radius: 4px; }
 .dash-page .uf-ok { background: var(--green); }
 .dash-page .uf-warn { background: var(--yellow); }
 .dash-page .uf-crit { background: var(--red); }
-.dash-page .cap-badge { font-size: 11px; font-weight: 700; letter-spacing: .03em; }
+.dash-page .cap-badge { font-size: 13px; font-weight: 700; letter-spacing: .03em; }
 .dash-page .cb-OK { color: var(--pos); }
 .dash-page .cb-WARNING { color: var(--orange); }
 .dash-page .cb-BREACH { color: var(--neg); }
 .dash-page .cb-UNAVAILABLE, .dash-page .cb-AWAITING, .dash-page .cb-INERT { color: var(--dim); }
-.dash-page .cap-legend { display: flex; gap: 16px; margin-top: 12px; font-size: 11px; color: var(--muted); }
+.dash-page .cap-legend { display: flex; gap: 16px; margin-top: 12px; font-size: 13px; color: var(--muted); }
 .dash-page .cap-legend .lg { display: inline-flex; align-items: center; gap: 6px; }
 .dash-page .lg-dot { width: 9px; height: 9px; border-radius: 50%; }
 
 /* Service Health table */
 .dash-page .svc-tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
-.dash-page .svc-tbl th { text-align: left; padding: 0 6px 8px; font-size: 11px; font-weight: 600;
+.dash-page .svc-tbl th { text-align: left; padding: 0 6px 8px; font-size: 13px; font-weight: 600;
   text-transform: uppercase; letter-spacing: .04em; color: var(--dim); border-bottom: 1px solid var(--border); }
 .dash-page .svc-tbl th.rt, .dash-page .svc-tbl td.rt { text-align: right; }
 .dash-page .svc-tbl td { padding: 9px 6px; border-bottom: 1px solid var(--border-soft); }
@@ -663,26 +712,34 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 .dash-page .dot-ok { background: var(--green); box-shadow: 0 0 0 3px rgba(var(--t-green), .18); }
 .dash-page .dot-down { background: var(--red); box-shadow: 0 0 0 3px rgba(var(--t-red), .18); }
 .dash-page .dot-idle { background: var(--dim); }
-.dash-page .svc-badge { padding: 2px 7px; font-size: 10px; font-weight: 700; letter-spacing: .04em; border-radius: 5px; }
+.dash-page .svc-badge { padding: 2px 7px; font-size: 13px; font-weight: 700; letter-spacing: .04em; border-radius: 5px; }
 .dash-page .svb-active { color: var(--pos); background: rgba(var(--t-green), .14); }
 .dash-page .svb-inactive { color: var(--neg); background: rgba(var(--t-red), .14); }
 .dash-page .svb-idle { color: var(--dim); background: rgba(var(--t-gray), .14); }
-.dash-page .svc-upd { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.dash-page .svc-upd { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+/* ⛔ UNAVAILABLE IS A STATE, NOT A TIME, so it is not set in the tabular
+   figure style the real stamps use — a reader must not scan it as a value. */
+.dash-page .svc-unavail { color: var(--dim); font-size: 13px; letter-spacing: .03em;
+  font-variant-numeric: normal; }
 
 /* Recent Events */
 .dash-page .ev-list { list-style: none; margin: 0; padding: 0; }
 .dash-page .ev-row { display: flex; align-items: center; gap: 9px; padding: 7px 2px;
   border-bottom: 1px solid var(--border-soft); font-size: 13px; }
 .dash-page .ev-row:last-child { border-bottom: none; }
-.dash-page .ev-time { flex: 0 0 auto; width: 58px; font-size: 12px; color: var(--muted);
+.dash-page .ev-time { flex: 0 0 auto; width: 58px; font-size: 13px; color: var(--muted);
   font-variant-numeric: tabular-nums; }
 .dash-page .ev-ic { flex: 0 0 auto; width: 20px; height: 20px; border-radius: 5px;
   display: inline-flex; align-items: center; justify-content: center; }
 .dash-page .ev-ic svg { width: 13px; height: 13px; }
 .dash-page .ev-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
   white-space: nowrap; font-weight: 500; }
-.dash-page .ev-det { margin-left: 4px; color: var(--dim); font-weight: 400; }
-.dash-page .ev-tag { flex: 0 0 auto; padding: 2px 7px; font-size: 10px; font-weight: 700;
+/* ⭐ The note is bounded HERE as well as at the source (live_activity
+   .DASH_NOTE_MAX). Two independent guards, because this panel widening its own
+   grid track is what pushed the whole page into a horizontal overflow at 1440. */
+.dash-page .ev-det { margin-left: 4px; color: var(--dim); font-weight: 400;
+  overflow-wrap: break-word; }
+.dash-page .ev-tag { flex: 0 0 auto; padding: 2px 7px; font-size: 13px; font-weight: 700;
   letter-spacing: .04em; border-radius: 5px; }
 .dash-page .evc-signal, .dash-page .evt-signal { color: var(--blue); background: rgba(var(--t-blue), .14); }
 .dash-page .evc-order,  .dash-page .evt-order  { color: #7cb2ff; background: rgba(var(--t-blue), .12); }
@@ -701,7 +758,7 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
   background: var(--card); border: 1px solid var(--card-bd); border-radius: 10px; }
 .dash-page .ss-k { font-size: 13px; font-weight: 600; color: var(--muted); }
 .dash-page .ss-v { font-size: 32px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
-.dash-page .ss-n { font-size: 11px; color: var(--dim); }
+.dash-page .ss-n { font-size: 13px; color: var(--dim); }
 .dash-page .ss-green .ss-v { color: var(--pos); }
 .dash-page .ss-orange .ss-v { color: var(--orange); }
 .dash-page .ss-red .ss-v { color: var(--neg); }
@@ -709,7 +766,7 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
   background: var(--card); border: 1px solid var(--card-bd); border-radius: 10px; }
 .dash-page .ss-best { border-left: 3px solid var(--green); }
 .dash-page .ss-worst { border-left: 3px solid var(--red); }
-.dash-page .ss-bw-k { font-size: 12px; font-weight: 700; }
+.dash-page .ss-bw-k { font-size: 13px; font-weight: 700; }
 .dash-page .ss-best .ss-bw-k { color: var(--pos); }
 .dash-page .ss-worst .ss-bw-k { color: var(--neg); }
 .dash-page .ss-bw-name { font-size: 16.5px; font-weight: 700; line-height: 1.2; }

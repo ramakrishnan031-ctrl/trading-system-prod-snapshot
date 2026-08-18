@@ -1000,3 +1000,162 @@ def export_rows(payload: dict) -> list:
             e.get("date"), e.get("ref_id"),
         ])
     return out
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# SCREEN 02 — the dashboard's RECENT EVENTS feed
+# ═══════════════════════════════════════════════════════════════════════════
+# ⭐ ADDITIVE AND REUSED, ⛔ NOT a second event architecture: this calls the SAME
+# per-category builders and the SAME deterministic sort as build_live_activity,
+# so a row on the dashboard and the same row on Screen 18 can never disagree.
+# ⛔ It does NOT build the wall (KPI strip / pipeline / capital / positions):
+# `/api/dashboard` is polled every 5 s in market hours and the dashboard panel
+# needs the feed alone.
+#
+# ⛔ WHY NOT `system_events` — the source this panel used until 18-Aug. MEASURED
+# ON PRODUCTION (18-Aug-2026 12:09 IST, read-only): `system_events` holds ONLY
+# STARTUP (74) · SHUTDOWN (72) · KILL_AUTO_CLEARED (40) · CONFIG_DIFF (28) —
+# ⛔ ZERO trading events, all time. The approved artwork's rows are all TRADING
+# events, so that source could never have shown what the panel promises. Its
+# newest ten rows also spanned 13-Aug → 18-Aug with only TWO from today, while
+# the template printed HH:MM:SS only — six days of boot noise read as today.
+DASH_FEED_LIMIT = 10
+
+#: The longest note this feed will emit. ⭐ THE BOUND IS THE FIX, and it is
+#: enforced HERE rather than in CSS: the panel sits in a `46fr 29fr 25fr` grid
+#: whose track width is set by its widest unbreakable content, so an unbounded
+#: payload does not merely look wrong — it WIDENS THE WHOLE PAGE. The old feed
+#: emitted a raw `{"changed_files": [...]}` blob and pushed Screen 02 into a
+#: horizontal overflow at 1440. A field that cannot be long cannot do that.
+DASH_NOTE_MAX = 40
+
+#: category → the badge the approved Screen-02 artwork draws. ⭐ STRUCTURED: the
+#: category is put on the row by the builder that KNOWS it. ⛔ The old dashboard
+#: derived this by substring-matching the event TEXT (`evCat()`), and against
+#: production's four `system_events` types every row fell through to one bucket
+#: — four of its five branches were unreachable.
+#: ⭐ The artwork draws SIGNAL / ORDER / RISK / EXIT; the remaining four
+#: categories carry their own badge rather than being folded into a near-enough
+#: one. `Trade` → EXIT because the artwork badges SL Hit / TGT Hit / Trade
+#: Closed — all of them exits — with EXIT.
+DASH_CATEGORY_BADGE = {
+    "Signal": "SIGNAL",
+    "Order": "ORDER",
+    "Position": "POSITION",
+    "Trade": "EXIT",
+    "Risk": "RISK",
+    "Capital": "CAPITAL",
+    "System": "SYSTEM",
+    "Alert": "ALERT",
+}
+
+
+def _dash_note(e: dict) -> Optional[str]:
+    """The artwork's short parenthetical — e.g. `(NIFTY 23450 CE)`.
+
+    ⭐ The SYMBOL is preferred because that is what the artwork shows on its
+    Order and exit rows. A row with no symbol falls back to the FIRST field of
+    the builder's own detail string (never the whole thing), and the result is
+    hard-capped at DASH_NOTE_MAX. ⛔ Nothing is composed here that the builders
+    did not already record.
+    """
+    sym = (e.get("symbol") or "").strip()
+    if sym:
+        return sym[:DASH_NOTE_MAX]
+    det = (e.get("details") or "").strip()
+    if not det:
+        return None
+    first = det.split(" | ")[0].strip()
+    return (first[:DASH_NOTE_MAX] or None) if first else None
+
+
+def build_recent_events(cfg: dict, limit: int = DASH_FEED_LIMIT,
+                        today: Optional[str] = None) -> dict:
+    """Screen 02's RECENT EVENTS — TODAY's real trading events, newest first.
+
+    ⭐ SCOPED TO TODAY BY CONSTRUCTION: every source below is a today-scoped
+    reader, so a quiet day returns an EMPTY feed. ⛔ It does NOT reach back for
+    filler — the panel sits under a header of `Today` KPIs, and a row from six
+    days ago printed as `08:15:43` is worse than no row at all.
+    """
+    now = freshness.ist_now()
+    today = today or freshness.ist_today_iso(now)
+
+    signals = db_reader.activity_signals_today(cfg, today)
+    kill = db_reader.get_kill_switch(cfg)
+
+    events = []
+    events += _from_signals(signals)
+    events += _from_orders(db_reader.order_screen_rows(cfg, today))
+    events += _from_positions(db_reader.activity_positions_opened(cfg, today))
+    events += _from_trades(db_reader.activity_trade_exits(cfg, today))
+    events += _from_risk(signals, kill)
+    events += _from_capital(db_reader.ledger_entries(cfg, today))
+    events += _from_system_events(db_reader.syslog_events_range(cfg, today, today))
+    events += _from_cron(db_reader.syslog_cron_range(cfg, today, today))
+    events += _from_alerts(db_reader.telegram_alerts_today(cfg, today))
+
+    # ⛔ A ROW FROM ANOTHER DAY MAY NOT ENTER A *TODAY* PANEL, and the date is
+    # checked rather than assumed. Most sources here are already today-scoped
+    # readers, but not all are: the kill-switch row is built from the PERSISTED
+    # `kill_switch_state.triggered_at`, which survives across days — measured
+    # 18-Aug, a kill triggered on 03-AUG arrived in this feed and rendered as
+    # `15:34:38` with no date, i.e. as though it had just happened. That is the
+    # precise defect this panel was rebuilt to stop, so the guard is explicit and
+    # it is a PROPERTY of the feed, ⛔ not a property of any one source.
+    events = [e for e in events if e["ts"] and e.get("date") == today]
+    # newest first; ref_id breaks ties so a 5-second poll cannot reshuffle rows.
+    events.sort(key=lambda e: (e["ts"], e["ref_id"]), reverse=True)
+
+    rows = []
+    for e in events[:max(0, int(limit))]:
+        rows.append({
+            "ts": e["ts"],
+            "time": e["time"],
+            "date": e["date"],
+            "category": e["category"],
+            "badge": DASH_CATEGORY_BADGE.get(e["category"], "SYSTEM"),
+            "event": e["event"],
+            "note": _dash_note(e),
+            "status": e.get("status"),
+            "link": e.get("link"),
+            "ref_id": e.get("ref_id"),
+        })
+
+    return {
+        "today": today,
+        "records": rows,
+        "count": len(rows),
+        "total_today": len(events),
+    }
+
+
+#: The Signals Received sparkline's window. ⭐ THE SAME 30 MINUTES Screen 18's
+#: MARKET PULSE sparks already use, so the two screens draw one definition of
+#: "recent signal activity" and cannot disagree about it.
+DASH_SPARK_MIN = PULSE_SPARK_MIN
+
+
+def build_signals_spark(cfg: dict, today: Optional[str] = None, now=None) -> dict:
+    """The approved artwork's sparkline on the SIGNALS RECEIVED card.
+
+    ⭐ REAL PER-MINUTE ROWS, from the SAME `activity_pulse` reader Screen 18's
+    pulse uses — ⛔ nothing smoothed, back-filled or interpolated, and ⛔ no second
+    definition of the series. A minute with no signal is a real zero.
+
+    ⛔ `available` IS FALSE WHEN EVERY POINT IS ZERO and the card then draws no
+    line at all. A flat line along the axis is not a cheaper truth — it is a
+    drawn chart, and a reader takes a drawn chart as a measurement of shape. The
+    number above it already says nothing arrived.
+    """
+    now = now or freshness.ist_now()
+    today = today or freshness.ist_today_iso(now)
+    per_min = (db_reader.activity_pulse(cfg, today) or {}).get("signals") or {}
+    keys = _minute_keys(now, DASH_SPARK_MIN)
+    points = [int(per_min.get(k, 0)) for k in keys]
+    return {
+        "points": points,
+        "window_min": DASH_SPARK_MIN,
+        "total_today": int(sum(per_min.values())),
+        "available": any(p > 0 for p in points),
+    }

@@ -55,6 +55,66 @@ def all_units(cfg: dict) -> list:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Screen-02 — SERVICE HEALTH's "LAST UPDATE" column. ADDITIVE: `unit_state`,
+# `all_units` and `_SHOW_PROPS`/`unit_details` above are ALL byte-unchanged, so
+# Screen 12 and `/api/system` keep exactly the readings they had.
+#
+# ⛔ WHY A REAL STAMP IS REQUIRED. Until 18-Aug the dashboard printed its OWN
+# clock in this column for any ACTIVE unit and an em-dash for every other, so
+# every healthy row showed the same number — the current time — which reads as a
+# measurement and is not one. MEASURED ON PRODUCTION (18-Aug-2026 12:23 IST):
+# `token-watcher.service` last changed state on 28-JUL, so the column was
+# printing a value 21 days wrong while looking precisely right.
+#
+# ⭐ WHY `StateChangeTimestamp` AND ⛔ NOT `ActiveEnterTimestamp`: measured on the
+# same six units, the timer is the discriminator — `cron-watchdog.timer` last
+# fired 17-Aug 19:30:01 (StateChange) but was armed 03-JUL 22:21:03
+# (ActiveEnter), six weeks earlier. `StateChangeTimestamp` is also populated for
+# an INACTIVE unit, which is what the approved artwork draws on its inactive row.
+_CHANGE_PROPS = ("ActiveState", "StateChangeTimestamp")
+
+
+def unit_change(unit: str) -> dict:
+    """`{state, last_change_at}` for one unit. Never raises.
+
+    ⭐ ONE subprocess for both properties — the same count `all_units` already
+    spends per unit on `is-active`, so the honest column costs nothing extra.
+    ⛔ `last_change_at` is None when systemd reports no stamp; the caller renders
+    that as UNAVAILABLE rather than substituting any other time.
+    """
+    if not _systemctl_available():
+        return {"state": "unavailable", "last_change_at": None}
+    try:
+        proc = subprocess.run(  # nosec B603 (no shell, fixed binary, fixed args)
+            ["systemctl", "show", unit, "-p", ",".join(_CHANGE_PROPS)],
+            capture_output=True,
+            text=True,
+            timeout=_TIMEOUT_SEC,
+            check=False,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return {"state": "unavailable", "last_change_at": None}
+    props = {}
+    for line in (proc.stdout or "").splitlines():
+        if "=" in line:
+            k, _, v = line.partition("=")
+            props[k.strip()] = v.strip()
+    state = (props.get("ActiveState") or "").strip().lower()
+    if state not in _KNOWN:
+        state = state or "unknown"
+    # systemd prints e.g. "Tue 2026-08-18 08:15:31 IST", and an EMPTY value when
+    # it has no stamp. ⛔ Empty is "no transition recorded", ⛔ not the epoch.
+    stamp = (props.get("StateChangeTimestamp") or "").strip()
+    return {"state": state, "last_change_at": stamp or None}
+
+
+def all_units_with_change(cfg: dict) -> list:
+    """`{unit, state, last_change_at}` per configured unit (Screen 02)."""
+    units = cfg.get("units", []) or []
+    return [dict(unit_change(u), unit=u) for u in units]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Screen-12 — per-unit lifecycle detail. ADDITIVE: `unit_state`/`all_units`
 # above are byte-unchanged and keep their own callers.
 # ─────────────────────────────────────────────────────────────────────────────
