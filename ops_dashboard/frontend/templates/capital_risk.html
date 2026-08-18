@@ -25,7 +25,7 @@
 <style>
   /* Screen-08 only. Scoped to classes this template introduces, so no other
      screen's rendering can change. */
-  .badge-live, .badge-sim { font-size:11px; font-weight:700; letter-spacing:.04em;
+  .badge-live, .badge-sim { font-size:13px; font-weight:700; letter-spacing:.04em;
     padding:2px 8px; border-radius:10px; margin-left:8px; vertical-align:middle; }
   .badge-live { background:rgba(46,160,67,.18); color:#3fb950; border:1px solid rgba(63,185,80,.45); }
   .badge-sim  { background:rgba(210,153,34,.18); color:#d29922; border:1px solid rgba(210,153,34,.45); }
@@ -297,14 +297,17 @@
         <span class="panel-sub">all segments, real capital</span></h3>
       <div class="tbl-scroll">
         <table class="cap-table">
-          <thead><tr><th>Strategy</th><th>Capital Used (Real)</th><th>% of Total</th></tr></thead>
+          <thead><tr><th>Strategy</th><th>Capital Used (Real)</th><th class="cap-barh"></th><th>% of Total</th></tr></thead>
           <tbody>
             <template x-for="s in topConsumers()" :key="s.strategy">
               <tr><td x-text="s.strategy"></td>
                 <td class="cap-num" x-text="money(s.total_real)"></td>
+                <td class="cap-barc">
+                  <span class="cap-bar"><i :style="'width:' + barPct(s.total_real) + '%'"></i></span>
+                </td>
                 <td class="cap-num" x-text="pctText(sharePct(s.total_real))"></td></tr>
             </template>
-            <tr x-show="!topConsumers().length" x-cloak><td colspan="3" class="ev-empty">No capital committed.</td></tr>
+            <tr x-show="!topConsumers().length" x-cloak><td colspan="4" class="ev-empty">No capital committed.</td></tr>
           </tbody>
         </table>
       </div>
@@ -328,13 +331,27 @@
     <section class="panel">
       <h3 class="panel-title">9 · Capital Utilization
         <span class="panel-sub">real cash consumed / total real cash</span></h3>
-      <div class="big-grid">
-        <div class="bignum"><span class="bn-label">Utilization</span>
-          <span class="bn-val num" :class="usageClass(utilPct())" x-text="pctText(utilPct())"></span></div>
-        <div class="bignum"><span class="bn-label">Consumed</span>
-          <span class="bn-val num" x-text="money(rc('consumed'))"></span></div>
-        <div class="bignum"><span class="bn-label">Available</span>
-          <span class="bn-val num num-pos" x-text="money(rc('available'))"></span></div>
+      <div class="cap-gauge-wrap">
+        <div class="cap-gauge-box">
+          <svg class="cap-gauge" viewBox="0 0 100 72" aria-hidden="true">
+            <path class="cap-g-bg" d="M 10 56 A 40 40 0 0 1 90 56" fill="none"
+                  stroke-width="9" stroke-linecap="round"></path>
+            <g x-html="gaugeMarkup()"></g>
+            <text class="cap-g-tick" x="50" y="8" text-anchor="middle">50%</text>
+            <text class="cap-g-tick" x="2" y="70" text-anchor="start">0%</text>
+            <text class="cap-g-tick" x="98" y="70" text-anchor="end">100%</text>
+          </svg>
+          <div class="cap-g-centre">
+            <b class="cap-g-v num" :class="usageClass(utilPct())" x-text="pctText(utilPct())"></b>
+            <span class="cap-g-d">Utilization</span>
+          </div>
+        </div>
+        <div class="big-grid cap-g-side">
+          <div class="bignum"><span class="bn-label">Consumed</span>
+            <span class="bn-val num" x-text="money(rc('consumed'))"></span></div>
+          <div class="bignum"><span class="bn-label">Available</span>
+            <span class="bn-val num num-pos" x-text="money(rc('available'))"></span></div>
+        </div>
       </div>
       <table class="cap-table" style="margin-top:8px">
         <thead><tr><th>Utilization Range</th><th>Status</th></tr></thead>
@@ -481,6 +498,30 @@ function capitalRiskPage() {
     // ── shared formatting (house conventions) ────────────────────────────
     pctText(v) { return (v === null || v === undefined) ? "—" : v + "%"; },
     usageClass(p) { if (p === null || p === undefined) return ""; if (p >= 80) return "num-neg"; if (p >= 60) return "num-warn"; return "num-pos"; },
+
+    /* Zone-9 gauge. Semicircle r=40 centred (50,58) => arc length = PI*40.
+       The arc is coloured by usageClass(), THE SAME classifier the number
+       inside it and the range table below it already use, so the picture can
+       never disagree with the words beside it. */
+    GAUGE_LEN: 125.664,
+    gaugeMarkup() {
+      const p = this.utilPct();
+      if (p === null || p === undefined) return "";
+      const on = Math.max(0, Math.min(100, Number(p))) / 100 * this.GAUGE_LEN;
+      return '<path class="cap-g-fg ' + this.usageClass(p) + '"'
+           + ' d="M 10 56 A 40 40 0 0 1 90 56" fill="none" stroke-width="9"'
+           + ' stroke-linecap="round" stroke-dasharray="'
+           + on.toFixed(2) + ' ' + this.GAUGE_LEN + '"></path>';
+    },
+    /* Bar length is relative to the LARGEST consumer, so the widest bar fills
+       the cell; the % column keeps carrying the share of the true total. */
+    barPct(v) {
+      const rows = this.topConsumers();
+      if (!rows.length || v === null || v === undefined) return 0;
+      const max = Math.max(...rows.map(s => Number(s.total_real) || 0));
+      if (!max) return 0;
+      return Math.max(0, Math.min(100, 100 * Number(v) / max));
+    },
     fmtCap(v, unit) { if (v === null || v === undefined) return "—"; if (unit === "rs") return (Number(v) < 0 ? "-₹" : "₹") + Math.abs(Number(v)).toFixed(2); return String(v); },
     curvePoints() {
       const pts = (this.pnl.equity_curve || []).map(p => p.cum_pnl);

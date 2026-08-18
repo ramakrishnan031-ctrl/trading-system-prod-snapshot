@@ -1049,7 +1049,7 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 @media (max-width: 760px)  { .sig-page .sk-deck { grid-template-columns: repeat(2, 1fr); } }
 .sig-page .kc { min-height: 96px; gap: 7px; }
 .sig-page .kc-val { font-size: 26px; }
-.sig-page .kc-label { font-size: 11.5px; letter-spacing: .04em; text-transform: uppercase; }
+.sig-page .kc-label { font-size: 13px; letter-spacing: .04em; text-transform: uppercase; }
 /* two tones the shared deck did not need before */
 .sig-page .kc-muted { border-top-color: var(--gray); }
 .sig-page .kc-muted .kc-ic { background: rgba(var(--t-gray), .3); color: var(--muted); }
@@ -1069,7 +1069,7 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
    because the fields it sized were never receiving .flt-field's stacking. */
 .sig-page .flt-dr { display: flex; align-items: center; gap: 6px; }
 .sig-page .flt-dr .flt-c { min-width: 0; flex: 1 1 0; }
-.sig-page .flt-to { font-size: 12px; color: var(--dim); flex: 0 0 auto; }
+.sig-page .flt-to { font-size: 13px; color: var(--dim); flex: 0 0 auto; }
 .sig-page .flt-reload { flex: 0 0 auto; width: 26px; height: 26px; border-radius: 6px;
   border: 1px solid var(--border); background: var(--panel2); color: var(--muted);
   cursor: pointer; font-size: 13px; line-height: 1; }
@@ -1083,8 +1083,8 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 .sig-page .sig-toolbar { display: flex; align-items: center; justify-content: space-between;
   gap: 12px; padding: 2px 0 10px; }
 .sig-page .sig-rpp { display: inline-flex; align-items: center; gap: 7px; }
-.sig-page .sig-rpp-k { font-size: 12.5px; color: var(--muted); }
-.sig-page .sig-rpp-b { min-width: 38px; padding: 4px 9px; font-size: 12.5px; font-weight: 600;
+.sig-page .sig-rpp-k { font-size: 13px; color: var(--muted); }
+.sig-page .sig-rpp-b { min-width: 38px; padding: 4px 9px; font-size: 13px; font-weight: 600;
   border: 1px solid var(--border); background: var(--panel2); color: var(--muted);
   border-radius: 6px; cursor: pointer; font-variant-numeric: tabular-nums; }
 .sig-page .sig-rpp-b:hover { color: var(--text); }
@@ -1098,7 +1098,7 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 .sig-page .st-tbl { width: 100%; border-collapse: collapse; font-size: var(--dt-cell); }
 /* Headers WRAP (the mockup stacks "System / Score") — that is what keeps 15
    columns inside the viewport while the data text stays at the 13px floor. */
-.sig-page .st-tbl th { text-align: left; padding: 8px 5px; font-size: 11px; font-weight: 600;
+.sig-page .st-tbl th { text-align: left; padding: 8px 5px; font-size: 13px; font-weight: 600;
   text-transform: uppercase; letter-spacing: .02em; color: var(--dim); line-height: 1.25;
   border-bottom: 1px solid var(--border); white-space: normal; cursor: pointer;
   user-select: none; vertical-align: bottom; }
@@ -1116,7 +1116,7 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 .sig-page .st-tbl th.is-over { box-shadow: inset 2px 0 0 var(--blue); color: var(--muted); }
 .sig-page .st-tbl th { cursor: grab; }
 .sig-page .st-tbl th:active { cursor: grabbing; }
-.sig-page .sig-colreset { margin-left: 10px; padding: 3px 9px; font-size: 11.5px;
+.sig-page .sig-colreset { margin-left: 10px; padding: 3px 9px; font-size: 13px;
   border: 1px solid var(--border); background: transparent; color: var(--muted);
   border-radius: 6px; cursor: pointer; }
 .sig-page .sig-colreset:hover { color: var(--text); border-color: var(--blue); }
@@ -1130,13 +1130,13 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 .sig-page .st-tbl .rt { text-align: right; font-variant-numeric: tabular-nums; }
 .sig-page .st-foot { display: flex; align-items: center; justify-content: space-between;
   gap: 12px; margin-top: 12px; }
-.sig-page .st-count { font-size: 12.5px; color: var(--muted); }
+.sig-page .st-count { font-size: 13px; color: var(--muted); }
 .sig-page .st-pager { display: flex; align-items: center; gap: 6px; }
 .sig-page .st-pg { width: 30px; height: 30px; border-radius: 7px; background: var(--card);
   color: var(--text); border: 1px solid var(--card-bd); cursor: pointer; font-size: 14px; line-height: 1; }
 .sig-page .st-pg[disabled] { opacity: .45; cursor: not-allowed; }
 .sig-page .btn-export { display: inline-flex; align-items: center; gap: 7px; height: 32px;
-  padding: 0 13px; font-size: 12.5px; font-weight: 600; border-radius: 8px; color: var(--pos);
+  padding: 0 13px; font-size: 13px; font-weight: 600; border-radius: 8px; color: var(--pos);
   background: rgba(var(--t-green), .12); border: 1px solid rgba(var(--t-green), .45); cursor: pointer; }
 .sig-page .btn-export[disabled] { opacity: .9; cursor: not-allowed; }
 .sig-page .ev-empty { padding: 26px 10px; text-align: center; color: var(--dim); font-size: 13px; }
@@ -1147,24 +1147,24 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 .sig-page .sig-sym { font-weight: 700; letter-spacing: .01em; }
 .sig-page .sig-why { max-width: 116px; overflow: hidden; text-overflow: ellipsis;
   white-space: nowrap; color: var(--muted); }
-.sig-page .sig-cap { padding: 9px 12px; font-size: 12px; color: var(--orange);
+.sig-page .sig-cap { padding: 9px 12px; font-size: 13px; color: var(--orange);
   border-top: 1px solid var(--border); }
 
 /* Trade-type pill */
-.sig-page .tt-pill { display: inline-block; padding: 2px 8px; font-size: 11.5px; font-weight: 600;
+.sig-page .tt-pill { display: inline-block; padding: 2px 8px; font-size: 13px; font-weight: 600;
   border-radius: 5px; letter-spacing: .01em; }
 .sig-page .tt-Intraday { color: #7cb2ff; background: rgba(var(--t-blue), .16); }
 .sig-page .tt-Delivery { color: var(--purple); background: rgba(var(--t-purple), .18); }
 .sig-page .tt-none { color: var(--dim); background: transparent; }
 
 /* Direction */
-.sig-page .dir-txt { font-weight: 600; font-size: 12.5px; }
+.sig-page .dir-txt { font-weight: 600; font-size: 13px; }
 .sig-page .dir-long  { color: var(--pos); }
 .sig-page .dir-short { color: var(--neg); }
 .sig-page .dir-none  { color: var(--dim); }
 
 /* Status pill (derived family) */
-.sig-page .sg-pill { display: inline-block; padding: 3px 9px; font-size: 11px; font-weight: 700;
+.sig-page .sg-pill { display: inline-block; padding: 3px 9px; font-size: 13px; font-weight: 700;
   letter-spacing: .03em; border-radius: 6px; }
 .sig-page .sg-accepted   { color: var(--pos);    background: rgba(var(--t-green), .16); }
 .sig-page .sg-rejected   { color: var(--neg);    background: rgba(var(--t-red), .16); }
@@ -1172,7 +1172,7 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 .sig-page .sg-expired    { color: var(--dim);    background: rgba(var(--t-gray), .26); }
 
 /* Trade-result pill + legend dot share one palette */
-.sig-page .rs-pill { display: inline-block; padding: 3px 9px; font-size: 11px; font-weight: 700;
+.sig-page .rs-pill { display: inline-block; padding: 3px 9px; font-size: 13px; font-weight: 700;
   letter-spacing: .02em; border-radius: 6px; white-space: nowrap; }
 .sig-page .rs-received      { color: var(--pos);    background: rgba(var(--t-green), .12); }
 .sig-page .rs-accepted      { color: var(--pos);    background: rgba(var(--t-green), .15); }
@@ -1210,7 +1210,7 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
   font-size: 14px; line-height: 1; padding: 2px 4px; }
 .sig-page .sd-x:hover { color: var(--text); }
 .sig-page .sd-empty { display: flex; flex-direction: column; align-items: center; gap: 8px;
-  padding: 34px 18px; color: var(--dim); font-size: 12.5px; text-align: center; }
+  padding: 34px 18px; color: var(--dim); font-size: 13px; text-align: center; }
 .sig-page .sd-empty-ic { font-size: 22px; color: var(--border); }
 .sig-page .sd-title { display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
   padding: 12px 14px 10px; }
@@ -1221,31 +1221,31 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 /* With Scanner removed the grid holds an odd number of cells — the last one
    spans the full width so the rail never shows a half-empty row. */
 .sig-page .sd-grid .sd-cell:last-child:nth-child(odd) { grid-column: 1 / -1; }
-.sig-page .sd-k { font-size: 11px; color: var(--dim); }
+.sig-page .sd-k { font-size: 13px; color: var(--dim); }
 .sig-page .sd-v { font-size: 13px; color: var(--text); overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; }
 .sig-page .sd-age { display: flex; align-items: center; gap: 8px; padding: 10px 14px;
   border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
-.sig-page .sd-age .sd-k { flex: 1 1 auto; font-size: 12.5px; color: var(--muted); }
+.sig-page .sd-age .sd-k { flex: 1 1 auto; font-size: 13px; color: var(--muted); }
 .sig-page .sd-age-v { font-size: 13px; font-weight: 600; }
-.sig-page .age-chip { padding: 2px 8px; font-size: 11px; font-weight: 600; border-radius: 5px; }
+.sig-page .age-chip { padding: 2px 8px; font-size: 13px; font-weight: 600; border-radius: 5px; }
 .sig-page .age-fresh   { color: var(--pos);    background: rgba(var(--t-green), .15); }
 .sig-page .age-warm    { color: var(--yellow); background: rgba(var(--t-yellow), .16); }
 .sig-page .age-stale   { color: var(--neg);    background: rgba(var(--t-red), .15); }
 .sig-page .age-expired { color: var(--dim);    background: rgba(var(--t-gray), .28); }
-.sig-page .sd-sec { padding: 12px 14px 6px; font-size: 11px; font-weight: 700;
+.sig-page .sd-sec { padding: 12px 14px 6px; font-size: 13px; font-weight: 700;
   letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
 .sig-page .sd-life { padding: 0 14px 4px; }
 .sig-page .sd-life .lc-step { grid-template-columns: 14px 1fr auto; padding: 5px 0; }
-.sig-page .sd-life .lc-label { font-size: 12.5px; }
-.sig-page .sd-life .lc-ts { font-size: 11.5px; }
+.sig-page .sd-life .lc-label { font-size: 13px; }
+.sig-page .sd-life .lc-ts { font-size: 13px; }
 .sig-page .lc-unknown .lc-dot { background: var(--border); }
 .sig-page .lc-stop .lc-dot { background: var(--neg); }
 .sig-page .lc-nc { color: var(--dim); font-style: italic; }
-.sig-page .sd-note { margin: 0; padding: 2px 14px 10px; font-size: 11px; color: var(--dim); line-height: 1.5; }
+.sig-page .sd-note { margin: 0; padding: 2px 14px 10px; font-size: 13px; color: var(--dim); line-height: 1.5; }
 .sig-page .sd-rej { padding: 0 14px 12px; display: flex; flex-direction: column; gap: 8px; }
 .sig-page .sd-rline { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.sig-page .sd-rline .sd-k { font-size: 12.5px; color: var(--muted); }
+.sig-page .sd-rline .sd-k { font-size: 13px; color: var(--muted); }
 .sig-page .sd-full { display: flex; align-items: center; justify-content: center; gap: 8px;
   margin: 4px 14px 14px; padding: 9px 12px; border-radius: 8px; font-size: 13px; font-weight: 600;
   color: #fff; background: var(--blue); text-decoration: none; }
@@ -1255,14 +1255,14 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 .sig-page .sig-legend { display: grid; grid-template-columns: 0.9fr 1.1fr 1.6fr; gap: 12px; }
 @media (max-width: 1100px) { .sig-page .sig-legend { grid-template-columns: 1fr; } }
 .sig-page .lg-card { padding: 12px 14px; }
-.sig-page .lg-h { font-size: 11px; font-weight: 700; letter-spacing: .06em;
+.sig-page .lg-h { font-size: 13px; font-weight: 700; letter-spacing: .06em;
   text-transform: uppercase; color: var(--muted); margin-bottom: 10px; }
 .sig-page .lg-items { display: flex; flex-wrap: wrap; gap: 9px 18px; }
 .sig-page .lg-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 9px 12px; }
 @media (max-width: 1400px) { .sig-page .lg-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-.sig-page .lg-i { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--muted); }
+.sig-page .lg-i { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--muted); }
 .sig-page .lg-rows { display: flex; flex-direction: column; gap: 7px; }
-.sig-page .lg-r { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--muted); }
+.sig-page .lg-r { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--muted); }
 .sig-page .lg-sep { color: var(--dim); }
 .sig-page .age-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: 0 0 auto; }
 .sig-page .age-dot.age-fresh   { background: var(--pos); }
@@ -1270,7 +1270,7 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 .sig-page .age-dot.age-stale   { background: var(--neg); }
 .sig-page .age-dot.age-expired { background: var(--dim); }
 /* legend status pills (the .strat-page ones are scoped to that screen) */
-.sig-page .stlogic-pill { padding: 2px 8px; font-size: 10.5px; font-weight: 700; border-radius: 5px; }
+.sig-page .stlogic-pill { padding: 2px 8px; font-size: 13px; font-weight: 700; border-radius: 5px; }
 .sig-page .sts-ACTIVE { color: var(--pos);    background: rgba(var(--t-green), .15); }
 .sig-page .sts-QUIET  { color: var(--orange); background: rgba(var(--t-orange), .15); }
 .sig-page .sts-SILENT { color: var(--neg);    background: rgba(var(--t-red), .15); }
@@ -1292,8 +1292,8 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 @media (max-width: 1000px) { .ord-page .ok-deck { grid-template-columns: repeat(2, 1fr); } }
 .ord-page .kc { min-height: 92px; gap: 7px; }
 .ord-page .kc-val { font-size: 24px; }
-.ord-page .kc-label { font-size: 11.5px; letter-spacing: .04em; text-transform: uppercase; }
-.ord-page .kc-foot { font-size: 11.5px; color: var(--dim); }
+.ord-page .kc-label { font-size: 13px; letter-spacing: .04em; text-transform: uppercase; }
+.ord-page .kc-foot { font-size: 13px; color: var(--dim); }
 .ord-page .kc-muted { border-top-color: var(--gray); }
 .ord-page .kc-muted .kc-ic { background: rgba(var(--t-gray), .3); color: var(--muted); }
 .ord-page .kc-purple { border-top-color: var(--purple); }
@@ -1316,17 +1316,17 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 .ord-page .ord-toolbar { display: flex; align-items: center; justify-content: space-between;
   gap: 12px; padding: 2px 0 10px; }
 .ord-page .ord-rpp { display: inline-flex; align-items: center; gap: 7px; }
-.ord-page .ord-rpp-k { font-size: 12.5px; color: var(--muted); }
-.ord-page .ord-rpp-b { min-width: 38px; padding: 4px 9px; font-size: 12.5px; font-weight: 600;
+.ord-page .ord-rpp-k { font-size: 13px; color: var(--muted); }
+.ord-page .ord-rpp-b { min-width: 38px; padding: 4px 9px; font-size: 13px; font-weight: 600;
   border: 1px solid var(--border); background: var(--panel2); color: var(--muted);
   border-radius: 6px; cursor: pointer; font-variant-numeric: tabular-nums; }
 .ord-page .ord-rpp-b:hover { color: var(--text); }
 .ord-page .ord-rpp-b.is-on { background: rgba(var(--t-blue), .18); border-color: var(--blue); color: #7cb2ff; }
-.ord-page .ord-colreset { margin-left: 10px; padding: 4px 10px; font-size: 12px; font-weight: 600;
+.ord-page .ord-colreset { margin-left: 10px; padding: 4px 10px; font-size: 13px; font-weight: 600;
   border: 1px solid var(--card-bd); background: transparent; color: var(--muted);
   border-radius: 6px; cursor: pointer; }
 .ord-page .ord-colreset:hover { color: var(--text); border-color: var(--blue); }
-.ord-page .btn-export { height: 32px; padding: 0 14px; font-size: 12.5px; font-weight: 600;
+.ord-page .btn-export { height: 32px; padding: 0 14px; font-size: 13px; font-weight: 600;
   border-radius: 8px; cursor: pointer; font-family: inherit;
   background: rgba(var(--t-green), .14); color: var(--pos); border: 1px solid rgba(var(--t-green), .5); }
 .ord-page .btn-export:hover { filter: brightness(1.12); }
@@ -1334,7 +1334,7 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 /* table — 16 columns must fit without a horizontal scrollbar at >=1600 */
 .ord-page .ord-scroll { overflow-x: auto; }
 .ord-page .st-tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
-.ord-page .st-tbl th { text-align: left; padding: 7px 5px; font-size: 11px; font-weight: 600;
+.ord-page .st-tbl th { text-align: left; padding: 7px 5px; font-size: 13px; font-weight: 600;
   color: var(--muted); text-transform: uppercase; letter-spacing: .03em;
   border-bottom: 1px solid var(--border); white-space: normal; cursor: pointer;
   user-select: none; position: relative; }
@@ -1354,13 +1354,13 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 .ord-page .st-arw { margin-left: 4px; opacity: .55; font-size: 9px; }
 .ord-page th.is-drag { opacity: .5; }
 .ord-page th.is-over { box-shadow: inset 2px 0 0 var(--blue); }
-.ord-page .mono { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+.ord-page .mono { font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
 .ord-page .d-long { color: var(--pos); }
 .ord-page .d-short { color: var(--neg); }
 .ord-page .t-intraday { color: #7cb2ff; }
 .ord-page .t-delivery { color: var(--purple); }
 .ord-page .ord-eye { opacity: .6; }
-.ord-page .pill { display: inline-block; padding: 1px 7px; border-radius: 5px; font-size: 10.5px;
+.ord-page .pill { display: inline-block; padding: 1px 7px; border-radius: 5px; font-size: 13px;
   font-weight: 700; letter-spacing: .03em; text-transform: uppercase; }
 .ord-page .p-green { background: rgba(var(--t-green), .16); color: var(--pos); }
 .ord-page .p-orange { background: rgba(var(--t-orange), .16); color: var(--orange); }
@@ -1370,7 +1370,7 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 
 /* pager */
 .ord-page .ord-pager { display: flex; align-items: center; justify-content: space-between;
-  gap: 12px; padding: 10px 0 0; font-size: 12.5px; color: var(--muted); }
+  gap: 12px; padding: 10px 0 0; font-size: 13px; color: var(--muted); }
 .ord-page .ord-pg { min-width: 28px; padding: 3px 8px; border: 1px solid var(--border);
   background: var(--panel2); color: var(--muted); border-radius: 6px; cursor: pointer; }
 .ord-page .ord-pg.is-on { background: rgba(var(--t-blue), .18); border-color: var(--blue); color: #7cb2ff; }
@@ -1378,10 +1378,10 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 /* bottom analytics */
 .ord-page .ord-cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
 @media (max-width: 1200px) { .ord-page .ord-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-.ord-page .ord-legend { display: flex; flex-direction: column; gap: 7px; font-size: 12.5px; color: var(--muted); }
+.ord-page .ord-legend { display: flex; flex-direction: column; gap: 7px; font-size: 13px; color: var(--muted); }
 .ord-page .ord-legend > div { display: flex; align-items: center; gap: 8px; }
 .ord-page .ord-legend b { margin-left: auto; color: var(--text); font-variant-numeric: tabular-nums; }
-.ord-page .ord-legend-note { color: var(--dim); font-size: 11.5px; }
+.ord-page .ord-legend-note { color: var(--dim); font-size: 13px; }
 .ord-page .dot { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto; display: inline-block; }
 .ord-page .dot-green { background: var(--pos); }
 .ord-page .dot-yellow { background: #d29922; }
@@ -1389,7 +1389,7 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 .ord-page .dot-orange { background: var(--orange); }
 .ord-page .dot-purple { background: var(--purple); }
 .ord-page .dot-gray { background: var(--gray); }
-.ord-page .ord-kv { display: flex; flex-direction: column; gap: 8px; font-size: 12.5px; }
+.ord-page .ord-kv { display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
 .ord-page .ord-kv > div { display: flex; align-items: baseline; gap: 10px; }
 .ord-page .ord-kv span { color: var(--muted); }
 .ord-page .ord-kv b { margin-left: auto; color: var(--text); font-variant-numeric: tabular-nums; }
@@ -1401,28 +1401,28 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 .ord-page .od-x { margin-left: auto; background: none; border: none; color: var(--muted);
   cursor: pointer; font-size: 14px; }
 .ord-page .od-empty { display: flex; flex-direction: column; align-items: center; gap: 10px;
-  padding: 44px 22px; color: var(--muted); font-size: 12.5px; text-align: center; }
+  padding: 44px 22px; color: var(--muted); font-size: 13px; text-align: center; }
 .ord-page .od-empty-ic { font-size: 20px; opacity: .5; }
 .ord-page .od-id { display: flex; align-items: center; gap: 10px; padding: 12px 16px 6px; }
 .ord-page .od-oid { font-family: ui-monospace, Consolas, monospace; font-size: 13px; font-weight: 700; }
-.ord-page .od-kv { display: flex; flex-direction: column; gap: 7px; padding: 8px 16px 12px; font-size: 12.5px; }
+.ord-page .od-kv { display: flex; flex-direction: column; gap: 7px; padding: 8px 16px 12px; font-size: 13px; }
 .ord-page .od-kv > div { display: flex; align-items: baseline; gap: 10px; }
 .ord-page .od-kv span { color: var(--muted); }
 .ord-page .od-kv b { margin-left: auto; color: var(--text); font-variant-numeric: tabular-nums; }
 .ord-page .od-kv2 { border-top: 1px solid var(--card-bd); padding-top: 10px; }
 .ord-page .od-tabs { display: flex; gap: 4px; padding: 4px 12px 10px; border-bottom: 1px solid var(--card-bd); }
-.ord-page .od-tabs button { flex: 1 1 0; padding: 5px 6px; font-size: 10.5px; font-weight: 700;
+.ord-page .od-tabs button { flex: 1 1 0; padding: 5px 6px; font-size: 13px; font-weight: 700;
   letter-spacing: .04em; text-transform: uppercase; border-radius: 6px; cursor: pointer;
   border: 1px solid transparent; background: transparent; color: var(--muted); font-family: inherit; }
 .ord-page .od-tabs button.is-on { background: rgba(var(--t-blue), .16); border-color: var(--blue); color: #7cb2ff; }
-.ord-page .od-sec { padding: 12px 16px 6px; font-size: 11px; font-weight: 700; letter-spacing: .06em;
+.ord-page .od-sec { padding: 12px 16px 6px; font-size: 13px; font-weight: 700; letter-spacing: .06em;
   text-transform: uppercase; color: var(--ink); }
-.ord-page .od-line { padding: 0 16px 12px; font-size: 12px; color: var(--muted); line-height: 1.5; }
+.ord-page .od-line { padding: 0 16px 12px; font-size: 13px; color: var(--muted); line-height: 1.5; }
 .ord-page .od-na { color: var(--dim) !important; font-weight: 500; font-style: italic; }
 .ord-page .od-na-block { padding: 14px 16px 16px; }
 .ord-page .od-na-block b { display: block; color: var(--text); margin-bottom: 6px; }
 .ord-page .od-time { list-style: none; margin: 0; padding: 0 16px 12px; display: flex;
-  flex-direction: column; gap: 9px; font-size: 12.5px; }
+  flex-direction: column; gap: 9px; font-size: 13px; }
 .ord-page .od-time li { display: flex; align-items: center; gap: 9px; }
 .ord-page .od-time li.is-off { opacity: .5; }
 .ord-page .od-time i { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
@@ -1430,6 +1430,41 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 .ord-page .od-time .d-off { background: var(--gray); }
 .ord-page .od-time span { color: var(--muted); font-variant-numeric: tabular-nums; min-width: 58px; }
 .ord-page .od-time em { font-style: normal; color: var(--text); }
+
+/* ── SCREEN-05 SLIPPAGE / RESULT DONUTS (18-Aug-2026) — the artwork draws a
+      donut beside each of these two legends; the build shipped legend-only.
+
+      ⛔ THE SCREEN-09 LESSON, CARRIED: `.pos-donut circle { fill:none;
+      stroke-width:5 }` is scoped to `.pos-page`, so a donut on ANY other page
+      inherits the SVG default (fill black, no stroke) and renders as a solid
+      black disc. ⛔ Do NOT widen the `.pos-page` rule to fix that.
+
+      ⛔ AND A SECOND TRAP, SPECIFIC TO THIS SCREEN: Positions carries
+      `ord-page` AS WELL AS `pos-page`, so a bare `.ord-page` rule would restyle
+      Screen 06 too. EVERY rule below is therefore keyed on `.ord-donut` — a
+      class ONLY these two donuts carry — so Screen 06 cannot be touched. */
+.ord-page .ord-donut { width: 104px; height: 104px; flex: 0 0 auto;
+  transform: rotate(-90deg); }
+.ord-page .ord-donut circle { fill: none; stroke-width: 5; }
+.ord-page .ord-donut .pd-track { stroke: var(--gray); }
+.ord-page .ord-donut .pd-arc { stroke-linecap: butt; transition: none; }
+.ord-page .ord-arc-green  { stroke: var(--pos); }
+.ord-page .ord-arc-yellow { stroke: #d29922; }
+.ord-page .ord-arc-red    { stroke: var(--neg); }
+.ord-page .ord-arc-orange { stroke: var(--orange); }
+.ord-page .ord-arc-purple { stroke: var(--purple); }
+.ord-page .ord-arc-gray   { stroke: var(--gray); }
+.ord-page .ord-donut-wrap { display: flex; align-items: center; gap: 14px; }
+.ord-page .ord-donut-wrap .ord-legend { min-width: 0; flex: 1 1 auto; }
+.ord-page .ord-donut-tot { display: flex; align-items: center; gap: 8px;
+  margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--border);
+  font-size: 13px; color: var(--muted); }
+.ord-page .ord-donut-tot b { margin-left: auto; color: var(--text);
+  font-variant-numeric: tabular-nums; }
+@media (max-width: 1500px) {
+  .ord-page .ord-donut { width: 88px; height: 88px; }
+  .ord-page .ord-donut-wrap { gap: 10px; }
+}
 
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -1456,7 +1491,7 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
    A filter, not decoration: each chip toggles f.position_status. */
 .pos-page .pos-strip-panel { padding-top: 10px; padding-bottom: 10px; }
 .pos-page .pos-strip { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
-.pos-page .pos-strip-k { font-size: 12px; font-weight: 700; letter-spacing: .06em;
+.pos-page .pos-strip-k { font-size: 13px; font-weight: 700; letter-spacing: .06em;
   text-transform: uppercase; color: var(--muted); margin-right: 4px; }
 .pos-page .pos-chip { display: inline-flex; align-items: center; gap: 7px;
   padding: 5px 11px; border-radius: 7px; cursor: pointer;
@@ -1503,7 +1538,7 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 .pos-page .pos-na { font-size: 13px; line-height: 1.5; color: var(--muted); }
 .pos-page .pos-na b { color: var(--text); }
 .pos-page .pos-na em { font-style: normal; color: var(--dim); }
-.pos-page .pos-note { margin-top: 9px; font-size: 12.5px; line-height: 1.5; color: var(--muted); }
+.pos-page .pos-note { margin-top: 9px; font-size: 13px; line-height: 1.5; color: var(--muted); }
 .pos-page .pos-note b { color: var(--text); }
 .pos-page .pos-note em { font-style: normal; color: var(--dim); }
 
@@ -1542,7 +1577,7 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 
 .pos-page .pos-act { padding: 3px 10px; border-radius: 6px; cursor: pointer;
   background: rgba(var(--t-blue), .12); border: 1px solid var(--blue);
-  color: #7cb2ff; font-size: 11.5px; font-weight: 700; white-space: nowrap; }
+  color: #7cb2ff; font-size: 13px; font-weight: 700; white-space: nowrap; }
 .pos-page .pos-act:hover { background: rgba(var(--t-blue), .22); }
 
 /* ── Close-position dialog. ⛔ UI flow only — the dashboard has no order path. */
@@ -1562,7 +1597,7 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 .pos-page .pos-opt { display: flex; align-items: flex-start; gap: 9px;
   font-size: 13px; color: var(--text); cursor: pointer; }
 .pos-page .pos-opt.is-off { color: var(--dim); cursor: not-allowed; }
-.pos-page .pos-opt em { display: block; font-style: normal; font-size: 12px;
+.pos-page .pos-opt em { display: block; font-style: normal; font-size: 13px;
   color: var(--dim); margin-top: 2px; }
 .pos-page .pos-modal-price { display: flex; flex-direction: column; gap: 5px;
   padding: 0 16px 12px; }
@@ -1593,7 +1628,7 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 .pos-page .pos-full-btn { display: block; width: calc(100% - 32px); margin: 0 16px 12px;
   padding: 6px 10px; border-radius: 7px; cursor: pointer;
   background: var(--panel); border: 1px solid var(--border);
-  color: var(--text); font-size: 12px; font-weight: 700; }
+  color: var(--text); font-size: 13px; font-weight: 700; }
 .pos-page .pos-full-btn:hover { border-color: var(--blue); color: #7cb2ff; }
 
 /* The full-details popup is the SAME shell as the close dialog (one modal
@@ -1601,7 +1636,7 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 .pos-page .pos-full-box { width: min(940px, 100%); }
 .pos-page .pos-full-id { display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
   padding: 12px 16px 4px; }
-.pos-page .pos-full-tid { margin-left: auto; font-size: 11px; color: var(--dim); }
+.pos-page .pos-full-tid { margin-left: auto; font-size: 13px; color: var(--dim); }
 .pos-page .pos-full-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 4px 12px; padding: 4px 0 8px; }
 @media (max-width: 780px) { .pos-page .pos-full-grid { grid-template-columns: minmax(0, 1fr); } }
@@ -1631,11 +1666,11 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
    horizontal padding is tightened. */
 .pos-page .pos-tbl { width: 100%; }
 .pos-page .pos-tbl th { padding: 7px 4px; }
-.pos-page .pos-tbl td { padding: 0 4px; font-size: 12px; }
+.pos-page .pos-tbl td { padding: 0 4px; font-size: 13px; }
 /* the two widest text columns get room; everything else stays tight */
 .pos-page .pos-tbl th:nth-child(3), .pos-page .pos-tbl td:nth-child(3) { max-width: 150px;
   overflow: hidden; text-overflow: ellipsis; }
-.pos-page .pos-tbl .pos-act { padding: 2px 8px; font-size: 11px; }
+.pos-page .pos-tbl .pos-act { padding: 2px 8px; font-size: 13px; }
 
 /* ⛔ The scrollbar is NOT removed — it is the responsive fallback below the
    width where 22 columns genuinely cannot fit. At a normal desktop viewport
@@ -1658,7 +1693,7 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
    full value still available in the row's detail card. ⛔ Nothing else truncates. */
 .pos-page .pos-tbl td:nth-child(3) { max-width: 132px; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; }
-.pos-page .pos-tbl .pill { padding: 1px 6px; font-size: 10.5px; }
+.pos-page .pos-tbl .pill { padding: 1px 6px; font-size: 13px; }
 
 /* R:R is a ratio, not a quantity — centred, and narrow because "1.5:1" is all
    it ever needs. ⛔ No column was removed to make room for it. */
@@ -1709,16 +1744,16 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 /* Up to ten legend rows in a card sized for four, so the list scrolls inside
    the card. ⛔ The card does not grow and push the row of four out of line. */
 .tex-page .tex-legend { max-height: 132px; overflow-y: auto; padding-right: 4px; gap: 5px; }
-.tex-page .tex-legend > div { font-size: 12px; }
-.tex-page .tex-empty { color: var(--dim); font-size: 12.5px; }
+.tex-page .tex-legend > div { font-size: 13px; }
+.tex-page .tex-empty { color: var(--dim); font-size: 13px; }
 
 /* ── Direction performance ─────────────────────────────────────────────────
    The share bar reuses Screen-06's .pb-track; the signed net sits after it, so
    the row is a 4-column grid rather than Screen-06's 3. */
 .tex-page .tex-dir { display: grid; grid-template-columns: 52px minmax(0, 1fr) auto auto;
   align-items: center; gap: 9px; font-size: 13px; }
-.tex-page .tex-dir .pb-v { font-size: 12.5px; }
-.tex-page .tex-dir .pb-v em { font-size: 11.5px; }
+.tex-page .tex-dir .pb-v { font-size: 13px; }
+.tex-page .tex-dir .pb-v em { font-size: 13px; }
 .tex-page .tex-dir-net { font-variant-numeric: tabular-nums; font-weight: 700;
   min-width: 74px; text-align: right; }
 
@@ -1727,7 +1762,7 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
    Both sides are scaled to the largest ABSOLUTE net in the set, so the two
    halves are directly comparable — ⛔ not two independently-scaled charts. */
 .tex-page .tex-strat { display: grid; grid-template-columns: 118px minmax(0, 1fr) 78px;
-  align-items: center; gap: 9px; font-size: 12.5px; }
+  align-items: center; gap: 9px; font-size: 13px; }
 .tex-page .tex-strat .pb-k { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tex-page .tex-axis { position: relative; height: 9px; border-radius: 4px;
   background: rgba(var(--t-gray), .3); }
@@ -1736,7 +1771,7 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 .tex-page .tex-fill { position: absolute; top: 0; bottom: 0; border-radius: 3px; }
 .tex-page .tex-fill.is-pos { background: var(--pos); }
 .tex-page .tex-fill.is-neg { background: var(--neg); }
-.tex-page .tex-strat .pb-v { text-align: right; font-size: 12px; }
+.tex-page .tex-strat .pb-v { text-align: right; font-size: 13px; }
 
 /* Coverage line under the table: it states how many rows carry each enrichment,
    so a column of em-dashes reads as measured absence rather than a bug. */
@@ -1774,8 +1809,8 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
    rule exists to prevent happened at ~0px, not at 4. */
 .tex-page .tex-tbl th.rt, .tex-page .tex-tbl td.rt,
 .tex-page .tex-tbl th.ctr, .tex-page .tex-tbl td.ctr { padding-left: 4px; }
-.tex-page .tex-tbl td { font-size: 11.5px; }
-.tex-page .tex-tbl th { font-size: 10.5px; }
+.tex-page .tex-tbl td { font-size: 13px; }
+.tex-page .tex-tbl th { font-size: 13px; }
 /* Strategy (3) is now the ONLY truncation on the screen — Scanner was removed
    on 14-Aug (it printed a value identical to Strategy on every row ever
    recorded), and its width went straight back into this column rather than
@@ -1784,13 +1819,13 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 .tex-page .tex-tbl td:nth-child(3) {
   max-width: 128px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tex-page .tex-tbl th:nth-child(3) { max-width: 128px; }
-.tex-page .tex-tbl .pill { padding: 1px 5px; font-size: 10px; }
+.tex-page .tex-tbl .pill { padding: 1px 5px; font-size: 13px; }
 
 /* The scope line under the KPI deck: which set every number on the screen
    describes. Readable body text, ⛔ not a faint caption — it carries the base,
    and a percentage without its base is not a number. Highlighted when a filter
    is narrowing the set, because that is when the statement matters. */
-.tex-page .tex-scope { margin: -4px 2px 14px; font-size: 12.5px; line-height: 1.5;
+.tex-page .tex-scope { margin: -4px 2px 14px; font-size: 13px; line-height: 1.5;
   color: var(--muted); }
 .tex-page .tex-scope.is-filtered { color: var(--text);
   border-left: 2px solid var(--blue); padding-left: 9px; }
@@ -1875,9 +1910,9 @@ table td.ctr { text-align: center !important; }
 .pnl-page .pnl-h1 { margin: 0; font-size: 1.15rem; }
 .pnl-page .pnl-sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
 .pnl-page .pnl-cmp { display: flex; flex-direction: column; gap: 4px; min-width: 210px; }
-.pnl-page .pnl-cmp-lbl { font-size: 12px; color: var(--dim);
+.pnl-page .pnl-cmp-lbl { font-size: 13px; color: var(--dim);
   text-transform: uppercase; letter-spacing: .05em; }
-.pnl-page .pnl-range { margin-left: auto; color: var(--muted); font-size: 12.5px;
+.pnl-page .pnl-range { margin-left: auto; color: var(--muted); font-size: 13px;
   font-variant-numeric: tabular-nums; }
 
 /* Rail is fixed-width so the 14-column table keeps a predictable main width. */
@@ -1891,14 +1926,14 @@ table td.ctr { text-align: center !important; }
 .pnl-page .pnl-panel-head { display: flex; align-items: center;
   justify-content: space-between; gap: 10px; margin-bottom: 10px; }
 .pnl-page .pnl-panel-head .panel-title { margin: 0; }
-.pnl-page .pnl-note { color: var(--dim); font-size: 12px; margin-top: 6px; }
-.pnl-page .pnl-empty { color: var(--dim); font-size: 12.5px; text-align: center; padding: 14px 0; }
+.pnl-page .pnl-note { color: var(--dim); font-size: 13px; margin-top: 6px; }
+.pnl-page .pnl-empty { color: var(--dim); font-size: 13px; text-align: center; padding: 14px 0; }
 
 /* -- KPI sub-line + compare strip ---------------------------------------- */
-.pnl-page .pnl-kpi-note { color: var(--dim); font-size: 12px; margin: -4px 0 12px; }
+.pnl-page .pnl-kpi-note { color: var(--dim); font-size: 13px; margin: -4px 0 12px; }
 .pnl-page .pnl-dot { margin: 0 7px; color: var(--border); }
 .pnl-page .pnl-cmp-strip { background: var(--panel2); border: 1px solid var(--border);
-  border-radius: 8px; padding: 8px 12px; margin-bottom: 12px; font-size: 12.5px; }
+  border-radius: 8px; padding: 8px 12px; margin-bottom: 12px; font-size: 13px; }
 .pnl-page .pnl-cmp-k { color: var(--muted); margin-right: 14px; }
 .pnl-page .pnl-cmp-i { margin-right: 16px; color: var(--dim); }
 .pnl-page .pnl-cmp-i b { margin-left: 5px; font-variant-numeric: tabular-nums; color: var(--text); }
@@ -1908,12 +1943,12 @@ table td.ctr { text-align: center !important; }
 .pnl-page .pnl-filter-panel { padding-bottom: 10px; }
 .pnl-page .pnl-filters { margin-bottom: 0; align-items: flex-end; }
 .pnl-page .pnl-f { display: flex; flex-direction: column; gap: 4px; }
-.pnl-page .pnl-f > span:first-child { font-size: 12px; color: var(--dim);
+.pnl-page .pnl-f > span:first-child { font-size: 13px; color: var(--dim);
   text-transform: uppercase; letter-spacing: .05em; }
 .pnl-page .pnl-dates { display: flex; align-items: center; gap: 6px; }
 .pnl-page .pnl-fbtns { display: flex; gap: 8px; margin-left: auto; }
 .pnl-page .pnl-filter-state { margin-top: 9px; padding-top: 8px;
-  border-top: 1px solid var(--border); color: var(--muted); font-size: 12.5px; }
+  border-top: 1px solid var(--border); color: var(--muted); font-size: 13px; }
 .pnl-page .pnl-filter-state b { color: var(--text); font-variant-numeric: tabular-nums; }
 
 /* -- main table: 14 columns scroll INSIDE the panel ---------------------- */
@@ -1923,7 +1958,7 @@ table td.ctr { text-align: center !important; }
 .pnl-page .pnl-total td { border-top: 2px solid var(--border);
   font-weight: 700; background: var(--panel2); }
 .pnl-page .pnl-pager { display: flex; align-items: center; gap: 7px;
-  margin-top: 10px; font-size: 12.5px; color: var(--muted); flex-wrap: wrap; }
+  margin-top: 10px; font-size: 13px; color: var(--muted); flex-wrap: wrap; }
 .pnl-page .pnl-pg-of { margin-left: auto; font-variant-numeric: tabular-nums; }
 
 /* -- SCREEN-08 ALIGNMENT, CARRIED FORWARD BY COLUMN ROLE -------------------
@@ -1959,17 +1994,17 @@ table td.ctr { text-align: center !important; }
 .pnl-page .pnl-dd { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .pnl-page .pnl-dd-c { background: var(--panel2); border: 1px solid var(--border);
   border-radius: 8px; padding: 10px 11px; display: flex; flex-direction: column; gap: 3px; }
-.pnl-page .pnl-dd-l { font-size: 11.5px; color: var(--dim);
+.pnl-page .pnl-dd-l { font-size: 13px; color: var(--dim);
   text-transform: uppercase; letter-spacing: .05em; }
 .pnl-page .pnl-dd-c b { font-size: 1.02rem; font-variant-numeric: tabular-nums; }
-.pnl-page .pnl-dd-sub { font-size: 11.5px; color: var(--dim); }
+.pnl-page .pnl-dd-sub { font-size: 13px; color: var(--dim); }
 /* The honest-unavailable state. Deliberately NOT styled as an error - a period
    with no drawdown is a healthy outcome, not a fault. */
 .pnl-page .pnl-na { background: var(--panel2); border: 1px dashed var(--border);
   border-radius: 8px; padding: 14px; display: flex; flex-direction: column; gap: 6px; }
 .pnl-page .pnl-na b { color: var(--muted); font-size: 13px; }
-.pnl-page .pnl-na span { color: var(--dim); font-size: 12.5px; }
-.pnl-page .pnl-na em { color: var(--dim); font-size: 11.5px; font-style: normal; }
+.pnl-page .pnl-na span { color: var(--dim); font-size: 13px; }
+.pnl-page .pnl-na em { color: var(--dim); font-size: 13px; font-style: normal; }
 
 /* -- best / worst -------------------------------------------------------- */
 .pnl-page .pnl-bw td { font-size: 13px; }
@@ -1983,14 +2018,14 @@ table td.ctr { text-align: center !important; }
 .pnl-page .pnl-heat-tod { grid-template-columns: repeat(6, 1fr); }
 .pnl-page .pnl-heat-c { border: 1px solid var(--border); border-radius: 7px;
   padding: 9px 4px; display: flex; flex-direction: column; align-items: center; gap: 5px; }
-.pnl-page .pnl-heat-b { font-size: 11px; color: var(--muted); text-align: center; line-height: 1.25; }
-.pnl-page .pnl-heat-v { font-size: 12.5px; font-weight: 600;
+.pnl-page .pnl-heat-b { font-size: 13px; color: var(--muted); text-align: center; line-height: 1.25; }
+.pnl-page .pnl-heat-v { font-size: 13px; font-weight: 600;
   font-variant-numeric: tabular-nums; }
 /* A bucket with no trades shows a dash, no fill, dim. Never a coloured zero -
    "no observation" and "observed zero" must not look the same. */
 .pnl-page .pnl-heat-none { color: var(--dim); font-weight: 400; }
 .pnl-page .pnl-scale { display: flex; align-items: center; gap: 8px;
-  margin-top: 9px; font-size: 11px; color: var(--dim); }
+  margin-top: 9px; font-size: 13px; color: var(--dim); }
 .pnl-page .pnl-scale-bar { flex: 1; height: 6px; border-radius: 3px;
   background: linear-gradient(90deg, var(--neg), var(--gray), var(--pos)); }
 
@@ -2018,13 +2053,13 @@ table td.ctr { text-align: center !important; }
 .pnl-page .dot-dim    { background: #30363d; }
 .pnl-page .pnl-pie { width: 104px; height: 104px; }
 .pnl-page .pnl-legend { max-height: 150px; overflow-y: auto; padding-right: 4px; gap: 5px; }
-.pnl-page .pnl-legend > div { font-size: 12px; }
+.pnl-page .pnl-legend > div { font-size: 13px; }
 .pnl-page .pnl-pie-total { border-bottom: 1px solid var(--border);
   padding-bottom: 5px; margin-bottom: 3px; color: var(--muted); }
 .pnl-page .pnl-attr-sel { max-width: 168px; }
 
 /* -- footer -------------------------------------------------------------- */
-.pnl-page .pnl-foot { margin-top: 14px; color: var(--dim); font-size: 12.5px; }
+.pnl-page .pnl-foot { margin-top: 14px; color: var(--dim); font-size: 13px; }
 .pnl-page .pnl-cap-warn { color: var(--yellow); margin-left: 10px; }
 
 /* ── SCREEN-09 FIXES FOUND BY RENDERING THE PAGE, not by the tests ──────────
@@ -2051,13 +2086,13 @@ table td.ctr { text-align: center !important; }
       ROI % and Profit Factor are visible without horizontal scrolling at
       1536px. The wrap still scrolls below that rather than clipping. */
 .pnl-page .pnl-tbl { min-width: 0; }
-.pnl-page .pnl-tbl th, .pnl-page .pnl-tbl td { padding: 6px 5px; font-size: 12.5px; }
-.pnl-page .pnl-tbl th { font-size: .62rem; letter-spacing: .02em; }
+.pnl-page .pnl-tbl th, .pnl-page .pnl-tbl td { padding: 6px 5px; font-size: 13px; }
+.pnl-page .pnl-tbl th { font-size: 13px; letter-spacing: .02em; }
 
 /* 4. The rail's five-column ranking clipped its last column. */
-.pnl-page .pnl-rail .cap-table th { font-size: .6rem; letter-spacing: .01em; }
+.pnl-page .pnl-rail .cap-table th { font-size: 13px; letter-spacing: .01em; }
 .pnl-page .pnl-rail .cap-table th, .pnl-page .pnl-rail .cap-table td {
-  padding: 6px 4px; font-size: 12px; }
+  padding: 6px 4px; font-size: 13px; }
 .pnl-page .pnl-rail .cap-table td:first-child { max-width: 118px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -2085,11 +2120,11 @@ table td.ctr { text-align: center !important; }
 .slp-page .slp-sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
 .slp-page .slp-model { display: flex; flex-direction: column; gap: 3px;
   align-items: flex-end; max-width: 440px; text-align: right; }
-.slp-page .slp-model-k { font-size: 11.5px; color: var(--dim);
+.slp-page .slp-model-k { font-size: 13px; color: var(--dim);
   text-transform: uppercase; letter-spacing: .05em; }
-.slp-page .slp-model b { font-size: 12px; color: var(--muted); font-weight: 500;
+.slp-page .slp-model b { font-size: 13px; color: var(--muted); font-weight: 500;
   font-variant-numeric: tabular-nums; }
-.slp-page .slp-range { margin-left: auto; color: var(--muted); font-size: 12.5px;
+.slp-page .slp-range { margin-left: auto; color: var(--muted); font-size: 13px;
   font-variant-numeric: tabular-nums; }
 
 /* Rail fixed-width so the 14-column table keeps a predictable main width. */
@@ -2103,8 +2138,8 @@ table td.ctr { text-align: center !important; }
 .slp-page .slp-panel-head { display: flex; align-items: center;
   justify-content: space-between; gap: 10px; margin-bottom: 10px; }
 .slp-page .slp-panel-head .panel-title { margin: 0; }
-.slp-page .slp-note { color: var(--dim); font-size: 12px; margin-top: 6px; line-height: 1.5; }
-.slp-page .slp-empty { color: var(--dim); font-size: 12.5px; text-align: center; padding: 14px 0; }
+.slp-page .slp-note { color: var(--dim); font-size: 13px; margin-top: 6px; line-height: 1.5; }
+.slp-page .slp-empty { color: var(--dim); font-size: 13px; text-align: center; padding: 14px 0; }
 
 /* Six KPI cards on ONE row beside the 340px rail — the shared
    minmax(180px,1fr) wraps the sixth (the Screen-09 finding, same cause). */
@@ -2113,23 +2148,23 @@ table td.ctr { text-align: center !important; }
 .slp-page .kpi-val { font-size: 1.18rem; }
 @media (max-width: 1500px) { .slp-page .kpi-row { grid-template-columns: repeat(3, minmax(0,1fr)); } }
 
-.slp-page .slp-kpi-note { color: var(--dim); font-size: 12px; margin: -4px 0 12px; }
+.slp-page .slp-kpi-note { color: var(--dim); font-size: 13px; margin: -4px 0 12px; }
 .slp-page .slp-dot { margin: 0 7px; color: var(--border); }
 .slp-page .slp-warn { color: var(--yellow); }
 .slp-page .slp-err { color: var(--orange); margin-left: 10px; }
 
 /* -- filters ------------------------------------------------------------- */
 .slp-page .slp-filter-panel { padding-bottom: 10px; }
-.slp-page .slp-flt-title { font-size: .72rem; text-transform: uppercase;
+.slp-page .slp-flt-title { font-size: 13px; text-transform: uppercase;
   letter-spacing: .06em; color: var(--dim); margin-bottom: 10px; }
 .slp-page .slp-filters { margin-bottom: 0; align-items: flex-end; row-gap: 12px; }
 .slp-page .slp-f { display: flex; flex-direction: column; gap: 4px; }
-.slp-page .slp-f > span:first-child { font-size: 12px; color: var(--dim);
+.slp-page .slp-f > span:first-child { font-size: 13px; color: var(--dim);
   text-transform: uppercase; letter-spacing: .05em; }
 .slp-page .slp-dates { display: flex; align-items: center; gap: 6px; }
 .slp-page .slp-fbtns { display: flex; gap: 8px; margin-left: auto; }
 .slp-page .slp-filter-state { margin-top: 9px; padding-top: 8px;
-  border-top: 1px solid var(--border); color: var(--muted); font-size: 12.5px; }
+  border-top: 1px solid var(--border); color: var(--muted); font-size: 13px; }
 .slp-page .slp-filter-state b { color: var(--text); font-variant-numeric: tabular-nums; }
 
 /* -- SCREEN-08/09 ALIGNMENT, CARRIED FORWARD BY COLUMN ROLE ----------------
@@ -2158,18 +2193,18 @@ table td.ctr { text-align: center !important; }
    scrolls below ~1200px rather than clipping — nothing is ever cut off. */
 .slp-page .slp-tbl-wrap { overflow-x: auto; }
 .slp-page .slp-tbl { min-width: 0; width: 100%; }
-.slp-page .slp-tbl td { white-space: nowrap; padding: 6px 4px; font-size: 12.5px; }
+.slp-page .slp-tbl td { white-space: nowrap; padding: 6px 4px; font-size: 13px; }
 .slp-page .slp-tbl th { white-space: normal; padding: 6px 4px;
-  font-size: .6rem; letter-spacing: .01em; line-height: 1.3; vertical-align: bottom; }
+  font-size: 13px; letter-spacing: .01em; line-height: 1.3; vertical-align: bottom; }
 .slp-page .slp-th { cursor: pointer; user-select: none; }
 .slp-page .slp-th:hover { color: var(--text); }
 .slp-page .slp-arrow { color: var(--dim); font-size: .58rem; margin-left: 3px; }
-.slp-page .slp-th-sub { display: block; color: var(--dim); font-size: .56rem;
+.slp-page .slp-th-sub { display: block; color: var(--dim); font-size: 13px;
   text-transform: none; letter-spacing: 0; }
 .slp-page .slp-total td { border-top: 2px solid var(--border);
   font-weight: 700; background: var(--panel2); }
 .slp-page .slp-pager { display: flex; align-items: center; gap: 7px;
-  margin-top: 10px; font-size: 12.5px; color: var(--muted); flex-wrap: wrap; }
+  margin-top: 10px; font-size: 13px; color: var(--muted); flex-wrap: wrap; }
 .slp-page .slp-pg-of { margin-left: auto; font-variant-numeric: tabular-nums; }
 
 /* -- STATUS: the approved three colours, plus an honest fourth ------------
@@ -2177,7 +2212,7 @@ table td.ctr { text-align: center !important; }
    UNMEASURED is GREY on purpose: it is not a grade, it is the absence of one,
    and it must not be able to read as any of the three. */
 .slp-page .slp-badge { display: inline-block; padding: 2px 8px; border-radius: 999px;
-  font-size: 11px; font-weight: 700; letter-spacing: .02em; white-space: nowrap; }
+  font-size: 13px; font-weight: 700; letter-spacing: .02em; white-space: nowrap; }
 .slp-page .slp-WITHIN_LIMIT { background: var(--pos-tint); color: var(--pos); }
 .slp-page .slp-NEAR_LIMIT   { background: var(--warn-tint); color: var(--yellow); }
 .slp-page .slp-EXCEEDED     { background: var(--neg-tint); color: var(--neg); }
@@ -2189,22 +2224,22 @@ table td.ctr { text-align: center !important; }
   gap: 16px; margin-top: 16px; }
 @media (max-width: 1250px) { .slp-page .slp-row3 { grid-template-columns: 1fr; } }
 .slp-page .slp-bkt th, .slp-page .slp-bkt td,
-.slp-page .slp-imp th, .slp-page .slp-imp td { font-size: 12.5px; padding: 6px 6px; }
-.slp-page .slp-imp-s { color: var(--dim); font-size: 11.5px; margin-left: 4px; }
+.slp-page .slp-imp th, .slp-page .slp-imp td { font-size: 13px; padding: 6px 6px; }
+.slp-page .slp-imp-s { color: var(--dim); font-size: 13px; margin-left: 4px; }
 .slp-page .slp-rr td { font-size: 13px; }
 .slp-page .slp-rr-k { white-space: nowrap; color: var(--muted); }
 .slp-page .slp-rrbox { display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
   margin-top: 10px; }
 .slp-page .slp-rrbox-c { background: var(--panel2); border: 1px solid var(--border);
   border-radius: 8px; padding: 10px 11px; display: flex; flex-direction: column; gap: 3px; }
-.slp-page .slp-rrbox-l { font-size: 11.5px; color: var(--dim);
+.slp-page .slp-rrbox-l { font-size: 13px; color: var(--dim);
   text-transform: uppercase; letter-spacing: .05em; }
 .slp-page .slp-rrbox-c b { font-size: 1.25rem; font-variant-numeric: tabular-nums; }
-.slp-page .slp-rrbox-s { font-size: 11px; color: var(--dim); line-height: 1.45; }
+.slp-page .slp-rrbox-s { font-size: 13px; color: var(--dim); line-height: 1.45; }
 .slp-page .slp-rrfoot { display: grid; grid-template-columns: repeat(3, 1fr);
   gap: 10px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
 .slp-page .slp-rrf-c { display: flex; flex-direction: column; gap: 3px; }
-.slp-page .slp-rrf-l { font-size: 11.5px; color: var(--dim);
+.slp-page .slp-rrf-l { font-size: 13px; color: var(--dim);
   text-transform: uppercase; letter-spacing: .05em; }
 .slp-page .slp-rrf-c b { font-size: 1.02rem; font-variant-numeric: tabular-nums; }
 
@@ -2220,11 +2255,11 @@ table td.ctr { text-align: center !important; }
 .slp-page .slp-gl { stroke: var(--border); stroke-width: 1; stroke-dasharray: 3 3; }
 .slp-page .slp-line { stroke: var(--blue); stroke-width: 1.8; }
 .slp-page .slp-dot-pt { fill: var(--blue); }
-.slp-page .slp-pt-lbl { fill: var(--text); font-size: 12.5px;
+.slp-page .slp-pt-lbl { fill: var(--text); font-size: 13px;
   font-variant-numeric: tabular-nums; }
-.slp-page .slp-axis { fill: var(--muted); font-size: 11.5px;
+.slp-page .slp-axis { fill: var(--muted); font-size: 13px;
   font-variant-numeric: tabular-nums; }
-.slp-page .slp-empty-axis { font-size: 12.5px; fill: var(--dim); }
+.slp-page .slp-empty-axis { font-size: 13px; fill: var(--dim); }
 
 /* -- status donut. THE SCREEN-09 LESSON, CARRIED: `.pos-donut circle
       { fill:none; stroke-width:5 }` is scoped to `.pos-page`, so a donut on any
@@ -2241,7 +2276,7 @@ table td.ctr { text-align: center !important; }
 .slp-page .slp-arc-UNMEASURED   { stroke: #484f58; }
 .slp-page .slp-donut-wrap { display: flex; align-items: center; gap: 14px; }
 .slp-page .slp-legend { min-width: 0; display: flex; flex-direction: column;
-  gap: 6px; font-size: 12.5px; color: var(--muted); }
+  gap: 6px; font-size: 13px; color: var(--muted); }
 .slp-page .slp-legend > div { display: flex; align-items: center; gap: 8px; }
 .slp-page .slp-legend b { margin-left: auto; color: var(--text);
   font-variant-numeric: tabular-nums; }
@@ -2256,17 +2291,17 @@ table td.ctr { text-align: center !important; }
 .slp-page .slp-guide { list-style: none; margin: 0; padding: 0;
   display: flex; flex-direction: column; gap: 9px; }
 .slp-page .slp-guide li { display: flex; align-items: flex-start; gap: 9px;
-  font-size: 12.5px; color: var(--muted); line-height: 1.45; }
+  font-size: 13px; color: var(--muted); line-height: 1.45; }
 .slp-page .slp-guide li .slp-badge { flex: 0 0 auto; }
 .slp-page .slp-guide-r { padding-top: 1px; }
 
 /* -- rail + footer ------------------------------------------------------- */
-.slp-page .slp-rail .cap-table th { font-size: .6rem; letter-spacing: .01em; }
+.slp-page .slp-rail .cap-table th { font-size: 13px; letter-spacing: .01em; }
 .slp-page .slp-rail .cap-table th, .slp-page .slp-rail .cap-table td {
-  padding: 6px 4px; font-size: 12px; }
+  padding: 6px 4px; font-size: 13px; }
 .slp-page .slp-rail .cap-table td:first-child { max-width: 130px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.slp-page .slp-foot { margin-top: 14px; color: var(--dim); font-size: 12.5px; }
+.slp-page .slp-foot { margin-top: 14px; color: var(--dim); font-size: 13px; }
 .slp-page .slp-cap-warn { color: var(--yellow); margin-left: 10px; }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -2293,10 +2328,10 @@ table td.ctr { text-align: center !important; }
 .exec-page .exec-sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
 .exec-page .exec-bands { display: flex; flex-direction: column; gap: 3px;
   align-items: flex-end; text-align: right; }
-.exec-page .exec-bands-k { font-size: 11.5px; color: var(--dim);
+.exec-page .exec-bands-k { font-size: 13px; color: var(--dim);
   text-transform: uppercase; letter-spacing: .05em; }
-.exec-page .exec-bands b { font-size: 12px; color: var(--muted); font-weight: 500; }
-.exec-page .exec-range { margin-left: auto; color: var(--muted); font-size: 12.5px;
+.exec-page .exec-bands b { font-size: 13px; color: var(--muted); font-weight: 500; }
+.exec-page .exec-range { margin-left: auto; color: var(--muted); font-size: 13px;
   font-variant-numeric: tabular-nums; }
 
 .exec-page .exec-grid { display: grid; grid-template-columns: minmax(0,1fr) 340px;
@@ -2309,8 +2344,8 @@ table td.ctr { text-align: center !important; }
 .exec-page .exec-panel-head { display: flex; align-items: center;
   justify-content: space-between; gap: 10px; margin-bottom: 10px; }
 .exec-page .exec-panel-head .panel-title { margin: 0; }
-.exec-page .exec-note { color: var(--dim); font-size: 12px; margin-top: 6px; line-height: 1.5; }
-.exec-page .exec-empty { color: var(--dim); font-size: 12.5px; text-align: center; padding: 14px 0; }
+.exec-page .exec-note { color: var(--dim); font-size: 13px; margin-top: 6px; line-height: 1.5; }
+.exec-page .exec-empty { color: var(--dim); font-size: 13px; text-align: center; padding: 14px 0; }
 .exec-page .exec-dim { color: var(--dim); }
 .exec-page .exec-sub-h { margin-top: 14px; }
 
@@ -2321,23 +2356,23 @@ table td.ctr { text-align: center !important; }
 .exec-page .kpi-val { font-size: 1.18rem; }
 @media (max-width: 1500px) { .exec-page .kpi-row { grid-template-columns: repeat(3, minmax(0,1fr)); } }
 
-.exec-page .exec-kpi-note { color: var(--dim); font-size: 12px; margin: -4px 0 8px; }
+.exec-page .exec-kpi-note { color: var(--dim); font-size: 13px; margin: -4px 0 8px; }
 .exec-page .exec-dot { margin: 0 7px; color: var(--border); }
 .exec-page .exec-warn { color: var(--yellow); }
 .exec-page .exec-err { color: var(--orange); margin-left: 10px; }
 
 /* -- filters ------------------------------------------------------------- */
 .exec-page .exec-filter-panel { padding-bottom: 10px; }
-.exec-page .exec-flt-title { font-size: .72rem; text-transform: uppercase;
+.exec-page .exec-flt-title { font-size: 13px; text-transform: uppercase;
   letter-spacing: .06em; color: var(--dim); margin-bottom: 10px; }
 .exec-page .exec-filters { margin-bottom: 0; align-items: flex-end; row-gap: 12px; }
 .exec-page .exec-f { display: flex; flex-direction: column; gap: 4px; }
-.exec-page .exec-f > span:first-child { font-size: 12px; color: var(--dim);
+.exec-page .exec-f > span:first-child { font-size: 13px; color: var(--dim);
   text-transform: uppercase; letter-spacing: .05em; }
 .exec-page .exec-dates { display: flex; align-items: center; gap: 6px; }
 .exec-page .exec-fbtns { display: flex; gap: 8px; margin-left: auto; }
 .exec-page .exec-filter-state { margin-top: 9px; padding-top: 8px;
-  border-top: 1px solid var(--border); color: var(--muted); font-size: 12.5px; }
+  border-top: 1px solid var(--border); color: var(--muted); font-size: 13px; }
 .exec-page .exec-filter-state b { color: var(--text); font-variant-numeric: tabular-nums; }
 
 /* -- SCREEN-08/09/10 ALIGNMENT, CARRIED FORWARD BY COLUMN ROLE -------------
@@ -2362,10 +2397,10 @@ table td.ctr { text-align: center !important; }
 /* Horizontal padding only is tightened (3px, vs 4-5px on Screens 09/10): this
    table carries 15 columns and was 31px over its wrapper at 1600. ⭐ The VERTICAL
    rhythm is unchanged, so the row density still matches the other screens. */
-.exec-page .exec-tbl td { white-space: nowrap; padding: 6px 3px; font-size: 12.5px; }
+.exec-page .exec-tbl td { white-space: nowrap; padding: 6px 3px; font-size: 13px; }
 .exec-page .exec-tbl th { white-space: normal; padding: 6px 3px;
-  font-size: .6rem; letter-spacing: .01em; line-height: 1.3; vertical-align: bottom; }
-.exec-page .exec-grp th { font-size: .58rem; color: var(--dim);
+  font-size: 13px; letter-spacing: .01em; line-height: 1.3; vertical-align: bottom; }
+.exec-page .exec-grp th { font-size: 13px; color: var(--dim);
   border-bottom: 1px solid var(--border); padding-bottom: 4px;
   letter-spacing: .06em; text-transform: uppercase; }
 .exec-page .exec-grp th + th { border-left: 1px solid var(--border); }
@@ -2382,7 +2417,7 @@ table td.ctr { text-align: center !important; }
 .exec-page .exec-tbl td:nth-child(3) { max-width: 100px; overflow: hidden;
   text-overflow: ellipsis; }
 .exec-page .exec-pager { display: flex; align-items: center; gap: 7px;
-  margin-top: 10px; font-size: 12.5px; color: var(--muted); flex-wrap: wrap; }
+  margin-top: 10px; font-size: 13px; color: var(--muted); flex-wrap: wrap; }
 .exec-page .exec-pg-of { margin-left: auto; font-variant-numeric: tabular-nums; }
 
 /* -- STATUS: the approved three bands, plus an honest fourth ---------------
@@ -2390,7 +2425,7 @@ table td.ctr { text-align: center !important; }
    UNMEASURED is GREY on purpose: it is not a speed, it is the absence of one,
    and it must not be able to read as any of the three. */
 .exec-page .exec-badge { display: inline-block; padding: 2px 8px; border-radius: 999px;
-  font-size: 11px; font-weight: 700; letter-spacing: .02em; white-space: nowrap; }
+  font-size: 13px; font-weight: 700; letter-spacing: .02em; white-space: nowrap; }
 .exec-page .exec-FAST       { background: var(--pos-tint);   color: var(--pos); }
 .exec-page .exec-MODERATE   { background: var(--warn-tint);  color: var(--yellow); }
 .exec-page .exec-SLOW       { background: var(--neg-tint);   color: var(--neg); }
@@ -2418,9 +2453,9 @@ table td.ctr { text-align: center !important; }
 @media (max-width: 1100px) {
   .exec-page .exec-zone-a, .exec-page .exec-zone-b { grid-template-columns: 1fr; }
 }
-.exec-page .exec-sum th, .exec-page .exec-sum td { font-size: 12.5px; padding: 6px 6px; }
+.exec-page .exec-sum th, .exec-page .exec-sum td { font-size: 13px; padding: 6px 6px; }
 .exec-page .exec-tot { margin-top: 10px; padding-top: 9px;
-  border-top: 1px solid var(--border); color: var(--muted); font-size: 12.5px; }
+  border-top: 1px solid var(--border); color: var(--muted); font-size: 13px; }
 .exec-page .exec-tot b { color: var(--text); margin-left: 6px;
   font-variant-numeric: tabular-nums; }
 
@@ -2430,17 +2465,17 @@ table td.ctr { text-align: center !important; }
 .exec-page .exec-gap td { color: var(--dim); background: var(--shade-tint); }
 .exec-page .exec-gap-tag { display: inline-block; margin-left: 6px; padding: 1px 6px;
   border: 1px dashed var(--border); border-radius: 999px;
-  font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--dim); }
+  font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--dim); }
 .exec-page .exec-comp-tag { display: inline-block; margin-left: 6px; padding: 1px 6px;
   border-radius: 999px; background: var(--accent-tint); color: var(--blue);
-  font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
+  font-size: 13px; text-transform: uppercase; letter-spacing: .04em; }
 .exec-page .exec-gapnote { color: var(--yellow); }
 
 /* -- status guide -------------------------------------------------------- */
 .exec-page .exec-guide { list-style: none; margin: 0; padding: 0;
   display: flex; flex-direction: column; gap: 9px; }
 .exec-page .exec-guide li { display: flex; align-items: flex-start; gap: 9px;
-  font-size: 12.5px; color: var(--muted); line-height: 1.45; }
+  font-size: 13px; color: var(--muted); line-height: 1.45; }
 .exec-page .exec-guide li .exec-badge { flex: 0 0 auto; }
 .exec-page .exec-guide-r { padding-top: 1px; }
 
@@ -2448,9 +2483,9 @@ table td.ctr { text-align: center !important; }
 .exec-page .exec-warns { list-style: none; margin: 0; padding: 0;
   display: flex; flex-direction: column; gap: 8px; }
 .exec-page .exec-warns li { display: flex; align-items: center; gap: 7px;
-  flex-wrap: wrap; font-size: 12px; color: var(--muted); }
-.exec-page .exec-warn-ts { color: var(--dim); font-size: 11.5px; }
-.exec-page .exec-warn-sub { color: var(--dim); font-size: 11.5px; }
+  flex-wrap: wrap; font-size: 13px; color: var(--muted); }
+.exec-page .exec-warn-ts { color: var(--dim); font-size: 13px; }
+.exec-page .exec-warn-sub { color: var(--dim); font-size: 13px; }
 .exec-page .exec-warn-v { margin-left: auto; color: var(--text);
   font-variant-numeric: tabular-nums; }
 
@@ -2465,7 +2500,7 @@ table td.ctr { text-align: center !important; }
 .exec-page .exec-donut .pd-arc { transition: none; }
 .exec-page .exec-donut-wrap { display: flex; align-items: center; gap: 14px; }
 .exec-page .exec-legend { min-width: 0; display: flex; flex-direction: column;
-  gap: 6px; font-size: 12.5px; color: var(--muted); }
+  gap: 6px; font-size: 13px; color: var(--muted); }
 .exec-page .exec-legend > div { display: flex; align-items: center; gap: 8px; }
 .exec-page .exec-legend b { margin-left: auto; color: var(--text);
   font-variant-numeric: tabular-nums; }
@@ -2495,9 +2530,9 @@ table td.ctr { text-align: center !important; }
 .exec-page .exec-curve-wrap { padding: 6px 8px 2px; }
 .exec-page .exec-curve { height: 210px; }
 .exec-page .exec-gl { stroke: var(--border); stroke-width: 1; stroke-dasharray: 3 3; }
-.exec-page .exec-axis { fill: var(--muted); font-size: 11.5px;
+.exec-page .exec-axis { fill: var(--muted); font-size: 13px;
   font-variant-numeric: tabular-nums; }
-.exec-page .exec-pt-lbl { fill: var(--text); font-size: 12px;
+.exec-page .exec-pt-lbl { fill: var(--text); font-size: 13px;
   font-variant-numeric: tabular-nums; }
 .exec-page .exec-l-sig { stroke: var(--blue); stroke-width: 1.8; }
 .exec-page .exec-l-cre { stroke: var(--pos); stroke-width: 1.8; }
@@ -2507,24 +2542,24 @@ table td.ctr { text-align: center !important; }
 .exec-page .exec-l-fil-d { fill: var(--purple); }
 .exec-page .exec-l-trend { stroke: var(--orange); stroke-width: 1.8; }
 .exec-page .exec-l-trend-d { fill: var(--orange); }
-.exec-page .exec-tp-legend { display: flex; gap: 14px; font-size: 12px; color: var(--muted); }
+.exec-page .exec-tp-legend { display: flex; gap: 14px; font-size: 13px; color: var(--muted); }
 .exec-page .exec-tp-legend span { display: flex; align-items: center; gap: 6px; }
 .exec-page .exec-dot-sig { background: var(--blue); }
 .exec-page .exec-dot-cre { background: var(--pos); }
 .exec-page .exec-dot-fil { background: var(--purple); }
 .exec-page .exec-tp-tot { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 9px;
   padding-top: 9px; border-top: 1px solid var(--border);
-  color: var(--muted); font-size: 12.5px; }
+  color: var(--muted); font-size: 13px; }
 .exec-page .exec-tp-tot b { color: var(--text); margin-left: 6px;
   font-variant-numeric: tabular-nums; }
 
 /* -- rail + footer ------------------------------------------------------- */
-.exec-page .exec-rail .cap-table th { font-size: .6rem; letter-spacing: .01em; }
+.exec-page .exec-rail .cap-table th { font-size: 13px; letter-spacing: .01em; }
 .exec-page .exec-rail .cap-table th, .exec-page .exec-rail .cap-table td {
-  padding: 6px 4px; font-size: 12px; }
+  padding: 6px 4px; font-size: 13px; }
 .exec-page .exec-rail .cap-table td:first-child { max-width: 130px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.exec-page .exec-foot { margin-top: 14px; color: var(--dim); font-size: 12.5px; }
+.exec-page .exec-foot { margin-top: 14px; color: var(--dim); font-size: 13px; }
 .exec-page .exec-cap-warn { color: var(--yellow); margin-left: 10px; }
 
 /* -- draggable column headers: the Screens 04/05/07 affordance, reused ----- */
@@ -2540,7 +2575,7 @@ table td.ctr { text-align: center !important; }
       Outlined pills, ⛔ not the filled speed badges — an operator must never read
       "CLOSED" as a speed grade. */
 .exec-page .exec-state { display: inline-block; padding: 1px 7px; border-radius: 4px;
-  font-size: 10.5px; font-weight: 600; letter-spacing: .03em;
+  font-size: 13px; font-weight: 600; letter-spacing: .03em;
   border: 1px solid var(--border); color: var(--muted); white-space: nowrap; }
 .exec-page .exec-st-CLOSED   { border-color: var(--gray);   color: var(--muted); }
 .exec-page .exec-st-OPEN     { border-color: var(--blue);   color: var(--blue); }
@@ -2594,15 +2629,15 @@ table td.ctr { text-align: center !important; }
 .sysh-page .sysh-h1 { margin: 0; font-size: 1.15rem; }
 .sysh-page .sysh-sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
 .sysh-page .sysh-gen { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
-.sysh-page .sysh-gen-k { font-size: 11.5px; color: var(--dim);
+.sysh-page .sysh-gen-k { font-size: 13px; color: var(--dim);
   text-transform: uppercase; letter-spacing: .05em; }
 .sysh-page .sysh-gen b { font-size: 13px; color: var(--muted);
   font-variant-numeric: tabular-nums; }
 .sysh-page .sysh-panel-head { display: flex; align-items: center;
   justify-content: space-between; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
 .sysh-page .sysh-panel-head .panel-title { margin: 0; }
-.sysh-page .sysh-note { color: var(--dim); font-size: 12px; margin-top: 6px; line-height: 1.5; }
-.sysh-page .sysh-empty { color: var(--dim); font-size: 12.5px; text-align: center; padding: 12px 0; }
+.sysh-page .sysh-note { color: var(--dim); font-size: 13px; margin-top: 6px; line-height: 1.5; }
+.sysh-page .sysh-empty { color: var(--dim); font-size: 13px; text-align: center; padding: 12px 0; }
 .sysh-page .sysh-sub-h { margin-top: 14px; }
 .sysh-page .sysh-err { color: var(--orange); margin-left: 10px; }
 .sysh-page .sysh-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -2619,10 +2654,10 @@ table td.ctr { text-align: center !important; }
 
 .sysh-page .sysh-overall { display: flex; flex-direction: column; gap: 5px;
   justify-content: center; }
-.sysh-page .sysh-ov-k { font-size: 11.5px; color: var(--dim);
+.sysh-page .sysh-ov-k { font-size: 13px; color: var(--dim);
   text-transform: uppercase; letter-spacing: .06em; }
 .sysh-page .sysh-ov-v { font-size: 1.7rem; font-weight: 700; letter-spacing: .01em; }
-.sysh-page .sysh-ov-note { font-size: 12px; color: var(--muted); line-height: 1.4; }
+.sysh-page .sysh-ov-note { font-size: 13px; color: var(--muted); line-height: 1.4; }
 /* A tinted card back so overall status is legible across the room, ⛔ without
    replacing the text colour that carries the meaning. */
 .sysh-page .sysh-bg-HEALTHY { border-color: rgba(63,185,80,.45); }
@@ -2638,7 +2673,7 @@ table td.ctr { text-align: center !important; }
 .sysh-page .sysh-hc b { color: var(--muted); font-variant-numeric: tabular-nums; }
 
 /* -- key/value tables (DB · broker · VM · pillars) ------------------------ */
-.sysh-page .sysh-kv th, .sysh-page .sysh-kv td { font-size: 12.5px; padding: 5px 6px; }
+.sysh-page .sysh-kv th, .sysh-page .sysh-kv td { font-size: 13px; padding: 5px 6px; }
 .sysh-page .sysh-kv td.lbl { color: var(--muted); white-space: nowrap; }
 .sysh-page .sysh-na { color: var(--dim); cursor: help; }
 /* UNKNOWN / not-instrumented is GREY. ⛔ Never green, ⛔ never red — an absent
@@ -2647,15 +2682,15 @@ table td.ctr { text-align: center !important; }
 .sysh-page .sysh-gapbox { display: flex; flex-direction: column; gap: 4px;
   background: var(--panel2); border: 1px dashed var(--border); border-radius: 8px;
   padding: 10px 11px; }
-.sysh-page .sysh-gapbox b { font-size: 12.5px; letter-spacing: .04em; }
-.sysh-page .sysh-gapbox span { color: var(--dim); font-size: 11.5px; line-height: 1.45; }
+.sysh-page .sysh-gapbox b { font-size: 13px; letter-spacing: .04em; }
+.sysh-page .sysh-gapbox span { color: var(--dim); font-size: 13px; line-height: 1.45; }
 .sysh-page .sysh-gapnote { color: var(--yellow); }
 
 /* -- SEMANTIC STATUS: the approved four ----------------------------------
    Healthy GREEN · Warning YELLOW · Failed RED · Unknown GREY, used identically
    on pills, dots and TEXT so a colour never means two things on one page. */
 .sysh-page .sysh-pill { display: inline-block; padding: 2px 8px; border-radius: 999px;
-  font-size: 11px; font-weight: 700; letter-spacing: .02em; white-space: nowrap; }
+  font-size: 13px; font-weight: 700; letter-spacing: .02em; white-space: nowrap; }
 .sysh-page .sysh-HEALTHY { background: var(--pos-tint);   color: var(--pos); }
 .sysh-page .sysh-WARNING { background: var(--warn-tint);  color: var(--yellow); }
 .sysh-page .sysh-FAILED  { background: var(--neg-tint);   color: var(--neg); }
@@ -2683,9 +2718,9 @@ table td.ctr { text-align: center !important; }
 
 .sysh-page .sysh-tbl-wrap { overflow-x: auto; }
 .sysh-page .sysh-tbl { min-width: 0; width: 100%; }
-.sysh-page .sysh-tbl td { white-space: nowrap; padding: 6px 5px; font-size: 12.5px; }
+.sysh-page .sysh-tbl td { white-space: nowrap; padding: 6px 5px; font-size: 13px; }
 .sysh-page .sysh-tbl th { white-space: normal; padding: 6px 5px;
-  font-size: .62rem; letter-spacing: .02em; line-height: 1.3; vertical-align: bottom; }
+  font-size: 13px; letter-spacing: .02em; line-height: 1.3; vertical-align: bottom; }
 .sysh-page .sysh-tbl td:first-child { max-width: 240px; overflow: hidden;
   text-overflow: ellipsis; }
 /* draggable headers — the Screens 04/05/07/11 affordance, reused */
@@ -2698,16 +2733,16 @@ table td.ctr { text-align: center !important; }
 .sysh-page .sysh-arrow { color: var(--dim); font-size: .58rem; margin-left: 3px; }
 .sysh-page .sysh-legend { display: flex; align-items: center; gap: 14px;
   flex-wrap: wrap; margin-top: 10px; padding-top: 9px;
-  border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; }
+  border-top: 1px solid var(--border); color: var(--muted); font-size: 13px; }
 .sysh-page .sysh-legend-note { margin-top: 0; flex: 1 1 240px; }
 
 /* -- dependencies -------------------------------------------------------- */
 .sysh-page .sysh-deps { list-style: none; margin: 0; padding: 0;
   display: flex; flex-direction: column; gap: 8px; }
 .sysh-page .sysh-deps li { display: flex; align-items: center; gap: 4px;
-  font-size: 12.5px; color: var(--muted); cursor: help; }
+  font-size: 13px; color: var(--muted); cursor: help; }
 .sysh-page .sysh-dep-n { flex: 1 1 auto; }
-.sysh-page .sysh-deps b { font-size: 11.5px; font-weight: 700; }
+.sysh-page .sysh-deps b { font-size: 13px; font-weight: 700; }
 
 /* -- BOTTOM ANALYTICS ZONE — one continuous band, ⛔ not two tiers -------- */
 .sysh-page .sysh-zone { display: flex; flex-direction: column; gap: 16px;
@@ -2758,51 +2793,51 @@ table td.ctr { text-align: center !important; }
 .sysh-page .sysh-events, .sysh-page .sysh-alerts { list-style: none; margin: 0;
   padding: 0; display: flex; flex-direction: column; gap: 7px; }
 .sysh-page .sysh-events li, .sysh-page .sysh-alerts li { display: flex;
-  align-items: baseline; gap: 6px; font-size: 12.5px; line-height: 1.4;
+  align-items: baseline; gap: 6px; font-size: 13px; line-height: 1.4;
   flex-wrap: wrap; }
-.sysh-page .sysh-ts { color: var(--dim); font-size: 11.5px; flex: 0 0 auto; }
+.sysh-page .sysh-ts { color: var(--dim); font-size: 13px; flex: 0 0 auto; }
 .sysh-page .sysh-ev-l { font-weight: 600; }
-.sysh-page .sysh-ev-d { color: var(--dim); font-size: 11.5px; }
-.sysh-page .sysh-sev { font-size: 10.5px; font-weight: 700; letter-spacing: .04em;
+.sysh-page .sysh-ev-d { color: var(--dim); font-size: 13px; }
+.sysh-page .sysh-sev { font-size: 13px; font-weight: 700; letter-spacing: .04em;
   flex: 0 0 auto; }
 /* THE ALERT TEXT ITSELF is coloured by `txt(status)` in the markup — this rule
    only sets its weight/flow. ⛔ Do not add a colour here: it would override the
    semantic class and repaint every alert the same. */
 .sysh-page .sysh-al-t { flex: 1 1 160px; }
-.sysh-page .sysh-rec-counts { display: flex; gap: 10px; font-size: 11.5px; }
-.sysh-page .sysh-rec-state { margin-left: auto; font-size: 11.5px; font-weight: 600; }
+.sysh-page .sysh-rec-counts { display: flex; gap: 10px; font-size: 13px; }
+.sysh-page .sysh-rec-state { margin-left: auto; font-size: 13px; font-weight: 600; }
 
 /* -- trading readiness --------------------------------------------------- */
 .sysh-page .sysh-ready { display: flex; flex-direction: column; gap: 6px; }
 .sysh-page .sysh-ready-v { font-size: 1.6rem; font-weight: 800; letter-spacing: .02em; }
-.sysh-page .sysh-ready-r { font-size: 12px; line-height: 1.45; }
-.sysh-page .sysh-ready-now { font-size: 10.5px; letter-spacing: .06em;
+.sysh-page .sysh-ready-r { font-size: 13px; line-height: 1.45; }
+.sysh-page .sysh-ready-now { font-size: 13px; letter-spacing: .06em;
   text-transform: uppercase; color: var(--dim); margin-top: -4px; }
 .sysh-page .sysh-blockers { list-style: none; margin: 2px 0 0; padding: 8px 10px;
   display: flex; flex-direction: column; gap: 3px;
   background: var(--neg-tint); border: 1px solid rgba(248,81,73,.45);
-  border-radius: 7px; font-size: 11.5px; line-height: 1.45; }
+  border-radius: 7px; font-size: 13px; line-height: 1.45; }
 /* Preflight = HISTORY. Recessed and tagged so it can never be mistaken for the
    current verdict above it — that mistake is the defect this panel was fixed for. */
 .sysh-page .sysh-hist { margin-top: 8px; padding-top: 8px;
   border-top: 1px dashed var(--border); opacity: .92; }
 .sysh-page .sysh-hist-h { display: flex; align-items: center; gap: 7px;
-  flex-wrap: wrap; font-size: 11.5px; color: var(--dim); }
-.sysh-page .sysh-hist-tag { font-size: 9.5px; font-weight: 700; letter-spacing: .07em;
+  flex-wrap: wrap; font-size: 13px; color: var(--dim); }
+.sysh-page .sysh-hist-tag { font-size: 13px; font-weight: 700; letter-spacing: .07em;
   padding: 2px 6px; border-radius: 4px;
   background: var(--muted-tint); color: var(--dim); border: 1px solid var(--border); }
 .sysh-page .sysh-supersede { margin-top: 5px; padding: 6px 9px; border-radius: 6px;
   background: var(--warn-tint); border: 1px solid rgba(210,153,34,.4);
-  font-size: 11.5px; line-height: 1.45; }
+  font-size: 13px; line-height: 1.45; }
 .sysh-page .sysh-pillars { margin-top: 6px; }
 .sysh-page .sysh-pillars td { cursor: help; }
-.sysh-page .sysh-pill-n { color: var(--dim); font-size: 11px; margin-left: 4px; }
+.sysh-page .sysh-pill-n { color: var(--dim); font-size: 13px; margin-left: 4px; }
 
 /* -- status guide + colour key ------------------------------------------- */
 .sysh-page .sysh-guide { list-style: none; margin: 0; padding: 0;
   display: flex; flex-direction: column; gap: 8px; }
 .sysh-page .sysh-guide li { display: flex; align-items: flex-start; gap: 8px;
-  font-size: 12.5px; color: var(--muted); line-height: 1.45; }
+  font-size: 13px; color: var(--muted); line-height: 1.45; }
 .sysh-page .sysh-guide li > span:first-child { flex: 0 0 auto; font-weight: 600; }
 .sysh-page .sysh-guide-r { color: var(--dim); }
 .sysh-page .sysh-ckey li > span:first-child { min-width: 205px; }
@@ -2815,10 +2850,10 @@ table td.ctr { text-align: center !important; }
 .sysh-page .sysh-gl { stroke: var(--border); stroke-width: 1; stroke-dasharray: 3 3; }
 .sysh-page .sysh-line { stroke: var(--blue); stroke-width: 1.8; }
 .sysh-page .sysh-dot-pt { fill: var(--blue); }
-.sysh-page .sysh-axis { fill: var(--muted); font-size: 11.5px;
+.sysh-page .sysh-axis { fill: var(--muted); font-size: 13px;
   font-variant-numeric: tabular-nums; }
 
-.sysh-page .sysh-foot { margin-top: 14px; color: var(--dim); font-size: 12.5px; }
+.sysh-page .sysh-foot { margin-top: 14px; color: var(--dim); font-size: 13px; }
 
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -5665,3 +5700,117 @@ main.content:has(> .cfg16-page) { width: 100%; max-width: none; margin: 0;
   .cfg16-page .cfg16-thresh { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .cfg16-page .cfg16-slipparams { grid-template-columns: minmax(0, 1fr); }
 }
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SCREEN 08 — CAPITAL & RISK  (`gui/08. Capital_Risk.png` is BINDING)
+   ═══════════════════════════════════════════════════════════════════════════
+   THE TWO PICTURES THE ARTWORK DRAWS AND THE BUILD DID NOT (18-Aug-2026).
+   ① zone 9 is a SEMICIRCULAR UTILIZATION GAUGE in `08. Capital_Risk.png`
+     (0% left, 50% top, 100% right, the value large in the centre); the build
+     printed a bare number. ② zone 7 TOP CAPITAL CONSUMERS carries a horizontal
+     bar per strategy; the build printed the % only.
+   ⛔ NO NEW DATA: the gauge reads utilPct() and the bars read the same
+   total_real the money column already prints.
+   ⭐ THE ARC IS COLOURED BY usageClass() — the SAME classifier the number
+   inside it and the range table beneath it already use — so the picture can
+   never disagree with the words beside it. (The artwork paints the dial a flat
+   blue; one classifier is the safer read and keeps 0-60/60-80/80-100 honest.) */
+.cap-page .cap-gauge-wrap { display: flex; align-items: center; gap: 18px;
+  flex-wrap: wrap; }
+.cap-page .cap-gauge-box { position: relative; width: 210px; height: 151px;
+  flex: 0 0 auto; }
+.cap-page .cap-gauge { width: 210px; height: 151px; display: block; }
+.cap-page .cap-g-bg { stroke: var(--gray); }
+.cap-page .cap-g-fg { transition: stroke-dasharray .3s ease; }
+.cap-page .cap-g-fg.num-pos  { stroke: var(--pos); }
+.cap-page .cap-g-fg.num-warn { stroke: var(--yellow); }
+.cap-page .cap-g-fg.num-neg  { stroke: var(--neg); }
+/* 6.5 user units x (210/100) = 13.65px rendered ⇒ the tick labels clear the
+   spec's 13px floor. ⛔ The box is a FIXED 210px, so they cannot shrink under
+   it at a narrower viewport. */
+.cap-page .cap-g-tick { fill: var(--dim); font-size: 6.5px; font-weight: 600; }
+.cap-page .cap-g-centre { position: absolute; left: 0; right: 0; bottom: 26px;
+  display: flex; flex-direction: column; align-items: center; gap: 1px;
+  pointer-events: none; }
+.cap-page .cap-g-v { font-size: 1.45rem; font-weight: 700; line-height: 1.1; }
+.cap-page .cap-g-d { font-size: 13px; color: var(--dim); }
+.cap-page .cap-g-side { flex: 1 1 260px; min-width: 0; }
+
+/* zone 7 — the artwork's consumer bars. Length is relative to the LARGEST
+   consumer so the widest bar fills its cell; the % column keeps carrying the
+   share of the true total, so the bar is a shape and the number is the fact. */
+.cap-page .cap-barh { width: 26%; }
+.cap-page .cap-barc { width: 26%; padding-right: 10px; }
+.cap-page .cap-bar { display: block; width: 100%; height: 7px; border-radius: 4px;
+  background: var(--card, var(--panel)); overflow: hidden; }
+.cap-page .cap-bar i { display: block; height: 100%; border-radius: 4px;
+  background: var(--purple); }
+@media (max-width: 1500px) {
+  .cap-page .cap-gauge-box, .cap-page .cap-gauge { width: 186px; height: 134px; }
+  .cap-page .cap-g-tick { font-size: 7.2px; }   /* 7.2 x 1.86 = 13.4px */
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SCREEN 08 — READABILITY FLOOR  (`gui/08. Capital_Risk.txt` is BINDING)
+   ═══════════════════════════════════════════════════════════════════════════
+   `08. Capital_Risk.txt`, READABILITY: "Minimum: 13px". Screen 08's sub-floor
+   text all came from GLOBAL classes (.panel-sub .74rem, .kpi-label, .bn-label,
+   .cap-table th .68rem, .cap-status, .panel-link, .btn-export, .ts-note)
+   which APPROVED screens 09/10/11/12 also consume.
+   ⛔ THE GLOBALS ARE NOT TOUCHED — that would repaint approved screens, which
+   is the standing recorded decision. Every rule here is `.cap-page`-scoped, so
+   the blast radius is Screen 08 and nothing else. */
+.cap-page .panel-sub,
+.cap-page .kpi-label,
+.cap-page .bn-label,
+.cap-page .ts-note,
+.cap-page .panel-link,
+.cap-page .cap-status,
+.cap-page .btn-export,
+.cap-page .ev-empty,
+.cap-page .cap-table th,
+.cap-page .strat-table th,
+.cap-page .curve-meta { font-size: 13px; }
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SCREEN 09-12 + 16-17 — THE 13px READABILITY FLOOR (19-Aug-2026)
+   ═══════════════════════════════════════════════════════════════════════════
+   Every one of these specs states READABILITY / "Minimum: 13px". The audit
+   measured 33 / 34 / 48 / 50 / 1 / 1 elements rendering under it.
+
+   ⛔ THE GLOBAL CLASSES ARE NOT EDITED. `.btn-export`, `.kpi-label`, `.ctr`,
+   `.lbl`, `.num-*`, `.panel-sub`, `.panel-title`, `.ps-btn`, `.rt-btn` and
+   `.mono` are shared by screens that are already approved and CLOSED; raising
+   them at source would repaint all of them at once, which is the standing
+   recorded decision. Each rule below is PAGE-SCOPED, and each of these six
+   page classes is carried by exactly ONE template (measured), so the blast
+   radius of every line here is a single screen.
+
+   ⚠️ These four analytics screens were VISUALLY APPROVED on 15-16 Aug. Their
+   typography changes here, so their approval must be re-taken — that is
+   reported, ⛔ not glossed. */
+.pnl-page .btn-export, .pnl-page .kpi-label, .pnl-page .ctr, .pnl-page .lbl,
+.pnl-page .num-neg, .pnl-page .num-pos, .pnl-page .num-warn,
+.pnl-page .ps-btn, .pnl-page .rt-btn, .pnl-page .panel-sub,
+.pnl-page .panel-title, .pnl-page .mono { font-size: 13px; }
+
+.slp-page .btn-export, .slp-page .kpi-label, .slp-page .ctr, .slp-page .lbl,
+.slp-page .num-neg, .slp-page .num-pos, .slp-page .num-warn,
+.slp-page .ps-btn, .slp-page .rt-btn, .slp-page .panel-sub,
+.slp-page .panel-title, .slp-page .mono { font-size: 13px; }
+
+.exec-page .btn-export, .exec-page .kpi-label, .exec-page .ctr, .exec-page .lbl,
+.exec-page .num-neg, .exec-page .num-pos, .exec-page .num-warn,
+.exec-page .ps-btn, .exec-page .rt-btn, .exec-page .panel-sub,
+.exec-page .panel-title, .exec-page .mono { font-size: 13px; }
+
+.sysh-page .btn-export, .sysh-page .kpi-label, .sysh-page .ctr, .sysh-page .lbl,
+.sysh-page .num-neg, .sysh-page .num-pos, .sysh-page .num-warn,
+.sysh-page .ps-btn, .sysh-page .rt-btn, .sysh-page .panel-sub,
+.sysh-page .panel-title, .sysh-page .mono { font-size: 13px; }
+
+/* Screens 16 and 17 carried exactly ONE sub-floor element each. */
+.cfg16-page .kpi-label, .ctl-page .kpi-label { font-size: 13px; }
