@@ -980,6 +980,16 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
    ⛔ ALL SCOPED TO `.strat-page`: Screens 02/16/17/19/20/21/22 are untouched,
    and `.flt-k` keeps its APPROVED 12px because that label language is shared. */
 
+/* KPI LABELS ARE UPPERCASE, as the approved artwork draws them — "TOTAL
+   STRATEGIES", "ACTIVE", "QUIET", "SILENT", verified off the PNG at 3x. The deck
+   inherits `.dash-page .kc-label`, which carries no transform, so Screen 03 was
+   rendering Title Case. ⭐ SCOPED TO `.strat-page`: Screen 02 and every other
+   `.dash-page` consumer keep their own casing.
+   ⛔ THE 13px FLOOR IS NOT TRADED AWAY FOR IT: Screens 04/05 pair this treatment
+   with 11.5px, which is under the spec's minimum — the size is left inherited at
+   13px and only the casing and tracking change. */
+.strat-page .kc-label { letter-spacing: .04em; text-transform: uppercase; }
+
 /* V1 — the artwork's two KPI sparklines. ⭐ A DISTINCT CLASS (`sk-spark`), ⛔ not
    Screen 02's `.kc-spark`, so neither screen can move the other. The tones are
    the artwork's: P&L green, Win Rate violet — both EXISTING tokens, no new colour. */

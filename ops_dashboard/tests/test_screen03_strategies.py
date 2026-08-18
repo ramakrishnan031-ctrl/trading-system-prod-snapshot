@@ -274,6 +274,33 @@ class TestNoDataRegression:
         for s in ("ACTIVE", "QUIET", "SILENT"):
             assert s in code
 
+    def test_the_kpi_labels_are_uppercase_as_the_artwork_draws_them(self):
+        """The artwork draws "TOTAL STRATEGIES" / "ACTIVE" / "QUIET" / "SILENT" —
+        verified off the PNG at 3x. The deck inherits `.dash-page .kc-label`,
+        which carries NO transform, so Screen 03 rendered Title Case.
+
+        ⭐ SCOPED: the rule must be `.strat-page`, ⛔ never a `.dash-page` edit —
+        that would recase Screen 02's approved deck and every other consumer.
+        ⛔ AND THE 13px FLOOR IS NOT TRADED FOR IT: Screens 04/05 pair uppercase
+        with 11.5px; this rule must introduce NO font-size at all.
+        """
+        block = _screen03_css()
+        m = re.search(r"\.strat-page \.kc-label \{([^}]*)\}", block)
+        assert m, "no .strat-page .kc-label rule — labels would render Title Case"
+        body = m.group(1)
+        assert "text-transform: uppercase" in body
+        assert "font-size" not in body, (
+            "the uppercase rule must not restate a font-size; 13px stays inherited")
+
+    def test_the_uppercase_rule_does_not_touch_other_screens(self):
+        """⛔ Screen 02's deck and the shared `.dash-page` rule keep their casing."""
+        with open(_CSS, encoding="utf-8") as fh:
+            css = fh.read()
+        m = re.search(r"\.dash-page \.kc-label \{([^}]*)\}", css)
+        assert m, ".dash-page .kc-label missing"
+        assert "text-transform" not in m.group(1), (
+            "the shared label rule was recased — this would alter approved screens")
+
     def test_the_eight_artwork_kpi_cards_survive(self):
         tpl = _tpl()
         m = re.search(r"kpiCards\(\) \{(.*?)\n    \},", tpl, re.S)
