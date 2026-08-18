@@ -337,6 +337,57 @@ def build_strategy_tower(cfg: dict, today: Optional[str] = None, now=None) -> di
         "rows": rows,
         "rankings": rankings,
         "scanner_level": scanner_level,
+        # The artwork's two KPI sparklines (V1). Additive: no existing key moves.
+        "sparks": build_strategy_sparks(cfg, today),
+    }
+
+
+#: The two sparklines the approved Screen-03 artwork draws, on TOTAL P&L and
+#: WIN RATE. ⛔ NOTHING IS SYNTHESISED: both are the SAME sequence — today's
+#: CLOSED trades in the order they actually closed — read through the existing
+#: `activity_trade_exits`, which Screen 18 already uses. The P&L line is the
+#: running cumulative `net_pnl`; the win-rate line is the running win % after
+#: each close. Neither is smoothed, back-filled or interpolated.
+#:
+#: ⛔ NO PER-STRATEGY ALLOCATION OR CAPITAL FIGURE IS INVOLVED — D1/D2 remain
+#: pending and this function deliberately touches neither.
+DASH_SPARK_MIN_POINTS = 2
+
+
+def build_strategy_sparks(cfg: dict, today: Optional[str] = None) -> dict:
+    """`{pnl, winrate}` series for the Screen-03 KPI deck.
+
+    ⛔ `available` IS FALSE BELOW TWO POINTS and the card then draws NO line. A
+    single point is not a shape, and a flat line along the axis is still a drawn
+    chart — a reader takes a drawn chart as a measurement of trend. The number
+    above it already states the value.
+    """
+    today = today or freshness.ist_today_iso()
+    exits = db_reader.activity_trade_exits(cfg, today) or []
+    # `activity_trade_exits` returns newest-first; the series runs forwards.
+    ordered = sorted(
+        (e for e in exits if e.get("exit_time")),
+        key=lambda e: (e["exit_time"], str(e.get("trade_id") or "")),
+    )
+
+    pnl_points, wr_points = [], []
+    cum, wins, closed = 0.0, 0, 0
+    for e in ordered:
+        net = e.get("net_pnl")
+        if net is not None:
+            cum += float(net)
+            if float(net) > 0:
+                wins += 1
+        closed += 1
+        pnl_points.append(round(cum, 2))
+        wr_points.append(round(100.0 * wins / closed, 2))
+
+    enough = len(ordered) >= DASH_SPARK_MIN_POINTS
+    return {
+        "pnl": {"points": pnl_points, "available": enough,
+                "closed_trades": len(ordered), "basis": "cumulative net P&L per close, today"},
+        "winrate": {"points": wr_points, "available": enough,
+                    "closed_trades": len(ordered), "basis": "running win % per close, today"},
     }
 
 

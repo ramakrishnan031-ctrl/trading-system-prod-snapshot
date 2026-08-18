@@ -903,7 +903,7 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 .strat-page .hier-legs { display: flex; align-items: center; gap: 8px; }
 .strat-page .hier-connector { width: 22px; height: 1px; background: var(--card-bd); }
 .strat-page .hier-leg { display: flex; flex-direction: column; gap: 3px; text-align: right; }
-.strat-page .hier-dir { font-size: 12.5px; font-weight: 700; }
+.strat-page .hier-dir { font-size: 13px; font-weight: 700; }
 .strat-page .hier-long { color: var(--pos); }
 .strat-page .hier-short { color: var(--neg); }
 .strat-page .hier-muted { color: var(--dim); opacity: .45; }
@@ -912,7 +912,7 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 .strat-page .st-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
 .strat-page .st-show { font-size: 13px; color: var(--muted); display: inline-flex; align-items: center; gap: 8px; }
 .strat-page .st-tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
-.strat-page .st-tbl th { text-align: left; padding: 8px 7px; font-size: 12px; font-weight: 600;
+.strat-page .st-tbl th { text-align: left; padding: 8px 7px; font-size: 13px; font-weight: 600;
   text-transform: uppercase; letter-spacing: .02em; color: var(--dim); border-bottom: 1px solid var(--border);
   white-space: nowrap; cursor: pointer; user-select: none; }
 .strat-page .st-tbl th.rt { text-align: right; }
@@ -927,9 +927,7 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 .strat-page .glyph-long { color: var(--pos); }
 .strat-page .glyph-short { color: var(--neg); }
 .strat-page .st-scan { color: var(--muted); }
-.strat-page .st-scan-n { margin-left: 5px; padding: 0 5px; font-size: 10px; font-weight: 700; color: var(--blue);
-  background: rgba(var(--t-blue), .14); border-radius: 4px; }
-.strat-page .st-status { padding: 3px 9px; font-size: 11px; font-weight: 700; letter-spacing: .03em; border-radius: 6px; }
+.strat-page .st-status { padding: 3px 8px; font-size: 13px; font-weight: 700; letter-spacing: .03em; border-radius: 6px; }
 .strat-page .sts-ACTIVE { color: var(--pos); background: rgba(var(--t-green), .15); }
 .strat-page .sts-QUIET  { color: var(--orange); background: rgba(var(--t-orange), .15); }
 .strat-page .sts-SILENT { color: var(--neg); background: rgba(var(--t-red), .15); }
@@ -945,14 +943,13 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 .strat-page .btn-export[disabled] { opacity: .9; cursor: not-allowed; }
 .strat-page .btn-export:hover:not([disabled]) { background: rgba(var(--t-green), .2); }
 .strat-page .st-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; }
-.strat-page .st-count { font-size: 12.5px; color: var(--muted); }
+.strat-page .st-count { font-size: 13px; color: var(--muted); }
 .strat-page .st-pager { display: flex; align-items: center; gap: 12px; }
-.strat-page .st-rpp { font-size: 12.5px; color: var(--muted); display: inline-flex; align-items: center; gap: 8px; }
+.strat-page .st-rpp { font-size: 13px; color: var(--muted); display: inline-flex; align-items: center; gap: 8px; }
 .strat-page .st-pg { width: 30px; height: 30px; border-radius: 7px; background: var(--card); color: var(--text);
   border: 1px solid var(--card-bd); cursor: pointer; font-size: 15px; line-height: 1; }
 .strat-page .st-pg:disabled { opacity: .4; cursor: default; }
 .strat-page .st-pg:not(:disabled):hover { border-color: var(--blue); }
-.strat-page .st-pgn { font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 54px; text-align: center; }
 
 /* Quick actions */
 .strat-page .qa-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 12px; }
@@ -967,17 +964,59 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 .strat-page .qa-ic svg { width: 17px; height: 17px; }
 .strat-page .qa-body { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .strat-page .qa-title { font-size: 13.5px; font-weight: 700; }
-.strat-page .qa-desc { font-size: 11.5px; color: var(--dim); line-height: 1.25; }
+.strat-page .qa-desc { font-size: 13px; color: var(--dim); line-height: 1.25; }
 .strat-page .qa-chev { position: absolute; top: 12px; right: 12px; color: var(--dim); font-size: 16px; }
 
 /* Status logic footer */
 .strat-page .stlogic { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 11px 16px;
-  background: var(--card); border: 1px solid var(--card-bd); border-radius: 10px; font-size: 12.5px; color: var(--muted); }
+  background: var(--card); border: 1px solid var(--card-bd); border-radius: 10px; font-size: 13px; color: var(--muted); }
 .strat-page .stlogic-ic { color: var(--blue); }
 .strat-page .stlogic-k { font-weight: 700; color: var(--text); }
 .strat-page .stlogic-item { display: inline-flex; align-items: center; gap: 7px; }
-.strat-page .stlogic-pill { padding: 2px 8px; font-size: 10.5px; font-weight: 700; border-radius: 5px; }
+.strat-page .stlogic-pill { padding: 2px 7px; font-size: 13px; font-weight: 700; border-radius: 5px; }
 .strat-page .stlogic-sep { color: var(--dim); }
+
+/* ── Screen-03 additions, 18-Aug (V1/V2/V3/V5) ─────────────────────────────
+   ⛔ ALL SCOPED TO `.strat-page`: Screens 02/16/17/19/20/21/22 are untouched,
+   and `.flt-k` keeps its APPROVED 12px because that label language is shared. */
+
+/* V1 — the artwork's two KPI sparklines. ⭐ A DISTINCT CLASS (`sk-spark`), ⛔ not
+   Screen 02's `.kc-spark`, so neither screen can move the other. The tones are
+   the artwork's: P&L green, Win Rate violet — both EXISTING tokens, no new colour. */
+.strat-page .sk-spark { width: 58px; height: 20px; flex: 0 0 auto; }
+.strat-page .sk-spark .spark-line { stroke: var(--pos); stroke-width: 1.5; }
+.strat-page .sk-spark.spark-winrate .spark-line { stroke: var(--purple); }
+
+/* V2 — numbered pages, the same control approved Screen 22 ships. */
+.strat-page .st-pg-n { min-width: 30px; padding: 0 6px; font-size: 13px;
+  font-variant-numeric: tabular-nums; }
+.strat-page .st-pg-n.is-on { background: var(--blue); border-color: var(--blue); color: #fff; }
+.strat-page .st-pg-gap { padding: 0 4px; font-size: 13px; color: var(--dim); }
+
+/* V3 — the "… and more" card. ⛔ A PRESENTATION cap only: the table below still
+   lists every family, so no strategy is hidden from the data. */
+.strat-page .hier-more-k { font-size: 13px; color: var(--dim); }
+
+/* V5 — the artwork's Date Range chip: calendar glyph, the date, a reload glyph.
+   The control underneath is the same native date input with the same behaviour. */
+.strat-page .flt-date { display: inline-flex; align-items: center; gap: 6px;
+  padding: 0 8px; background: var(--card); border: 1px solid var(--card-bd);
+  border-radius: 8px; height: 34px; }
+/* ⭐ ONE calendar glyph, on the LEFT, as the artwork draws it. The native
+   date input paints its OWN picker indicator, which put a SECOND calendar in
+   the chip (found by rendering) — it is hidden and this glyph opens the same
+   picker, so the control's behaviour is unchanged. */
+.strat-page .flt-date-ic { display: inline-flex; color: var(--muted);
+  border: none; background: transparent; cursor: pointer; padding: 0; }
+.strat-page .flt-date-ic:hover { color: var(--blue); }
+.strat-page .flt-date-in::-webkit-calendar-picker-indicator { display: none; }
+.strat-page .flt-date-ic svg { width: 14px; height: 14px; }
+.strat-page .flt-date-in { border: none; background: transparent; height: 30px;
+  padding: 0; min-width: 118px; }
+.strat-page .flt-date-in:focus { outline: none; }
+.strat-page .flt-date-rf { border: none; background: transparent; cursor: pointer;
+  color: var(--muted); font-size: 14px; line-height: 1; padding: 2px 2px 4px; }
+.strat-page .flt-date-rf:hover { color: var(--blue); }
 
 /* ══════════════════════════════════════════════════════════════════════════
    SCREEN-04 — SIGNALS (Birthplace of every trade)
