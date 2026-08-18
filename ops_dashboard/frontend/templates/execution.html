@@ -362,9 +362,22 @@
           </span>
         </div>
         <div class="curve-wrap exec-curve-wrap">
-          <svg class="curve-svg exec-curve-w" viewBox="0 0 900 220" aria-hidden="true">
-            <g x-html="tpMarkup()"></g>
-          </svg>
+          <!-- ⛔ LABELS LIVE IN AN HTML OVERLAY, NOT IN THE SVG. SVG text is
+               declared in USER UNITS, so rendered size = declared x (container /
+               viewBox) and a FIXED viewBox is 1:1 at exactly ONE viewport
+               (measured 12.41px at 1920, 10.12px at 1440). Positions are the
+               SAME user-unit coordinates, as a percentage of the viewBox. -->
+          <div class="exec-cx">
+            <svg class="curve-svg exec-curve-w" viewBox="0 0 900 220" aria-hidden="true">
+              <g x-html="tpMarkup()"></g>
+            </svg>
+            <div class="cxl-layer">
+              <template x-for="(l, i) in tpLabels()" :key="i">
+                <span class="cxl" :class="l.cls"
+                      :style="'left:' + l.L + '%;top:' + l.T + '%'" x-text="l.t"></span>
+              </template>
+            </div>
+          </div>
         </div>
         <div class="exec-tp-tot">
           <span>Total Signals <b x-text="dash(tp('signals'))"></b></span>
@@ -380,9 +393,17 @@
         <h3 class="panel-title">Average Delay Through Day
           <span class="panel-sub">lower is better</span></h3>
         <div class="curve-wrap exec-curve-wrap">
-          <svg class="curve-svg exec-curve" viewBox="0 0 460 220" aria-hidden="true">
-            <g x-html="trendMarkup()"></g>
-          </svg>
+          <div class="exec-cx">
+            <svg class="curve-svg exec-curve" viewBox="0 0 460 220" aria-hidden="true">
+              <g x-html="trendMarkup()"></g>
+            </svg>
+            <div class="cxl-layer">
+              <template x-for="(l, i) in trendLabels()" :key="i">
+                <span class="cxl" :class="l.cls"
+                      :style="'left:' + l.L + '%;top:' + l.T + '%'" x-text="l.t"></span>
+              </template>
+            </div>
+          </div>
         </div>
         <div class="exec-note" x-text="data.trend_note || ''"></div>
       </section>
@@ -676,30 +697,33 @@ function executionPage() {
          ⛔ NEVER `<template x-for>` inside <svg>: the HTML parser makes it an SVG
          element named "template", not an HTMLTemplateElement, so Alpine repeats
          nothing and the panel renders as an EMPTY BOX. Pinned by a test. ── */
-    _axis(x, y, txt, anchor, cls) {
-      return '<text class="' + (cls || "exec-axis") + '" x="' + x + '" y="' + y
-             + '" text-anchor="' + (anchor || "middle") + '">' + this.esc(txt) + "</text>";
-    },
-
     /* THROUGHPUT — three independent series on a gap-filled session axis.
        ⛔ The line BREAKS between days: joining the last bucket of one day to the
        first of the next would draw continuity across a closed market. */
     tpSeries() { return ((this.data.throughput || {}).series) || []; },
-    tpMarkup() {
+    /* Geometry shared by the markup AND the label overlay, so the two can
+       never drift apart. */
+    TP_XMAX: 9,
+    tpGeom() {
       const s = this.tpSeries();
       const X0 = 58, X1 = 890, Y0 = 26, Y1 = 176;
-      if (!s.length) return this._axis(470, 100, "No signals or orders in this period");
       const max = Math.max(...s.map(p => Math.max(p.signals, p.created, p.filled)), 0);
       /* A flat-zero window must not divide by zero, and must not be stretched to
          look like activity: the axis simply tops out at 1/min. */
       const top = max > 0 ? max * 1.25 : 1;
-      const xf = i => (s.length === 1 ? (X0 + X1) / 2 : X0 + (X1 - X0) * i / (s.length - 1));
-      const yf = v => Y1 - (Y1 - Y0) * (v / top);
+      return { s: s, X0: X0, X1: X1, Y0: Y0, Y1: Y1, top: top,
+               xf: i => (s.length === 1 ? (X0 + X1) / 2
+                                        : X0 + (X1 - X0) * i / (s.length - 1)),
+               yf: v => Y1 - (Y1 - Y0) * (v / top) };
+    },
+    tpMarkup() {
+      const g = this.tpGeom(), s = g.s, Y0 = g.Y0, Y1 = g.Y1;
+      const xf = g.xf, yf = g.yf, top = g.top;
+      if (!s.length) return "";
       let out = "";
       for (let i = 0; i <= 4; i++) {
         const v = top * i / 4, y = yf(v).toFixed(1);
-        out += '<line class="exec-gl" x1="54" y1="' + y + '" x2="894" y2="' + y + '"></line>'
-             + this._axis(50, (Number(y) + 4).toFixed(1), v.toFixed(v < 1 ? 2 : 1), "end");
+        out += '<line class="exec-gl" x1="54" y1="' + y + '" x2="894" y2="' + y + '"></line>';
       }
       /* one polyline per (series, day) run — the day break is the whole point */
       [["signals","exec-l-sig"],["created","exec-l-cre"],["filled","exec-l-fil"]]
@@ -723,34 +747,77 @@ function executionPage() {
           const x = ((xf(i) + xf(i - 1)) / 2).toFixed(1);
           out += '<line class="exec-daysep" x1="' + x + '" y1="' + Y0 + '" x2="' + x + '" y2="' + Y1 + '"></line>';
         });
-        const step = Math.max(1, Math.ceil(dayStarts.length / 8));
-        dayStarts.forEach((i, n) => {
-          if (n % step === 0) out += this._axis(xf(i).toFixed(1), 200, s[i].day.slice(5));
-        });
-      } else {
-        const step = Math.max(1, Math.ceil(s.length / 9));
-        s.forEach((p, i) => {
-          if (i % step === 0 || i === s.length - 1) out += this._axis(xf(i).toFixed(1), 200, p.at);
-        });
       }
       return out;
+    },
+
+    /* The throughput chart's labels, as HTML. ⚠️ SVG `y` is a BASELINE; the
+       overlay centres its box, so each y is shifted up ~4 user units to land on
+       the same ink. ⛔ The x-tick THINNING lives here and in tpMarkup's day
+       separators alike, driven by the same series, so marks and labels agree. */
+    TP_VBW: 900,
+    TP_VBH: 220,
+    tpLabels() {
+      const g = this.tpGeom(), s = g.s, xf = g.xf, yf = g.yf, top = g.top;
+      const out = [];
+      if (!s.length) {
+        out.push({ x: 470, y: 96, t: "No signals or orders in this period",
+                   cls: "cxl-mid cxl-e" });
+      } else {
+        for (let i = 0; i <= 4; i++) {
+          const v = top * i / 4;
+          out.push({ x: 50, y: Number(yf(v).toFixed(1)),
+                     t: v.toFixed(v < 1 ? 2 : 1), cls: "cxl-end" });
+        }
+        const dayStarts = [];
+        s.forEach((p, i) => { if (i === 0 || p.day !== s[i - 1].day) dayStarts.push(i); });
+        if (dayStarts.length > 1) {
+          const step = Math.max(1, Math.ceil(dayStarts.length / this.TP_XMAX));
+          dayStarts.forEach((i, n) => {
+            if (n % step === 0) out.push({ x: Number(xf(i).toFixed(1)), y: 196,
+                                           t: s[i].day.slice(5), cls: "cxl-mid" });
+          });
+        } else {
+          const step = Math.max(1, Math.ceil(s.length / this.TP_XMAX));
+          const last = s.length - 1;
+          const marks = [];
+          for (let i = 0; i <= last; i += step) marks.push(i);
+          /* The session-end bucket is always worth a mark, but it must not sit
+             on top of the stepped one before it. Keep the END and drop the
+             clashing stepped label -- ⛔ never print both. */
+          if (marks[marks.length - 1] !== last) {
+            if (last - marks[marks.length - 1] < Math.ceil(step / 2)) marks.pop();
+            marks.push(last);
+          }
+          marks.forEach(i => {
+            out.push({ x: Number(xf(i).toFixed(1)), y: 196, t: s[i].at, cls: "cxl-mid" });
+          });
+        }
+      }
+      return out.map(l => Object.assign(l, {
+        L: (100 * l.x / this.TP_VBW).toFixed(3),
+        T: (100 * l.y / this.TP_VBH).toFixed(3),
+      }));
     },
 
     /* AVERAGE DELAY THROUGH DAY — the approved 7-mark timeline. */
     XT: ["09:15","10:00","11:00","12:00","13:00","14:00","15:30"],
     trendRows() { return this.data.trend || []; },
-    trendMarkup() {
+    trGeom() {
       const rows = this.trendRows();
       const X0 = 50, X1 = 434, Y0 = 32, Y1 = 176;
       const vals = rows.map(b => b.avg_delay_sec).filter(v => v !== null && v !== undefined);
       const top = vals.length ? Math.max(...vals) * 1.3 : 1;
-      const xf = i => X0 + (X1 - X0) * i / (this.XT.length - 1);
-      const yf = v => Y1 - (Y1 - Y0) * (v / top);
+      return { rows: rows, vals: vals, top: top,
+               xf: i => X0 + (X1 - X0) * i / (this.XT.length - 1),
+               yf: v => Y1 - (Y1 - Y0) * (v / top) };
+    },
+    trendMarkup() {
+      const g = this.trGeom(), rows = g.rows, xf = g.xf, yf = g.yf, top = g.top;
       let out = "";
       for (let i = 0; i <= 3; i++) {
         const v = top * i / 3, y = yf(v).toFixed(1);
-        out += '<line class="exec-gl" x1="46" y1="' + y + '" x2="440" y2="' + y + '"></line>'
-             + this._axis(42, (Number(y) + 4).toFixed(1), v.toFixed(2) + "s", "end");
+        out += '<line class="exec-gl" x1="46" y1="' + y + '" x2="440" y2="' + y + '"></line>';
       }
       /* ⛔ The line BREAKS across a bucket with no observation. */
       let cur = []; const segs = [];
@@ -764,13 +831,39 @@ function executionPage() {
       rows.forEach((b, i) => {
         const v = b.avg_delay_sec;
         if (v === null || v === undefined) return;
-        out += '<circle class="exec-l-trend-d" cx="' + xf(i).toFixed(1) + '" cy="' + yf(v).toFixed(1) + '" r="3.2"></circle>'
-             + '<text class="exec-pt-lbl" x="' + xf(i).toFixed(1) + '" y="' + (yf(v) - 8).toFixed(1)
-             + '" text-anchor="middle">' + v.toFixed(2) + "s</text>";
+        out += '<circle class="exec-l-trend-d" cx="' + xf(i).toFixed(1) + '" cy="'
+             + yf(v).toFixed(1) + '" r="3.2"></circle>';
       });
-      this.XT.forEach((l, i) => { out += this._axis(xf(i).toFixed(1), 200, l); });
-      if (!vals.length) out += this._axis(240, 104, "No measured executions in this period");
       return out;
+    },
+
+    TR_VBW: 460,
+    TR_VBH: 220,
+    trendLabels() {
+      const g = this.trGeom(), rows = g.rows, xf = g.xf, yf = g.yf, top = g.top;
+      const out = [];
+      for (let i = 0; i <= 3; i++) {
+        const v = top * i / 3;
+        out.push({ x: 42, y: Number(yf(v).toFixed(1)), t: v.toFixed(2) + "s",
+                   cls: "cxl-end" });
+      }
+      rows.forEach((b, i) => {
+        const v = b.avg_delay_sec;
+        if (v === null || v === undefined) return;
+        out.push({ x: Number(xf(i).toFixed(1)), y: Number((yf(v) - 12).toFixed(1)),
+                   t: v.toFixed(2) + "s", cls: "cxl-mid cxl-v" });
+      });
+      this.XT.forEach((l, i) => {
+        out.push({ x: Number(xf(i).toFixed(1)), y: 196, t: l, cls: "cxl-mid" });
+      });
+      if (!g.vals.length) {
+        out.push({ x: 240, y: 100, t: "No measured executions in this period",
+                   cls: "cxl-mid cxl-e" });
+      }
+      return out.map(l => Object.assign(l, {
+        L: (100 * l.x / this.TR_VBW).toFixed(3),
+        T: (100 * l.y / this.TR_VBH).toFixed(3),
+      }));
     },
   });
 }

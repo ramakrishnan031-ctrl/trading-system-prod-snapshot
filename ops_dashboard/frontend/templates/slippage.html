@@ -216,6 +216,7 @@
     <section class="panel">
       <div class="slp-panel-head"><h3 class="panel-title">Strategy Slippage Ranking</h3>
         <button class="btn-export" type="button" @click="exportXlsx()">⭳ Export XLSX</button></div>
+      <div class="tbl-scroll">
       <table class="cap-table"><thead><tr>
         <th class="lbl">Strategy</th><th>Avg Slippage</th><th>Worst Slippage</th><th>Exceeded</th>
       </tr></thead><tbody>
@@ -228,11 +229,13 @@
         <tr x-show="!(data.per_strategy||[]).length" x-cloak>
           <td colspan="4" class="slp-empty">No orders.</td></tr>
       </tbody></table>
+      </div>
     </section>
 
     <section class="panel">
       <div class="slp-panel-head"><h3 class="panel-title">Symbol Slippage Ranking</h3>
         <button class="btn-export" type="button" @click="exportXlsx()">⭳ Export XLSX</button></div>
+      <div class="tbl-scroll">
       <table class="cap-table"><thead><tr>
         <th class="lbl">Symbol</th><th>Avg Slippage</th><th>Worst Slippage</th><th>Exceeded</th>
       </tr></thead><tbody>
@@ -245,6 +248,7 @@
         <tr x-show="!(data.per_symbol||[]).length" x-cloak>
           <td colspan="4" class="slp-empty">No orders.</td></tr>
       </tbody></table>
+      </div>
       <div class="slp-note">Scanner ranking omitted — strategy is the scanner
         identity on this system.</div>
     </section>
@@ -315,9 +319,27 @@
                are the sizes the operator really sees. ⚠️ A 600-wide viewBox in a
                285px panel scaled 9.5px text down to about 4px — the numbers were
                on the page and unreadable. -->
-          <svg class="curve-svg slp-curve" viewBox="0 0 460 200" aria-hidden="true">
-            <g x-html="chartMarkup()"></g>
-          </svg>
+          <!-- ⛔ THE LABELS ARE NOT IN THE SVG, AND THAT IS DELIBERATE.
+               SVG text is declared in USER UNITS, so its rendered size is
+               declared_px x (container / viewBox) — a FIXED viewBox is 1:1 at
+               exactly ONE viewport (measured 13.00px at 1920, 9.80px at 1440).
+               The labels therefore live in an HTML overlay positioned as a
+               PERCENTAGE of the same viewBox, so the geometry still scales but
+               the type is real CSS px and holds the spec's 13px floor at every
+               width. ⛔ No value is recomputed: the overlay reads the very
+               yTicks()/xTicks()/trendPoints() the SVG already draws. -->
+          <div class="slp-cx">
+            <svg class="curve-svg slp-curve" viewBox="0 0 460 200" aria-hidden="true">
+              <g x-html="chartMarkup()"></g>
+            </svg>
+            <div class="cxl-layer">
+              <template x-for="(l, i) in chartLabels()" :key="i">
+                <span class="cxl" :class="l.cls"
+                      :style="'left:' + l.L + '%;top:' + l.T + '%'"
+                      x-text="l.t"></span>
+              </template>
+            </div>
+          </div>
         </div>
         <div class="slp-note" x-text="data.trend_note || ''"></div>
       </section>
@@ -598,33 +620,48 @@ function slippagePage() {
     },
     /* The whole chart body as one SVG string — see the note on the <svg>. */
     chartMarkup() {
-      const esc = s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;");
       let out = "";
       this.yTicks().forEach(g => {
-        out += '<line class="slp-gl" x1="46" y1="' + g.y + '" x2="440" y2="' + g.y + '"></line>'
-             + '<text class="slp-axis" x="42" y="' + (Number(g.y) + 4).toFixed(1)
-             + '" text-anchor="end">' + esc(g.label) + "</text>";
+        out += '<line class="slp-gl" x1="46" y1="' + g.y + '" x2="440" y2="' + g.y + '"></line>';
       });
       this.trendSegments().forEach(seg => {
         out += '<polyline class="curve-line slp-line" fill="none" points="' + seg + '"></polyline>';
       });
-      const pts = this.trendPoints();
-      pts.forEach(p => {
-        out += '<circle class="slp-dot-pt" cx="' + p.x + '" cy="' + p.y + '" r="3.4"></circle>'
-             + '<text class="slp-pt-lbl" x="' + p.x + '" y="' + (Number(p.y) - 8).toFixed(1)
-             + '" text-anchor="middle">' + esc(p.label) + "</text>";
+      this.trendPoints().forEach(p => {
+        out += '<circle class="slp-dot-pt" cx="' + p.x + '" cy="' + p.y + '" r="3.4"></circle>';
+      });
+      return out;
+    },
+
+    /* ── the chart's labels, as an HTML overlay ─────────────────────────
+       Positions are the SAME user-unit coordinates the SVG uses, expressed as a
+       percentage of the viewBox, so a label sits exactly where its <text> did.
+       ⚠️ SVG `y` is a BASELINE; the overlay centres its box instead, so each
+       value is shifted up by ~0.32 x the type size to land on the same ink. */
+    VBW: 460,
+    VBH: 200,
+    chartLabels() {
+      const out = [];
+      this.yTicks().forEach(g => {
+        out.push({ x: 42, y: Number(g.y), t: g.label, cls: "cxl-end" });
       });
       /* x axis: the approved timeline, all seven marks. Each point sits at the
          START of the session bucket it summarises; 15:30 is the session close. */
       this.xTicks().forEach(x => {
-        out += '<text class="slp-axis" x="' + x.x + '" y="188" text-anchor="middle">'
-             + esc(x.label) + "</text>";
+        out.push({ x: Number(x.x), y: 184, t: x.label, cls: "cxl-mid" });
+      });
+      const pts = this.trendPoints();
+      pts.forEach(p => {
+        out.push({ x: Number(p.x), y: Number(p.y) - 12, t: p.label, cls: "cxl-mid cxl-v" });
       });
       if (!pts.length) {
-        out += '<text class="slp-axis slp-empty-axis" x="248" y="100" text-anchor="middle">'
-             + "No timestamped slippage in this period</text>";
+        out.push({ x: 248, y: 96, cls: "cxl-mid cxl-e",
+                   t: "No timestamped slippage in this period" });
       }
-      return out;
+      return out.map(l => Object.assign(l, {
+        L: (100 * l.x / this.VBW).toFixed(3),
+        T: (100 * l.y / this.VBH).toFixed(3),
+      }));
     },
 
     /* ── status donut. Same geometry as Screens 06/07/09 (r = 15.9155 ⇒

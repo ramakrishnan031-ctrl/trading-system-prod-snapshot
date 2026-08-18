@@ -2261,6 +2261,23 @@ table td.ctr { text-align: center !important; }
   font-variant-numeric: tabular-nums; }
 .slp-page .slp-empty-axis { font-size: 13px; fill: var(--dim); }
 
+/* ── CHART LABELS AS AN HTML OVERLAY (19-Aug-2026) ────────────────────
+   ⛔ SVG text CANNOT hold the 13px floor here: it is declared in USER UNITS, so
+   its rendered size is declared_px x (container / viewBox). With a FIXED
+   viewBox that is 1:1 at exactly ONE viewport — MEASURED 13.00px at 1920 and
+   9.80px at 1440. These rules style HTML spans instead, so the size is a real
+   CSS px at every width while the chart geometry still scales.
+   ⛔ `.curve-wrap` is GLOBAL and is NOT given a position here; the positioning
+   context is `.slp-cx`, a wrapper only this screen uses. */
+.slp-page .slp-cx { position: relative; }
+.slp-page .cxl-layer { position: absolute; inset: 0; pointer-events: none; }
+.slp-page .cxl { position: absolute; font-size: 13px; line-height: 1;
+  white-space: nowrap; color: var(--muted); font-variant-numeric: tabular-nums; }
+.slp-page .cxl-mid { transform: translate(-50%, -50%); }
+.slp-page .cxl-end { transform: translate(-100%, -50%); }
+.slp-page .cxl-v { color: var(--text); font-weight: 600; }
+.slp-page .cxl-e { color: var(--dim); }
+
 /* -- status donut. THE SCREEN-09 LESSON, CARRIED: `.pos-donut circle
       { fill:none; stroke-width:5 }` is scoped to `.pos-page`, so a donut on any
       other page inherits the SVG default (fill black, no stroke) and renders as
@@ -2530,10 +2547,29 @@ table td.ctr { text-align: center !important; }
 .exec-page .exec-curve-wrap { padding: 6px 8px 2px; }
 .exec-page .exec-curve { height: 210px; }
 .exec-page .exec-gl { stroke: var(--border); stroke-width: 1; stroke-dasharray: 3 3; }
+/* ⚠️ `.exec-axis` / `.exec-pt-lbl` no longer style anything: both charts now
+   print their labels as HTML (see `.cxl` below). The rules are kept only as the
+   record of what the SVG used to declare; ⛔ do not re-point markup at them. */
 .exec-page .exec-axis { fill: var(--muted); font-size: 13px;
   font-variant-numeric: tabular-nums; }
 .exec-page .exec-pt-lbl { fill: var(--text); font-size: 13px;
   font-variant-numeric: tabular-nums; }
+
+/* ── CHART LABELS AS AN HTML OVERLAY (19-Aug-2026) ────────────────────
+   ⛔ SVG text CANNOT hold the 13px floor on these two charts: it is declared in
+   USER UNITS, so rendered size = declared x (container / viewBox), and a FIXED
+   viewBox is 1:1 at exactly ONE viewport. MEASURED before the change: 12.41px
+   at 1920 and 10.12px at 1440. HTML spans are real CSS px at every width.
+   ⛔ `.curve-wrap` is GLOBAL and is NOT given a position here; the positioning
+   context is `.exec-cx`, a wrapper only this screen uses. */
+.exec-page .exec-cx { position: relative; }
+.exec-page .cxl-layer { position: absolute; inset: 0; pointer-events: none; }
+.exec-page .cxl { position: absolute; font-size: 13px; line-height: 1;
+  white-space: nowrap; color: var(--muted); font-variant-numeric: tabular-nums; }
+.exec-page .cxl-mid { transform: translate(-50%, -50%); }
+.exec-page .cxl-end { transform: translate(-100%, -50%); }
+.exec-page .cxl-v { color: var(--text); font-weight: 600; }
+.exec-page .cxl-e { color: var(--dim); }
 .exec-page .exec-l-sig { stroke: var(--blue); stroke-width: 1.8; }
 .exec-page .exec-l-cre { stroke: var(--pos); stroke-width: 1.8; }
 .exec-page .exec-l-fil { stroke: var(--purple); stroke-width: 1.8; }
