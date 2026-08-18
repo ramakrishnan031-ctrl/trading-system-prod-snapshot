@@ -35,6 +35,8 @@ from backend.api import dashboard as dashboard_api  # noqa: E402
 from backend.readers import host_reader  # noqa: E402
 from backend.services import live_activity, pipeline_state  # noqa: E402
 
+from conftest import TODAY as TODAY_ISO  # noqa: E402
+
 
 def _tpl() -> str:
     with open(_TPL, encoding="utf-8") as fh:
@@ -128,6 +130,20 @@ class TestRecentEventsSource:
         for row in feed["records"]:
             assert row["badge"] == live_activity.DASH_CATEGORY_BADGE[row["category"]]
 
+    def test_a_routine_category_is_not_styled_as_an_alarm(self):
+        """⛔ FOUND BY RENDERING: `Capital Reserved` came out RED under a warning
+        triangle. Red is the loudest signal on this page and the binding spec
+        reserves it for losses and rejections, so routine bookkeeping must not
+        wear it. `Risk` and `Alert` keep it — those ARE the exceptional ones.
+        """
+        code = _tpl_code()
+        m = re.search(r"const EV_CLASS = \{(.*?)\};", code, re.S)
+        assert m, "EV_CLASS not found"
+        mapping = dict(re.findall(r"(\w+):\s*'(\w+)'", m.group(1)))
+        assert mapping["Capital"] != "risk", "Capital renders as an alarm"
+        assert mapping["Position"] != "risk"
+        assert mapping["Risk"] == "risk", "the alarm class must still exist for Risk"
+
     def test_the_free_text_classifier_is_gone_from_the_template(self):
         """⛔ `evCat()` classified by scanning the event STRING."""
         code = _tpl_code()
@@ -185,6 +201,145 @@ class TestRecentEventsAreToday:
         for row in live_activity.build_recent_events(gui_config)["records"]:
             assert row["date"], "a row has no date"
             assert row["time"], "a row has no clock"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# RECENT EVENTS — the CURATED DIGEST
+# ══════════════════════════════════════════════════════════════════════════
+# ⭐ WHY THESE EXIST. The first version of this suite asserted only that the four
+# artwork badges appear in the category→badge MAP. That is true, and it is not
+# the claim that matters: a badge present in a map is not a badge an operator can
+# SEE. Measured on production 18-Aug 13:36, a raw newest-ten returned TEN
+# IDENTICAL `Signal Received` rows spanning TWO SECONDS, because signals were
+# 3,568 of 3,747 feed rows that day (95.2%) at 24-50 per minute. Every guard
+# below is about what SURVIVES INTO THE PANEL under that real load.
+class TestTheDigestSurvivesABurst:
+
+    #: ⛔ LITERALS, and deliberately NOT the module's constants. Asserting a cap
+    #: against the same constant the code uses makes the guard VACUOUS — raising
+    #: the cap raises the assertion with it and the test stays green while the
+    #: protection is gone. (Measured: that is exactly what happened on the first
+    #: pass here, and to the note cap before it.) These are the numbers the
+    #: PANEL's contract depends on; the code's constants must live under them,
+    #: which is asserted separately.
+    ROUTINE_CEILING = 1
+    CATEGORY_CEILING = 4
+
+    def test_the_code_caps_stay_under_the_panel_contract(self):
+        assert live_activity.DASH_ROUTINE_MAX <= self.ROUTINE_CEILING
+        assert live_activity.DASH_CATEGORY_MAX <= self.CATEGORY_CEILING
+        assert "Signal" in live_activity.DASH_ROUTINE_CATEGORIES
+
+    def _burst(self, n, category="Signal", event="Signal Received"):
+        """n rows of one category, all stamped LATE today so they sort first."""
+        return [
+            live_activity._ev(
+                "BURST-%s-%04d" % (category, i),
+                "%sT23:59:%02d+05:30" % (TODAY_ISO, 59 - (i % 60)),
+                category, event, symbol="SYM%02d" % i, status="Info")
+            for i in range(n)
+        ]
+
+    def _ops(self):
+        """One row of each operational category, all EARLIER than the burst."""
+        rows = []
+        for i, (cat, ev) in enumerate((
+                ("Order", "Order Filled"), ("Trade", "TGT Hit"),
+                ("Risk", "Risk Check Failed"), ("Capital", "Capital Released"),
+                ("Position", "Position Opened"))):
+            rows.append(live_activity._ev(
+                "OPS-%d" % i, "%sT10:0%d:00+05:30" % (TODAY_ISO, i),
+                cat, ev, symbol="OPS%d" % i, status="Info"))
+        return rows
+
+    def test_a_signal_burst_cannot_consume_the_panel(self):
+        """⛔ THE MEASURED PRODUCTION FAILURE, as a test.
+
+        500 signal arrivals, every one NEWER than every operational event — the
+        exact shape of a real market-hours second. A blind newest-N returns ten
+        signals; the digest must not.
+        """
+        events = self._burst(500) + self._ops()
+        events.sort(key=lambda e: (e["ts"], e["ref_id"]), reverse=True)
+        picked = live_activity._curate(events, 10)
+        signal_rows = [e for e in picked if e["category"] == "Signal"]
+        assert len(signal_rows) <= self.ROUTINE_CEILING, (
+            "%d signal rows took the panel" % len(signal_rows))
+        # ⭐ and the freed slots go to real events, ⛔ not to nothing: the
+        # fixture offers exactly one row per operational category, so a working
+        # digest returns all of them plus the single representative signal.
+        assert len(picked) == len(self._ops()) + self.ROUTINE_CEILING, (
+            "expected %d rows, got %d" % (len(self._ops()) + self.ROUTINE_CEILING, len(picked)))
+
+    def test_operational_categories_stay_visible_during_that_burst(self):
+        """⭐ THE OTHER HALF, and the half that actually matters: capping the
+        flood is worthless if nothing operational takes the freed slots."""
+        events = self._burst(500) + self._ops()
+        events.sort(key=lambda e: (e["ts"], e["ref_id"]), reverse=True)
+        picked = live_activity._curate(events, 10)
+        cats = {e["category"] for e in picked}
+        for operational in ("Order", "Trade", "Risk", "Capital", "Position"):
+            assert operational in cats, (
+                "%s vanished under a signal burst; visible: %s" % (operational, sorted(cats)))
+
+    def test_the_artwork_badges_are_reachable_ON_SCREEN_under_load(self):
+        """⛔ NOT the map — the RENDERED SET. This is the guard the first pass
+        was missing."""
+        events = self._burst(500) + self._ops()
+        events.sort(key=lambda e: (e["ts"], e["ref_id"]), reverse=True)
+        badges = {live_activity.DASH_CATEGORY_BADGE[e["category"]]
+                  for e in live_activity._curate(events, 10)}
+        for badge in ("SIGNAL", "ORDER", "RISK", "EXIT"):
+            assert badge in badges, (
+                "%s cannot appear on screen under load; got %s" % (badge, sorted(badges)))
+
+    def test_an_operational_category_cannot_take_the_panel_either(self):
+        """Capital is the real case, ⛔ not a hypothetical: 77 ledger rows on
+        production 18-Aug, and FIVE of the ten newest non-signal rows were
+        CAPITAL because a release is written beside every exit."""
+        events = self._burst(60, category="Capital", event="Capital Released") + self._ops()
+        events.sort(key=lambda e: (e["ts"], e["ref_id"]), reverse=True)
+        picked = live_activity._curate(events, 10)
+        capital_rows = [e for e in picked if e["category"] == "Capital"]
+        assert len(capital_rows) <= self.CATEGORY_CEILING, (
+            "%d capital rows took the panel" % len(capital_rows))
+        assert {"Order", "Trade", "Risk"} <= {e["category"] for e in picked}
+
+    def test_the_digest_stays_in_time_order(self):
+        """⭐ A row is only ever SKIPPED, ⛔ never reordered — so no row is
+        promoted above an event that happened after it."""
+        events = self._burst(200) + self._ops()
+        events.sort(key=lambda e: (e["ts"], e["ref_id"]), reverse=True)
+        picked = live_activity._curate(events, 10)
+        stamps = [e["ts"] for e in picked]
+        assert stamps == sorted(stamps, reverse=True), "the digest is out of time order"
+
+    def test_the_digest_never_invents_a_row(self):
+        """Every row shown must be one the sources actually produced."""
+        events = self._burst(200) + self._ops()
+        events.sort(key=lambda e: (e["ts"], e["ref_id"]), reverse=True)
+        source_ids = {e["ref_id"] for e in events}
+        for e in live_activity._curate(events, 10):
+            assert e["ref_id"] in source_ids
+
+    def test_a_quiet_day_is_not_padded(self):
+        """⛔ The cap bounds the feed; it must never REACH for filler."""
+        picked = live_activity._curate(self._ops()[:2], 10)
+        assert len(picked) == 2
+
+    def test_the_cap_is_not_silent(self, gui_config):
+        """⛔ A panel that drops rows must not imply it showed everything. The
+        payload carries the day's real totals beside what it chose."""
+        feed = live_activity.build_recent_events(gui_config)
+        assert feed["total_today"] >= feed["count"]
+        assert feed["suppressed"] == feed["total_today"] - feed["count"]
+        assert isinstance(feed["by_category"], dict)
+        assert feed["caps"]["routine"] == live_activity.DASH_ROUTINE_MAX
+
+    def test_screen_18s_wall_is_not_curated(self):
+        """⛔ SCOPE: the digest is Screen 02's. Screen 18 keeps every row."""
+        wall = inspect.getsource(live_activity.build_live_activity)
+        assert "_curate" not in wall, "the curation leaked into Screen 18's wall"
 
 
 # ══════════════════════════════════════════════════════════════════════════

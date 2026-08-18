@@ -1050,6 +1050,56 @@ DASH_CATEGORY_BADGE = {
 }
 
 
+#: The categories whose rows are ROUTINE HIGH-VOLUME TRAFFIC rather than
+#: operational events. MEASURED ON PRODUCTION 18-Aug: of 3,747 feed rows today,
+#: 3,568 were `Signal` — 95.2%, arriving at 24-50 per MINUTE and up to 44 in a
+#: single second, with 115 distinct seconds carrying ten or more.
+DASH_ROUTINE_CATEGORIES = ("Signal",)
+
+#: At most ONE representative routine row. ⭐ THE ARTWORK ITSELF SETS THIS
+#: NUMBER: it draws `Signals Received 16,138` in the KPI deck and exactly ONE
+#: `Signal Received` row in the panel below, so the approved design already
+#: treats signal arrival as something the panel SAMPLES, not something it lists.
+DASH_ROUTINE_MAX = 1
+
+#: And no OPERATIONAL category may take the panel either. Capital is the real
+#: case, ⛔ not a hypothetical: 77 ledger rows today arrive in tight bursts
+#: beside each exit, and five of the ten newest non-signal rows were CAPITAL.
+DASH_CATEGORY_MAX = 4
+
+
+def _curate(events: list, limit: int) -> list:
+    """The digest: newest-first, but no category may crowd out the rest.
+
+    ⛔ NOT A BLIND NEWEST-N. MEASURED ON PRODUCTION 18-Aug 13:36, a raw
+    newest-ten returned TEN IDENTICAL `Signal Received` rows spanning TWO
+    SECONDS — one badge, no orders, no exits, no risk, and nothing an operator
+    could act on. The approved artwork draws a MIXED digest (one signal row
+    beside risk, order and exit rows), so a feed that cannot produce a mixed
+    view does not implement the artwork however honest each row is.
+
+    ⭐ CHRONOLOGICAL ORDER IS PRESERVED: the walk is newest-first and a row is
+    only ever SKIPPED, never reordered, so what is shown is still in time order
+    and no row is promoted above an event that happened after it.
+
+    ⛔ NOTHING IS INVENTED, SUMMARISED OR SYNTHESISED — every row shown is a real
+    row that the sources produced; the cap only decides which of them fit.
+    """
+    picked: list = []
+    per_category: dict = {}
+    for e in events:
+        category = e.get("category")
+        cap = (DASH_ROUTINE_MAX if category in DASH_ROUTINE_CATEGORIES
+               else DASH_CATEGORY_MAX)
+        if per_category.get(category, 0) >= cap:
+            continue
+        per_category[category] = per_category.get(category, 0) + 1
+        picked.append(e)
+        if len(picked) >= limit:
+            break
+    return picked
+
+
 def _dash_note(e: dict) -> Optional[str]:
     """The artwork's short parenthetical — e.g. `(NIFTY 23450 CE)`.
 
@@ -1071,12 +1121,15 @@ def _dash_note(e: dict) -> Optional[str]:
 
 def build_recent_events(cfg: dict, limit: int = DASH_FEED_LIMIT,
                         today: Optional[str] = None) -> dict:
-    """Screen 02's RECENT EVENTS — TODAY's real trading events, newest first.
+    """Screen 02's RECENT EVENTS — TODAY's real trading events, CURATED.
 
     ⭐ SCOPED TO TODAY BY CONSTRUCTION: every source below is a today-scoped
     reader, so a quiet day returns an EMPTY feed. ⛔ It does NOT reach back for
     filler — the panel sits under a header of `Today` KPIs, and a row from six
     days ago printed as `08:15:43` is worse than no row at all.
+
+    ⭐ AND IT IS A DIGEST, ⛔ NOT A RAW NEWEST-N — see `_curate` for the measured
+    reason. Screen 18's wall is unaffected and still shows every row.
     """
     now = freshness.ist_now()
     today = today or freshness.ist_today_iso(now)
@@ -1107,8 +1160,10 @@ def build_recent_events(cfg: dict, limit: int = DASH_FEED_LIMIT,
     # newest first; ref_id breaks ties so a 5-second poll cannot reshuffle rows.
     events.sort(key=lambda e: (e["ts"], e["ref_id"]), reverse=True)
 
+    selected = _curate(events, max(0, int(limit)))
+
     rows = []
-    for e in events[:max(0, int(limit))]:
+    for e in selected:
         rows.append({
             "ts": e["ts"],
             "time": e["time"],
@@ -1122,11 +1177,23 @@ def build_recent_events(cfg: dict, limit: int = DASH_FEED_LIMIT,
             "ref_id": e.get("ref_id"),
         })
 
+    # ⛔ THE CAP IS NOT SILENT. `total_today` is every row the sources produced
+    # and `by_category` is the whole day's shape, so the panel can never imply
+    # that what it shows is all that happened — and the artwork's own
+    # "View all -> /live-activity" is the route to the unabridged stream.
+    by_category: dict = {}
+    for e in events:
+        by_category[e["category"]] = by_category.get(e["category"], 0) + 1
+
     return {
         "today": today,
         "records": rows,
         "count": len(rows),
         "total_today": len(events),
+        "suppressed": max(0, len(events) - len(rows)),
+        "by_category": by_category,
+        "caps": {"routine": DASH_ROUTINE_MAX, "category": DASH_CATEGORY_MAX,
+                 "routine_categories": list(DASH_ROUTINE_CATEGORIES)},
     }
 
 

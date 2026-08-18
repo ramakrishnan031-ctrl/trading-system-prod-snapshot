@@ -406,8 +406,16 @@ const MON3 = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov",
 //: ORDER / RISK / EXIT; `Trade` maps to `exit` because those rows ARE the exits.
 const EV_CLASS = {
   Signal: 'signal', Order: 'order', Position: 'order', Trade: 'exit',
-  Risk: 'risk', Capital: 'risk', System: 'sys', Alert: 'risk',
+  Risk: 'risk', Capital: 'sys', System: 'sys', Alert: 'risk',
 };
+//: ⛔ `Capital` IS NOT `risk`. Found by rendering the digest: routine
+//: `Capital Reserved` / `Capital Released` rows came out RED under a warning
+//: triangle, and red is the loudest signal on this page. The binding spec's own
+//: vocabulary (KPI COLORS) reserves red for losses/rejections and orange for
+//: warnings; a ledger reservation is neither, so it takes the existing neutral
+//: informational treatment. ⛔ No new colour token is introduced.
+//: `Alert` KEEPS the risk treatment: a telegram alert is raised precisely
+//: because something needs attention.
 const EV_ICONS = {
   signal: `<svg viewBox="0 0 24 24" ${_S}><path d="M4 11a9 9 0 0 1 9-9"/><path d="M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1.6" fill="currentColor" stroke="none"/></svg>`,
   risk:   `<svg viewBox="0 0 24 24" ${_S}><path d="M12 3l9 16H3z"/><path d="M12 10v4M12 17.5v.5"/></svg>`,
