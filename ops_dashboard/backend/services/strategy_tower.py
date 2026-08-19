@@ -391,6 +391,87 @@ def build_strategy_sparks(cfg: dict, today: Optional[str] = None) -> dict:
     }
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# SCREEN 03 EXPORT — `03. Strategies.txt`, EXPORT: "Download XLSX"
+# ─────────────────────────────────────────────────────────────────────────────
+#: The table's columns, in the table's order. ⛔ This list and Screen 03's own
+#: `cols` array describe the SAME table — if one moves, the other must, and the
+#: suite asserts they still agree.
+EXPORT_HEADER = [
+    "Strategy", "Trading Type", "Signals", "Orders", "Trades", "Success %",
+    "Win %", "SL Hit", "TGT Hit", "P&L (Rs)", "ROI %", "Allocated (Rs)",
+    "Used (Rs)", "Remaining (Rs)", "Usage %", "Last Signal", "Last Trade",
+    "Status",
+]
+
+
+def _status_of(row: dict) -> str:
+    """Screen 03's `statusOf()`, server-side. RED -> SILENT, YELLOW -> QUIET,
+    anything else -> ACTIVE."""
+    color = (row.get("silence") or {}).get("color")
+    if color == "RED":
+        return "SILENT"
+    if color == "YELLOW":
+        return "QUIET"
+    return "ACTIVE"
+
+
+def export_rows(payload: dict, strategy: Optional[str] = None,
+                status: Optional[str] = None, trade_type: Optional[str] = None,
+                direction: Optional[str] = None) -> list:
+    """[header, *rows] for the XLSX, from the SAME tower payload the screen
+    renders and through the SAME derivation and filters.
+
+    ⛔ CAPITAL IS NOT RE-DERIVED HERE. Allocated is `used + remaining` exactly as
+    the screen computes it, and stays None when the bucket is unset — the export
+    must not turn a "no bucket configured yet" into a zero, which is a different
+    fact. That derivation is B5's subject and is deliberately NOT touched.
+    """
+    out = [list(EXPORT_HEADER)]
+    for r in payload.get("rows") or []:
+        basic = r.get("basic") or {}
+        cv = r.get("capital_view") or {}
+        used = float(cv.get("capital_used") or 0.0)
+        rem = cv.get("capital_remaining")
+        rem = None if rem is None else float(rem)
+        alloc = None if rem is None else used + rem
+        usage = (round(1000.0 * used / alloc) / 10.0
+                 if alloc and alloc > 0 else None)
+        st = _status_of(r)
+        row_dir = (basic.get("direction") or "").upper()
+        # ⭐ The screen's OWN four filters, applied to the same values.
+        if strategy and basic.get("display_name") != strategy:
+            continue
+        if status and st != status:
+            continue
+        if trade_type and basic.get("trade_type") != trade_type:
+            continue
+        if direction and row_dir != direction.upper():
+            continue
+        trading = r.get("trading") or {}
+        hits = r.get("sl_tgt_hits") or {}
+        perf = r.get("performance") or {}
+        health = r.get("health") or {}
+        out.append([
+            basic.get("display_name"),
+            basic.get("trade_type"),
+            int((r.get("signals") or {}).get("received") or 0),
+            int((r.get("processing") or {}).get("created") or 0),
+            int(trading.get("open") or 0) + int(trading.get("closed") or 0),
+            r.get("success_rate"),
+            trading.get("win_rate"),
+            int(hits.get("sl_hits") or 0),
+            int(hits.get("tgt_hits") or 0),
+            float(perf.get("net_pnl") or 0.0),
+            perf.get("roi_pct"),
+            alloc, used, rem, usage,
+            health.get("last_signal"),
+            health.get("last_trade"),
+            st,
+        ])
+    return out
+
+
 def strategy_detail(cfg: dict, name: str, today: Optional[str] = None, now=None) -> Optional[dict]:
     """Single strategy row (same shape as a tower row) or None if unknown."""
     tower = build_strategy_tower(cfg, today, now)

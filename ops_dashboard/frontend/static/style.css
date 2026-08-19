@@ -955,6 +955,11 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
   background: rgba(var(--t-green), .12); border: 1px solid rgba(var(--t-green), .45); cursor: pointer; }
 .strat-page .btn-export[disabled] { opacity: .9; cursor: not-allowed; }
 .strat-page .btn-export:hover:not([disabled]) { background: rgba(var(--t-green), .2); }
+/* B6: the export is now an <a> (the pattern the other 17 exports use), so it
+   needs the underline off. ⭐ Everything else it keeps -- the approved
+   artwork's height, padding, colour and hover come from the rule above,
+   unchanged, so the button LOOKS exactly as drawn. */
+.strat-page .st-exp { text-decoration: none; }
 .strat-page .st-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; }
 .strat-page .st-count { font-size: 13px; color: var(--muted); }
 .strat-page .st-pager { display: flex; align-items: center; gap: 12px; }

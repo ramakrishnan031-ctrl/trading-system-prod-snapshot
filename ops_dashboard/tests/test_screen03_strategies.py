@@ -337,20 +337,90 @@ class TestNoDataRegression:
 # ══════════════════════════════════════════════════════════════════════════
 class TestPendingItemsRemainPending:
 
-    def test_export_is_still_the_disabled_stub_and_is_NOT_implemented(self):
-        """⏸️ F1/Q3 PENDING. ⛔ This test asserts the PENDING state deliberately:
-        it must NOT be rewritten into a passing export expectation without the
-        Q3 (copy-protection acceptance) ruling. Screen 03 renders the shared
-        `export_button` macro, which is DISABLED until `table_export_enabled`,
-        and there is no `/api/export/strategies` route.
+    def test_export_is_implemented_and_is_no_longer_the_disabled_stub(self):
+        """✅ B6 RULED 19-Aug-2026. ⛔ This test was the PENDING guard asserting the
+        export's ABSENCE; it is flipped DELIBERATELY, ⛔ not rewritten to make a
+        build pass. `03. Strategies.txt` states EXPORT: "Download XLSX", the
+        `_xlsx` writer and the `/api/export/*` pattern already ship on seventeen
+        screens, and the Q3 copy-protection question it was waiting on is a
+        data-egress question that those seventeen already answer in the
+        affirmative.
+
+        ⭐ Screen 03 uses the PER-SCREEN anchor, ⛔ not the shared macro: the macro
+        is gated by ONE global flag, so enabling it would also un-disable
+        Screens 04/08/09, which have no export route behind them.
         """
-        assert "export_button" in _tpl(), "Screen 03 stopped using the shared export macro"
+        code = _tpl_code()
+        assert 'exportUrl()' in code, "Screen 03 lost its export URL builder"
+        assert "/api/export/strategies" in code
+        # ⛔ Assert the IMPORT and the CALL, ⛔ not the bare word: the template
+        #    now EXPLAINS in a comment why it left the macro, and a substring
+        #    check would match that explanation and fail on its own prose.
+        assert "import export_button" not in _tpl(), (
+            "Screen 03 re-imported the flag-gated macro")
+        assert "{{ export_button(" not in _tpl(), (
+            "Screen 03 is back on the flag-gated macro, which is disabled")
         api_dir = os.path.join(_ROOT, "backend", "api")
-        for fn in os.listdir(api_dir):
+        found = False
+        for fn in sorted(os.listdir(api_dir)):
             if fn.endswith(".py"):
                 with open(os.path.join(api_dir, fn), encoding="utf-8") as fh:
-                    assert "export/strategies" not in fh.read(), (
-                        "an /api/export/strategies route appeared while Q3 is pending")
+                    if 'route("/api/export/strategies"' in fh.read():
+                        found = True
+        assert found, "no /api/export/strategies route exists"
+
+    def test_the_shared_macro_is_still_gated_off_for_the_screens_that_use_it(self):
+        """⛔ B6 must not have become a global flag flip. Screens 04/08/09 still
+        render the DISABLED macro, because they have no export route."""
+        comp = os.path.join(_ROOT, "frontend", "templates", "components.html")
+        with open(comp, encoding="utf-8") as fh:
+            assert "table_export_enabled" in fh.read(), (
+                "the export flag gate disappeared from the shared macro")
+        tdir = os.path.join(_ROOT, "frontend", "templates")
+        still = []
+        for fn in ("signals.html", "capital_risk.html", "pnl_analytics.html"):
+            with open(os.path.join(tdir, fn), encoding="utf-8") as fh:
+                if "export_button" in fh.read():
+                    still.append(fn)
+        assert len(still) == 3, "a screen left the gated macro silently: %s" % still
+
+    def test_the_workbook_header_is_the_table_header_in_the_table_order(self):
+        """⛔ An export that drifts from its screen is worse than no export. The
+        column ORDER is asserted, not just membership."""
+        code = _tpl_code()
+        labels = re.findall(r'\{\s*key:\s*"[a-z_]+",\s*label:\s*"([^"]+)"', code)
+        assert labels, "Screen 03's cols array could not be read"
+        header = [h.replace("(Rs)", "(₹)") for h in strategy_tower.EXPORT_HEADER]
+        assert header == labels, (
+            "export header != table header: %s vs %s" % (header, labels))
+
+    def test_the_export_applies_the_screens_own_four_filters(self):
+        src = inspect.getsource(strategy_tower.export_rows)
+        for f in ("strategy", "status", "trade_type", "direction"):
+            assert f in src, "the export ignores the %s filter" % f
+
+    def test_the_export_never_turns_an_unset_bucket_into_a_zero(self):
+        """⭐ B5's capital truth, carried into the workbook: "no bucket configured"
+        and "zero allocated" are DIFFERENT facts, and the export must not merge
+        them. Fixture-independent — the payload is built by hand."""
+        payload = {"rows": [{"basic": {"display_name": "s1", "trade_type": "INTRADAY",
+                                       "direction": "LONG"},
+                             "capital_view": {"capital_used": 10.0,
+                                              "capital_remaining": None},
+                             "signals": {}, "processing": {}, "trading": {},
+                             "performance": {}, "health": {}, "silence": {}}]}
+        rows = strategy_tower.export_rows(payload)
+        alloc = rows[1][strategy_tower.EXPORT_HEADER.index("Allocated (Rs)")]
+        usage = rows[1][strategy_tower.EXPORT_HEADER.index("Usage %")]
+        assert alloc is None and usage is None, (alloc, usage)
+
+    def test_the_export_endpoint_returns_a_real_workbook(self, client):
+        r = client.get("/api/export/strategies")
+        assert r.status_code == 200, r.status_code
+        assert "spreadsheetml" in r.headers.get("Content-Type", "")
+        assert r.data[:2] == b"PK", "not a zip container, so not an xlsx"
+        assert "strategies_" in r.headers.get("Content-Disposition", "")
+
 
     def test_capital_arithmetic_is_untouched(self):
         """⏸️ D1/D2 PENDING. The Allocated/Used/Remaining derivation must not move

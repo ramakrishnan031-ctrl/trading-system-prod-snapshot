@@ -2,7 +2,6 @@
 {% block title %}Strategies — Control Tower{% endblock %}
 {% block nav_strategies %}active{% endblock %}
 {% block content %}
-{% from "components.html" import export_button %}
 <div x-data="strategiesPage()" x-init="load()" @ops-refresh.window="load()" class="dash-page strat-page">
 
   <!-- Merged Alerts banner -->
@@ -135,7 +134,13 @@
           <option :value="50">50</option><option :value="60">60</option>
         </select>
         entries</label>
-      {{ export_button("Export XLSX") }}
+      {# ⭐ B6 RULED 19-Aug-2026 — `03. Strategies.txt`, EXPORT: "Download XLSX".
+         The SHARED `export_button` macro is flag-gated OFF for every screen at
+         once, and the seventeen screens that already ship an export use this
+         per-screen anchor instead. Screen 03 joins THEM rather than flipping a
+         global flag that would also un-disable S04/S08/S09, ⛔ which have no
+         export route behind them. #}
+      <a class="btn-export st-exp" :href="exportUrl()">⇩ Export XLSX</a>
     </div>
     <div class="tbl-scroll">
       <table class="st-tbl">
@@ -339,6 +344,18 @@ function strategiesPage() {
         if (a.direction && String(r.direction || "").toUpperCase() !== a.direction) return false;
         return true;
       });
+    },
+    /* ⭐ The SAME four filters the table applies, so the workbook is the view
+       on screen — ⛔ not "everything, unfiltered", which is how an export
+       quietly stops matching what the operator is looking at. */
+    exportUrl() {
+      const p = new URLSearchParams();
+      if (this.af.strategy) p.set("strategy", this.af.strategy);
+      if (this.af.status) p.set("status", this.af.status);
+      if (this.af.trade_type) p.set("trade_type", this.af.trade_type);
+      if (this.af.direction) p.set("direction", this.af.direction);
+      const q = p.toString();
+      return "/api/export/strategies" + (q ? "?" + q : "");
     },
     applyFilters() {
       this.af = { strategy: this.f.strategy, status: this.f.status,
