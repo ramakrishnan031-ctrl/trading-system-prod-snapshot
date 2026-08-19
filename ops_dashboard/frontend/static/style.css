@@ -3368,7 +3368,7 @@ table td.ctr { text-align: center !important; }
 .tlg-page .tlg-row3 { display: grid; gap: 16px; align-items: start;
   grid-template-columns: 1fr 1.7fr; }
 .tlg-page .tlg-row4 { display: grid; gap: 16px; align-items: start;
-  grid-template-columns: 1.3fr 1.6fr .8fr; }
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1.6fr) minmax(0, .8fr); }
 @media (max-width: 1400px) {
   .tlg-page .tlg-row3, .tlg-page .tlg-row4 { grid-template-columns: 1fr; }
 }

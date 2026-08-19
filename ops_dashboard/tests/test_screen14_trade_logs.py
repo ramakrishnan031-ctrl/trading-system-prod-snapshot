@@ -555,3 +555,95 @@ def test_no_raw_webhook_payload_or_secret_reaches_the_screen(client):
     blob = json.dumps(_s(client)).lower()
     for secret in ("password", "totp", "api_key", "access_token", "secret"):
         assert secret not in blob
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# PAGE-LEVEL OVERFLOW — THE BARE-`fr` DEFECT (measured 19-Aug-2026)
+#
+# MEASURED BEFORE: at 1440x900 (CSS clientWidth 1416) the page scrolled to 1760
+# — a 344px horizontal overflow — and it grew as the viewport narrowed:
+#     clientWidth 1728 +32 · 1660 +100 · 1600 +160 · 1536 +224 · 1416 +344
+#
+# TWO WRONG FIXES WERE TRIED AND REVERTED FIRST, AND BOTH ARE PINNED BELOW SO
+# THEY ARE NOT RETRIED:
+#   ① raising `.tlg-work`'s stacking breakpoint. It DID stack the rail
+#      (computed `grid-template-columns: 1548.17px`, a single column) and the
+#      page STILL overflowed 344px — the floor was not in that row.
+#   ② constraining `main.content` with `:has(> .tlg-page)`. It DID fix that
+#      element (clientWidth 1580 -> 1236) but the page still overflowed 328px,
+#      because a second owner sat below it.
+#
+# THE ACTUAL OWNER: `.tlg-row4` declared `grid-template-columns: 1.3fr 1.6fr .8fr`
+# — BARE `fr`. A grid item defaults to `min-width: auto`, so a track cannot
+# shrink below its content's intrinsic width and the row stayed 1548px wide
+# inside a 1204px container. This file's OWN comment at `.tlg-work` already
+# warns against exactly that.
+#
+# ⭐ AND THE BUG WAS ALSO DISTORTING THE APPROVED PROPORTIONS, not merely
+# overflowing: measured `.tlg-errs` 753.7px beside `.tlg-export` 106.7px, which
+# is nothing like the declared 1.6 : 0.8. With `minmax(0, …)` they measure
+# 664.2 / 332.1 at 1920 — exactly 2:1. The fix RESTORES the artwork's ratios.
+#
+# AFTER: page overflow ZERO at all eight tested widths (1896, 1776, 1728, 1660,
+# 1600, 1536, 1416, 1400), the rail stays BESIDE the main table as the artwork
+# draws it, and `.tlg-tbl-wrap` keeps its own `overflow-x: auto` scrolling.
+# ══════════════════════════════════════════════════════════════════════════
+class TestNoPageLevelOverflow:
+
+    def _row(self, name):
+        css = _css()
+        m = re.search(r"\.tlg-page \." + name + r" \{([^}]*)\}", css)
+        assert m, ".tlg-page .%s rule missing" % name
+        return m.group(1)
+
+    def test_row4_tracks_are_minmax_not_bare_fr(self):
+        """⛔ The measured owner. A bare `fr` track cannot shrink below its
+        content, which is what pushed the page to 1760px."""
+        body = self._row("tlg-row4")
+        m = re.search(r"grid-template-columns:\s*([^;]+);", body)
+        assert m, "no grid-template-columns on .tlg-row4: %s" % body
+        tracks = m.group(1)
+        assert "minmax(0," in tracks, "bare fr tracks are back: %s" % tracks
+        # ⛔ Strip the minmax() wrappers BEFORE looking for a bare fr — the fr
+        # units INSIDE minmax(0, 1.3fr) are correct and must not be flagged.
+        # (This test caught that in its own first run.)
+        outside = re.sub(r"minmax\([^)]*\)", "", tracks)
+        assert not re.search(r"[0-9.]+fr", outside), (
+            "an unwrapped fr track remains: %s" % tracks)
+
+    def test_the_approved_column_ratios_are_unchanged(self):
+        """⛔ The fix must change the SHRINK behaviour, ⛔ not the proportions.
+        1.3 : 1.6 : .8 is what the approved layout declares."""
+        tracks = re.search(r"grid-template-columns:\s*([^;]+);",
+                           self._row("tlg-row4")).group(1)
+        assert re.findall(r"([0-9.]+)fr", tracks) == ["1.3", "1.6", "0.8"] or \
+               re.findall(r"([0-9.]+)fr", tracks) == ["1.3", "1.6", ".8"], tracks
+
+    def test_the_two_reverted_fixes_have_not_come_back(self):
+        """⛔ Both were MEASURED not to work. Re-adding either would be a
+        regression to a disproved hypothesis, ⛔ not a fix."""
+        css = _css()
+        assert "has(> .tlg-page)" not in css, (
+            "the main.content constraint is back — measured to leave 328px")
+        work = self._row("tlg-work")
+        assert "330px" in work, "the rail width changed"
+        assert "@media (max-width: 1400px) { .tlg-page .tlg-work" in css, (
+            "the .tlg-work breakpoint moved — raising it was measured NOT to fix "
+            "the overflow, and it stacked the rail the artwork shows beside")
+
+    def test_the_wide_event_table_still_scrolls_inside_its_own_wrapper(self):
+        """⛔ The page must not scroll instead. Measured at 1440: `.tlg-tbl-wrap`
+        is 1104/824 — content wider than the box, contained by its own auto."""
+        css = _css()
+        m = re.search(r"\.tlg-page \.tlg-tbl-wrap \{([^}]*)\}", css)
+        assert m, ".tlg-tbl-wrap rule missing"
+        assert "auto" in m.group(1), (
+            "the event table lost its own horizontal scroll: %s" % m.group(1))
+
+    def test_the_fix_is_scoped_to_screen_14(self):
+        """⛔ `.tlg-row4` must not become a shared selector."""
+        css = _css()
+        for m in re.finditer(r"([^{}\n][^{}]*)\{[^}]*\}", css):
+            sel = m.group(1).strip()
+            if "tlg-row4" in sel:
+                assert ".tlg-page" in sel, "unscoped .tlg-row4 rule: %s" % sel[:70]
