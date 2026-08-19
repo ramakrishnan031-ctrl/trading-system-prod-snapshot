@@ -3230,6 +3230,24 @@ table td.ctr { text-align: center !important; }
    push the whole page into a horizontal scroll (measured on Screen 13). */
 .tlg-page .tlg-work { display: grid; gap: 16px; align-items: start;
   grid-template-columns: minmax(0, 1fr) 330px; }
+/* ⚠️⚠️ D2-A WAS ATTEMPTED AND REVERTED — 19-Aug-2026. ⛔ DO NOT RETRY IT AS A
+   BREAKPOINT CHANGE; the breakpoint is NOT the cause.
+   The reported diagnosis was "`max-width:1400px` never fires at a 1416px
+   clientWidth, so the 330px rail stays". The first half is true, but raising the
+   threshold to the measured 1760 content floor DID NOT FIX THE OVERFLOW.
+   MEASURED WITH THE RAISED THRESHOLD, at 1440x900:
+       .tlg-work computed `grid-template-columns: 1548.17px`  ⇒ the rail IS
+       stacked, a SINGLE column — and that column is still 1548px inside a
+       ~1236px slot, so the page still overflowed 344px.
+   ⇒ 🔑 THE WIDTH FLOOR SITS ABOVE `.tlg-work`, ⛔ not in it: `main.content`
+   measures 1580px, so no grid-template change inside this row can reach it.
+   ⛔ Reverted to the original `1400px` because the raised value altered the
+   layout between 1416 and 1760 (stacking the rail where the artwork shows it
+   beside) while fixing NOTHING. A change that deviates from the artwork and
+   does not fix the defect is worse than no change.
+   📌 The real candidates are a missing `min-width: 0` on the main column and
+   three rail tables (`.tlg-types`, `.tlg-sev`, `.tlg-ret`) whose parents carry
+   `overflow-x: visible` — ⛔ both outside D2-A's authorised one-number shape. */
 @media (max-width: 1400px) { .tlg-page .tlg-work { grid-template-columns: minmax(0, 1fr); } }
 .tlg-page .tlg-left { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 .tlg-page .tlg-rail { display: flex; flex-direction: column; gap: 16px; }
@@ -5465,6 +5483,34 @@ main.content:has(> .ctl-page) { width: 100%; max-width: none; margin: 0;
 /* Shell: main column + right rail, mirroring the artwork's composition. */
 .ctl-page .ctl-shell { display: grid; grid-template-columns: minmax(0, 1fr) 300px;
   gap: 14px; align-items: start; }
+/* ⛔ D2-C · C-1 (19-Aug-2026) — PAGE-SCOPED, ⛔ NEVER the global `.kpi-val`.
+   `.kpi-row`/`.kpi-card`/`.kpi-val` are GLOBAL (`:414-425`) and reach S08, S09,
+   S10, S11, S12, S16 and S17 through the shared `kpi_row`/`kpi_card` macros, so
+   the override is scoped here exactly as `.pnl-page` and `.slp-page` already
+   scope theirs (`:2095`, `:2192`).
+
+   ⭐⭐ BUT `1.18rem` WAS REJECTED AFTER MEASURING THE REAL DATA, ⛔ not copied
+   because two other pages use it. MEASURED: exactly ONE of the six KPIs
+   overflows — `Last Control Change`, whose value is a RAW ISO-8601 STRING
+   `2026-08-19T17:05:00+05:30` at 27.2px in a 156px card (`over 115` @1440,
+   `over 35` @1920). The other five (`INACTIVE`, `Intraday Only`, `4 / 5`,
+   `1 / 5`, `UNKNOWN`) overflow by ZERO.
+   ⇒ 🔑 THIS IS NOT A TYPOGRAPHY DEFECT. Fitting 25 characters into 156px needs
+   roughly 6px type — far under the 13px floor — so NO font-size can fix it, and
+   `1.18rem` would still overflow by ~30px.
+
+   THE GEOMETRY-SAFE FIX IS TO LET THE VALUE WRAP. It has no spaces, so a
+   browser treats it as one unbreakable word; `overflow-wrap: anywhere` gives it
+   break opportunities. ⛔ NOT truncation, ⛔ not clipping, ⛔ no hidden content,
+   ⛔ no font change — the artwork's KPI hierarchy and the 13px floor are both
+   untouched.
+   📌 REPORTED, ⛔ NOT FIXED HERE: the real defect is that the value is rendered
+   UNFORMATTED — `kpi_card("Last Control Change", "summary('last_control_change')")`
+   passes the payload straight through, and this screen has no time helper in
+   scope. Formatting it is a TEMPLATE change and lies outside D2-C's authorised
+   CSS-only shape, so it is left for a decision. */
+.ctl-page .kpi-val { overflow-wrap: anywhere; }
+
 .ctl-page .ctl-main { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
 .ctl-page .ctl-rail { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
 .ctl-page .ctl-row { display: grid; gap: 14px; align-items: start; }
@@ -5561,8 +5607,20 @@ main.content:has(> .ctl-page) { width: 100%; max-width: none; margin: 0;
 
 /* Rail: history, simulation mode, apply */
 .ctl-page .ctl-hist { display: flex; flex-direction: column; gap: 5px; }
+/* ⛔ D2-B (19-Aug-2026): the CONSTANT ~4px page overflow, ⛔ not the responsive
+   ramp. MEASURED at 1920: this row's content is 303px inside a 266px box
+   (`over 37`), which pushes the 300px rail panel 21px wide and lets ~4px escape
+   to the document — and it does so at EVERY width tested, 2200 included, so it
+   is a fixed sizing defect, ⛔ not a breakpoint miss.
+   CAUSE: a flex item defaults to `min-width: auto`, so the action label refuses
+   to shrink below its longest word. `min-width: 0` lets it shrink and
+   `overflow-wrap: anywhere` lets a long token WRAP.
+   ⭐ WRAPPING, ⛔ NOT TRUNCATION — the label is a control action a person must be
+   able to read, and no artwork calls for an ellipsis here. ⛔ The timestamp
+   keeps `flex: none` so it is never compressed. */
 .ctl-page .ctl-hrow { display: flex; gap: 8px; font-size: 13px; align-items: baseline; }
-.ctl-page .ctl-htime { color: var(--dim); flex: none; }
+.ctl-page .ctl-hrow > * { min-width: 0; overflow-wrap: anywhere; }
+.ctl-page .ctl-htime { color: var(--dim); flex: none; overflow-wrap: normal; }
 .ctl-page .ctl-simrow { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 7px; }
 .ctl-page .ctl-sim { background: var(--panel2); border: 1px solid var(--border);
