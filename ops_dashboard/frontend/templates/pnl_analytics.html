@@ -210,12 +210,32 @@
                     @click="curveKey='net'">Net P&amp;L</button>
           </span>
         </div>
+        <!-- AXIS LABELS AS HTML, ⛔ NOT <text>. `09. PnL_Analytics.png` draws a
+             ₹ scale down the left and a session timeline underneath, and neither
+             existed in the build. They are printed as an HTML overlay positioned
+             as a PERCENTAGE of the same viewBox, so the geometry still scales
+             with the container while the type is real CSS px and holds the 13px
+             floor at every width. ⭐ Same method as Screens 10/11, ⛔ not a new
+             one — and it is the only safe method here because this SVG carries
+             `preserveAspectRatio="none"`, so ANY <text> inside it would be
+             stretched by a DIFFERENT factor on each axis.
+             ⛔ No value is invented: yTicks() reads bounds() — the very range
+             yFor() already plots — and xTicks() reads the points' own `ts`. -->
         <div class="curve-wrap">
-          <svg class="curve-svg pnl-curve" viewBox="0 0 600 170" preserveAspectRatio="none" aria-hidden="true">
-            <line class="pnl-zero" x1="0" :y1="zeroY()" x2="600" :y2="zeroY()"></line>
-            <polyline :points="curvePoints()" fill="none" class="curve-line"
-                      :class="curveKey==='gross'?'pnl-line-gross':'pnl-line-net'"/>
-          </svg>
+          <div class="pnl-cx">
+            <svg class="curve-svg pnl-curve" viewBox="0 0 600 170" preserveAspectRatio="none" aria-hidden="true">
+              <line class="pnl-zero" :x1="PLOT_X0" :y1="zeroY()" x2="600" :y2="zeroY()"></line>
+              <polyline :points="curvePoints()" fill="none" class="curve-line"
+                        :class="curveKey==='gross'?'pnl-line-gross':'pnl-line-net'"/>
+            </svg>
+            <div class="cxl-layer">
+              <template x-for="(l, i) in curveLabels()" :key="i">
+                <span class="cxl" :class="l.cls"
+                      :style="'left:' + l.L + ';top:' + l.T"
+                      x-text="l.t"></span>
+              </template>
+            </div>
+          </div>
         </div>
         <div class="pnl-curve-foot">
           <span class="pnl-cur-val" :class="toneCls(curveEnd())"
@@ -499,12 +519,111 @@ function pnlAnalyticsPage() {
       if (min === max) { min -= 1; max += 1; }
       return { min: min, max: max };
     },
-    yFor(v) { const b = this.bounds(); return (160 - 150 * (v - b.min) / (b.max - b.min) + 5); },
+    /* ── PLOT BOX. The curve used to run 0..600 x 15..165, i.e. the WHOLE
+         viewBox, which is why there was nowhere to print an axis. The artwork
+         draws the plot INSET with a ₹ scale to its left and a timeline below,
+         so the box is inset to make that room. ⛔ The MAPPING is unchanged —
+         still linear over the same bounds() — so the curve's shape and its
+         relationship to the data are preserved; only the frame moved. ── */
+    VBW: 600,
+    VBH: 170,
+    PLOT_X0: 0,
+    PLOT_X1: 600,
+    PLOT_Y0: 10,
+    PLOT_Y1: 160,
+    /* 🔑 THE GUTTERS ARE CSS PIXELS, ⛔ NOT viewBox UNITS — and that is the whole
+       design. MEASURED: this panel renders 449.4px wide at 1920 but only
+       222.6px at 1440 (`.pnl-row3` is `1.25fr 1fr 1fr`), a 2:1 range. A gutter
+       expressed as a share of the viewBox is therefore EITHER oversized at 1920
+       OR clipping at 1440 — the first attempt clipped `-₹25` by 6.5px at 1440.
+       Reserving a FIXED px gutter with padding and positioning the labels with
+       calc() makes the gutter identical at every width, so a label can never be
+       clipped and ⛔ no type has to shrink to fit. */
+    GUT_L: 64,
+    GUT_R: 20,
+    GUT_B: 22,
+    yFor(v) {
+      const b = this.bounds();
+      return this.PLOT_Y1 - (this.PLOT_Y1 - this.PLOT_Y0) * (v - b.min) / (b.max - b.min);
+    },
+    xFor(i, n) {
+      if (n <= 1) return this.VBW / 2;
+      return this.VBW * i / (n - 1);
+    },
     zeroY() { return this.yFor(0).toFixed(1); },
     curvePoints() {
       const s = this.series(); if (s.length < 2) return "";
-      const step = 600 / (s.length - 1);
-      return s.map((p, i) => (i * step).toFixed(1) + "," + this.yFor(p.cum).toFixed(1)).join(" ");
+      return s.map((p, i) => this.xFor(i, s.length).toFixed(1) + ","
+                             + this.yFor(p.cum).toFixed(1)).join(" ");
+    },
+
+    /* ── AXIS TICKS. ⛔ Nothing here invents a number: the y scale is bounds(),
+         which is what yFor() already plots, and every x label is a point's own
+         `ts`. ── */
+    axisMoney(v) {
+      /* The artwork's AXIS format — `₹40,000` / `-₹10,000` / `0` — which is
+         deliberately NOT the shared money() (that prints 2dp and no grouping,
+         and is right for a cell, wrong for a tick). ⛔ money() is untouched. */
+      const n = Math.round(Number(v) || 0);
+      if (n === 0) return "0";
+      const g = Math.abs(n).toLocaleString("en-IN");
+      return (n < 0 ? "-₹" : "₹") + g;
+    },
+    yTicks() {
+      const b = this.bounds(), out = [];
+      for (let i = 0; i <= 4; i++) {
+        const v = b.min + (b.max - b.min) * i / 4;
+        out.push({ y: this.yFor(v), t: this.axisMoney(v) });
+      }
+      return out;
+    },
+    xTicks() {
+      const s = this.series();
+      if (s.length < 2) return [];
+      /* Screen 11's rule, carried ⛔ not re-invented: mark every `step`th point,
+         always keep the session END, and DROP the stepped mark if it sits within
+         half a step of the end — otherwise the last two labels overlap, which is
+         exactly the defect measured on Screen 12 today. */
+      const step = Math.max(1, Math.ceil(s.length / 7));
+      const last = s.length - 1;
+      const marks = [];
+      for (let i = 0; i <= last; i += step) marks.push(i);
+      if (marks[marks.length - 1] !== last) {
+        if (last - marks[marks.length - 1] < Math.ceil(step / 2)) marks.pop();
+        marks.push(last);
+      }
+      return marks.map(i => ({ x: this.xFor(i, s.length), t: this.hhmm(s[i].ts) }));
+    },
+    /* Position INSIDE the padded box: the SVG occupies the content box, so a
+       viewBox x maps to `GUT_L + (100% - GUT_L - GUT_R) * x/VBW` and a viewBox y
+       to `(100% - GUT_B) * y/VBH`. ⛔ Percentages alone cannot express this —
+       the gutters are px and the plot is elastic. */
+    xCss(x) {
+      const f = (x / this.VBW).toFixed(5);
+      return "calc(" + this.GUT_L + "px + (100% - " + (this.GUT_L + this.GUT_R)
+             + "px) * " + f + ")";
+    },
+    yCss(y) {
+      return "calc((100% - " + this.GUT_B + "px) * " + (y / this.VBH).toFixed(5) + ")";
+    },
+    curveLabels() {
+      const out = [];
+      /* y ticks sit in the LEFT gutter, right-aligned 8px clear of the plot */
+      this.yTicks().forEach(g => {
+        out.push({ L: (this.GUT_L - 8) + "px", T: this.yCss(g.y),
+                   t: g.t, cls: "cxl-end" });
+      });
+      /* x ticks sit centred in the BOTTOM gutter */
+      this.xTicks().forEach(x => {
+        out.push({ L: this.xCss(x.x), T: "calc(100% - " + (this.GUT_B / 2) + "px)",
+                   t: x.t, cls: "cxl-mid" });
+      });
+      if (this.series().length < 2) {
+        out.push({ L: this.xCss(this.VBW / 2), T: this.yCss(this.VBH / 2),
+                   cls: "cxl-mid cxl-e",
+                   t: "Not enough closed trades in this period to plot a curve" });
+      }
+      return out;
     },
     curveEnd() { const s = this.series(); return s.length ? s[s.length - 1].cum : 0; },
 

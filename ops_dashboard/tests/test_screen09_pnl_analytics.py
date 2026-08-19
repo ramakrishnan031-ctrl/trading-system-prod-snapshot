@@ -409,3 +409,122 @@ def test_dow_buckets_never_drop_a_trade():
     heat = ap._heatmap(saturday + weekday, lambda r: ap._dow(r.get("exit_time")),
                        ap._dow_buckets(saturday + weekday))
     assert sum(c["trades"] for c in heat) == 2
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# EQUITY-CURVE AXIS LABELS (19-Aug-2026, authorised by Rama)
+#
+# `09. PnL_Analytics.png` draws a ₹ scale down the left of the equity curve and
+# a session timeline underneath. The build had NEITHER — measured: 0 <svg text>
+# elements on the whole page at 1920x1080 AND 1440x900.
+#
+# MEASURED AFTER, in the browser, with populated data at BOTH viewports:
+#   9 labels · every one 13.00px · no overlap (min x-gap 90.8px @1920,
+#   15.3px @1440) · 0 escaping the panel · 0 page-level horizontal overflow.
+#
+# ⚠️ THE TRAP THAT NEARLY SHIPPED, AND WHY THE GUTTER IS PIXELS:
+#   this panel renders 449.4px wide at 1920 but only 222.6px at 1440
+#   (`.pnl-row3` is `1.25fr 1fr 1fr`). A gutter expressed as a share of the
+#   viewBox is therefore oversized at one width and CLIPPING at the other — the
+#   first attempt clipped `-₹25` by 6.5px at 1440 and let `15:10` escape the
+#   right edge at both. Fixed px padding + calc() positioning makes the
+#   clearances IDENTICAL at both widths (28.0 / 4.6 / 4.5 px).
+#
+# ⚠️ AND THE SECOND TRAP: a 58px gutter passed with the FIXTURE's ~₹200 ticks
+#   and still clipped the ARTWORK's `-₹40,000` by 0.08px (50.08px vs 50px).
+#   The worst case had to be rendered and measured, ⛔ not extrapolated.
+# ══════════════════════════════════════════════════════════════════════════
+class TestEquityCurveAxisLabels:
+
+    def _fn(self, name):
+        t = _tpl()
+        t = t[t.index(name):]
+        return t[:t.index("\n    },")]
+
+    def test_the_labels_are_html_not_svg_text(self):
+        """⛔ <text> inside `.pnl-curve` would be WORSE than the Screen 10/11
+        defect: that SVG carries `preserveAspectRatio="none"`, so a glyph would
+        be stretched by a DIFFERENT factor on each axis — distorted, not merely
+        mis-sized."""
+        tpl = _tpl()
+        curve = tpl[tpl.index('class="pnl-cx"'):tpl.index('pnl-curve-foot')]
+        assert "<text" not in curve, "an SVG <text> appeared inside the equity curve"
+        assert 'preserveAspectRatio="none"' in curve, (
+            "the curve stopped stretching — re-measure before trusting the overlay maths")
+        assert 'class="cxl-layer"' in curve and "curveLabels()" in curve
+
+    def test_the_overlay_type_holds_the_13px_floor(self):
+        css = _css()
+        m = re.search(r"\.pnl-page \.cxl \{([^}]*)\}", css)
+        assert m, ".pnl-page .cxl rule missing"
+        fm = re.search(r"font-size:\s*([0-9.]+)px", m.group(1))
+        assert fm and float(fm.group(1)) >= 13, m.group(1)
+
+    def test_the_gutter_is_pixels_and_holds_the_artworks_widest_tick(self):
+        """MEASURED: `-₹40,000` renders 50.08px at 13px. A 58px gutter leaves
+        50px and CLIPPED IT by 0.08px; 64px leaves 56px and fits with 5.92px
+        spare. ⛔ The fixture's own ~₹200 ticks could never have caught this."""
+        css = _css()
+        m = re.search(r"\.pnl-page \.pnl-cx \{([^}]*)\}", css)
+        assert m, ".pnl-page .pnl-cx rule missing"
+        rule = m.group(1)
+        assert "position: relative" in rule
+        pm = re.search(r"padding:\s*0\s+(\d+)px\s+(\d+)px\s+(\d+)px", rule)
+        assert pm, "the fixed-px gutters are gone: %s" % rule
+        right, bottom, left = (int(x) for x in pm.groups())
+        assert left - 8 >= 51, (
+            "left gutter %dpx leaves %dpx, under the 50.08px the artwork's widest "
+            "tick measures" % (left, left - 8))
+        assert right >= 12 and bottom >= 20, (right, bottom)
+        assert "GUT_L: %d," % left in _tpl(), (
+            "the JS gutter and the CSS padding disagree — the labels would sit "
+            "off the plot")
+
+    def test_the_global_curve_wrap_is_still_not_a_positioning_context(self):
+        """⛔ Giving the GLOBAL `.curve-wrap` a position would reach every screen
+        with a chart. The context is `.pnl-cx`, used only here."""
+        css = _css()
+        assert not re.search(r"^\.curve-wrap \{[^}]*position:", css, re.M)
+
+    def test_no_axis_value_is_invented(self):
+        """⭐ y ticks come from bounds() — the range yFor() already plots — and
+        every x label is a point's own `ts`. ⛔ Nothing is synthesised."""
+        y = self._fn("yTicks() {")
+        assert "this.bounds()" in y and "this.yFor(" in y
+        x = self._fn("xTicks() {")
+        assert "this.series()" in x and "s[i].ts" in x
+        assert "Math.random" not in _tpl()
+
+    def test_the_x_axis_carries_the_last_label_collision_rule(self):
+        """⭐ Carried from Screens 11/12, ⛔ not re-invented: keep the session-end
+        mark, drop the stepped one within half a step of it."""
+        code = re.sub(r"/\*.*?\*/", "", self._fn("xTicks() {"), flags=re.S)
+        assert "marks.pop()" in code and "Math.ceil(step / 2)" in code
+
+    def test_the_shared_money_helper_was_not_repurposed(self):
+        """The axis format `₹40,000` is the ARTWORK's, and is NOT money() (2dp,
+        no grouping). ⛔ money() is shared with every screen and stays untouched."""
+        a = self._fn("axisMoney(v) {")
+        assert "toLocaleString" in a
+        # ⛔ `_tpl()` IGNORES its argument and always reads pnl_analytics.html, so
+        # `_tpl("base.html")` silently returns the WRONG FILE. base.html is read
+        # directly here. (This test caught that on its own first run.)
+        import os
+        here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(here, "frontend", "templates", "base.html"),
+                  encoding="utf-8") as fh:
+            base = fh.read()
+        assert "Math.abs(n).toFixed(2)" in base and "money(v)" in base, \
+            "the shared money() helper changed"
+        assert "toLocaleString" not in base, \
+            "the axis grouping leaked into the shared money() helper"
+
+    def test_only_screen_09_scopes_were_added_to_the_css(self):
+        """⛔ Strictly S09-scoped: every rule this change added names `.pnl-page`."""
+        css = _css()
+        block = css[css.index("SCREEN 09 — P&L ANALYTICS"):css.index("SCREEN 10 — SLIPPAGE")]
+        for sel in re.findall(r"^([.#][^{\n]+)\{", block, re.M):
+            sel = sel.strip()
+            if sel.startswith("@"):
+                continue
+            assert sel.startswith(".pnl-page"), "unscoped rule in the S09 block: %s" % sel

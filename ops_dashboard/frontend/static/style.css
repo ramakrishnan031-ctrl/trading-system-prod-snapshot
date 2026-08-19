@@ -2096,6 +2096,37 @@ table td.ctr { text-align: center !important; }
 .pnl-page .pnl-rail .cap-table td:first-child { max-width: 118px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* 5. EQUITY-CURVE AXIS LABELS (19-Aug-2026).  `09. PnL_Analytics.png` draws a
+      ₹ scale down the left and a session timeline underneath; the build had
+      NEITHER, and 0 <text> elements on the page.  They are printed as HTML over
+      the SVG so the type is real CSS px and holds the 13px floor at every width
+      — the same method Screens 10/11 use, ⛔ not a new one.
+      ⛔⛔ AND IT IS THE ONLY SAFE METHOD HERE: `.pnl-curve` carries
+      `preserveAspectRatio="none"`, so an SVG <text> inside it would be stretched
+      by a DIFFERENT factor on each axis — worse than the fixed-viewBox defect
+      Screens 10/11 had, because the glyphs would also be distorted.
+      ⛔ `.curve-wrap` is GLOBAL and is NOT given a position here (a test
+      enforces that); the positioning context is `.pnl-cx`, used only by this
+      screen. */
+/* 🔑 THE GUTTERS ARE FIXED PIXELS, ⛔ NOT a share of the viewBox. MEASURED: this
+   panel is 449.4px wide at 1920 but 222.6px at 1440 (`.pnl-row3` is
+   `1.25fr 1fr 1fr`), so a proportional gutter is oversized at one width and
+   CLIPPING at the other — the first attempt clipped `-₹25` by 6.5px at 1440.
+   64px left / 20px right / 22px bottom holds the artwork's widest tick at EVERY
+   width, ⛔ without shrinking any type. ⚠️ 58px was TRIED FIRST AND FAILED BY
+   0.08px: the artwork's widest form `-₹40,000` MEASURES 50.08px at 13px against
+   the 50px a 58px gutter leaves. ⭐ The fixture's own ticks are ~₹200 and would
+   NEVER have shown it — the worst case had to be rendered and measured.
+   The label positions are calc() over this padding — see curveLabels(). */
+.pnl-page .pnl-cx { position: relative; padding: 0 20px 22px 64px; }
+.pnl-page .cxl-layer { position: absolute; inset: 0; pointer-events: none; }
+.pnl-page .cxl { position: absolute; font-size: 13px; line-height: 1;
+  white-space: nowrap; color: var(--muted); font-variant-numeric: tabular-nums; }
+.pnl-page .cxl-mid { transform: translate(-50%, -50%); }
+.pnl-page .cxl-end { transform: translate(-100%, -50%); }
+.pnl-page .cxl-v { color: var(--text); font-weight: 600; }
+.pnl-page .cxl-e { color: var(--dim); }
+
 /* ═══════════════════════════════════════════════════════════════════════════
    SCREEN 10 — SLIPPAGE ANALYTICS (15-Aug-2026).  Scoped to `.slp-page`.
 
