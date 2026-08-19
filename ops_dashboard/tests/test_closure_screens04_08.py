@@ -114,8 +114,11 @@ class TestTypeFloor:
 
     #: Each is a DECISION, named so a later pass cannot mistake it for an
     #: oversight and cannot quietly widen it:
-    #:  .flt-k  — the SHARED filter label, also reaching APPROVED Screens
-    #:            03/19/20/22; raising it would repaint approved screens.
+    #:  (.flt-k WAS exempt here "because raising it would repaint approved
+    #:            screens". RETIRED 19-Aug-2026 under B1: no screen has been
+    #:            visually approved yet, and every TXT governing a screen that
+    #:            renders it sets "Minimum: 13px". It is 13px now -- see
+    #:            tests/test_b1_typography_floor.py.)
     #:  .st-arw / .st-grip — decorative glyphs (sort indicator, drag handle)
     #:            carrying no readable text.
     #:  .cap-g-tick — SVG text, whose font-size is in USER UNITS, not screen
@@ -134,7 +137,7 @@ class TestTypeFloor:
     #:            REPORTED item needing a design decision (move the labels to
     #:            HTML, or accept viewBox scaling). Raising the user-unit size
     #:            would make them ~17px at 1920, which is worse.
-    EXEMPT = (".flt-k", ".st-arw", ".st-grip", ".cap-g-tick",
+    EXEMPT = (".st-arw", ".st-grip", ".cap-g-tick",
               "-grip", "-arrow", "-axis")
 
     def test_no_rule_scoped_to_screens_04_08_is_below_13px(self):
@@ -156,13 +159,21 @@ class TestTypeFloor:
         src = _read(os.path.abspath(__file__))
         assert "def test_the_gauge_ticks_clear_the_13px_floor_when_rendered" in src,             "the rendered-size test that justifies the .cap-g-tick exemption is gone"
 
-    def test_flt_k_is_exempt_because_it_is_shared_not_because_it_is_screen_04s(self):
-        """The exemption is only justified while `.flt-k` really is shared with
-        approved screens. If it stops being shared, revisit it."""
+    def test_flt_k_now_meets_the_floor_instead_of_being_exempt_from_it(self):
+        """✅ B1 RULED 19-Aug-2026. ⛔ This test was previously the guard that
+        kept `.flt-k` at 12px; it is flipped DELIBERATELY, ⛔ not rewritten to
+        make a build pass. The rule is still SHARED — that never changed — but
+        sharing was the reason to LEAVE it, and the reason evaporated: it is
+        shared with screens whose own TXT sets "Minimum: 13px", and NONE of them
+        had been visually approved. Measured at 12.00px on 8 screens before the
+        raise: S03, S04, S05, S06, S07, S19, S20, S22."""
         rules = [s for s, _ in _rules_in_scope((".flt-k",)) if ".flt-k" in s]
         assert rules, ".flt-k rule not found at all"
         assert ".strat-page" in " ".join(rules), \
-            ".flt-k no longer reaches approved Screen 03 — revisit the exemption"
+            ".flt-k stopped being shared — the raise still holds, but re-read why"
+        below = [(s[:60], v) for s, v in _rules_in_scope((".flt-k",))
+                 if ".flt-k" in s and v < 13]
+        assert not below, ".flt-k fell back below the floor: %s" % below
 
 
     def test_every_appended_css_section_carries_a_real_header(self):

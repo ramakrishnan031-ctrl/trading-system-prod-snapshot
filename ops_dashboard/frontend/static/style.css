@@ -48,7 +48,7 @@ body { margin: 0; background: var(--bg); color: var(--text);
 .sb-poll { font-size: 13px; color: var(--dim); }
 .sb-right { margin-left: 8px; }
 .btn-logout { background: transparent; border: 1px solid var(--border); color: var(--muted);
-  padding: 5px 10px; border-radius: 6px; cursor: pointer; font-size: .78rem; }
+  padding: 5px 10px; border-radius: 6px; cursor: pointer; font-size: 13px; }
 .btn-logout:hover { border-color: var(--red); color: var(--neg); }
 .num-pos { color: var(--pos); } .num-neg { color: var(--neg); } .num-warn { color: var(--orange); }
 
@@ -128,7 +128,7 @@ tr.st-AWAITING .cap-status, tr.st-UNAVAILABLE .cap-status { color: var(--dim); }
 .svc-state { color: var(--muted); font-size: .68rem; }
 
 /* ── Events ── */
-.events { list-style: none; margin: 0; padding: 0; font-size: .8rem; }
+.events { list-style: none; margin: 0; padding: 0; font-size: 13px; }
 .events li { display: flex; gap: 10px; padding: 5px 0; border-bottom: 1px solid var(--border-soft); }
 .ev-ts { color: var(--dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .ev-type { font-weight: 600; }
@@ -212,7 +212,7 @@ tr.ost-CANCELLED td:first-child { border-left: 3px solid var(--purple); }
 
 /* Info banner + empty state (holdings) */
 .info-banner { background: var(--accent-tint); border: 1px solid var(--accent-tint);
-  color: var(--blue); padding: 8px 12px; border-radius: 8px; font-size: .8rem; margin-bottom: 12px; }
+  color: var(--blue); padding: 8px 12px; border-radius: 8px; font-size: 13px; margin-bottom: 12px; }
 .empty-state { text-align: center; padding: 44px 20px; }
 .es-icon { font-size: 2.2rem; }
 .es-title { font-weight: 700; margin: 8px 0 6px; }
@@ -382,7 +382,7 @@ tr.ost-CANCELLED td:first-child { border-left: 3px solid var(--purple); }
 .hero-neg .spark-line { stroke: var(--neg); }
 
 /* B7/A8 — severity chips */
-.sev-chip { font-size: .66rem; font-weight: 800; padding: 1.5px 8px; border-radius: 999px;
+.sev-chip { font-size: 13px; font-weight: 800; padding: 1.5px 8px; border-radius: 999px;
   letter-spacing: .04em; }
 .sev-CRITICAL { background: var(--neg-tint); color: var(--neg); }
 .sev-WARNING { background: var(--warn-tint); color: var(--warn); }
@@ -830,7 +830,7 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 .strat-page .flt-field, .sig-page .flt-field, .ord-page .flt-field,
 .sr-page .flt-field, .sh-page .flt-field, .hld-page .flt-field { display: flex; flex-direction: column; gap: 5px; min-width: 150px; flex: 1 1 150px; }
 .strat-page .flt-k, .sig-page .flt-k, .ord-page .flt-k,
-.sr-page .flt-k, .sh-page .flt-k, .hld-page .flt-k { font-size: 12px; font-weight: 600; color: var(--muted); }
+.sr-page .flt-k, .sh-page .flt-k, .hld-page .flt-k { font-size: 13px; font-weight: 600; color: var(--muted); }
 /* ⭐ Screen-13's FILTERS panel joins the SAME rule, by its own class name, for
    exactly the reason recorded above: `.sel` was never defined ANYWHERE in this
    file, so its dates and dropdowns fell back to native browser widgets — pale,
@@ -991,7 +991,10 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 
 /* ── Screen-03 additions, 18-Aug (V1/V2/V3/V5) ─────────────────────────────
    ⛔ ALL SCOPED TO `.strat-page`: Screens 02/16/17/19/20/21/22 are untouched,
-   and `.flt-k` keeps its APPROVED 12px because that label language is shared. */
+   and `.flt-k` is now 13px: that label language is shared, and every TXT spec that
+   governs a screen rendering it ("Minimum 13px" in 03/04/05/06/07/19/20/22) sets
+   13px as a FLOOR. The earlier "APPROVED 12px" note was a build-time claim with
+   no ruling behind it -- and no screen has been visually approved yet. */
 
 /* KPI LABELS ARE UPPERCASE, as the approved artwork draws them — "TOTAL
    STRATEGIES", "ACTIVE", "QUIET", "SILENT", verified off the PNG at 3x. The deck
