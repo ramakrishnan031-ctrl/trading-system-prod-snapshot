@@ -25,14 +25,27 @@ body { margin: 0; background: var(--bg); color: var(--text);
 .summary-bar { position: sticky; top: 0; z-index: 20; display: flex; flex-wrap: wrap; gap: 16px;
   align-items: center; padding: 9px 40px 9px 16px; background: var(--panel); border-bottom: 1px solid var(--border); }
 .sb-item { display: flex; flex-direction: column; gap: 4px; }
-.sb-label { font-size: .64rem; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); }
+/* ⛔ 13px READABILITY FLOOR — SHARED CHROME (19-Aug-2026, Rama Q2 = raise).
+   These five carried readable TEXT under the floor: `.nv-group` 9.92px,
+   `.sb-label` 10.24px, `.sb-poll` 9.92px, `.sb-pill` 12.48px and `.sb-ver` 11px
+   (the "version" line; its span is `.nv-label`, which declares no size of its
+   own and inherits). ⛔ They are NOT the decorative glyphs the closure pass
+   exempted. All five were REM-declared, which is why a px-only scan missed them.
+   ⚠️⚠️ THESE ARE BASE/SIDEBAR CLASSES ON ALL 22 SCREENS ⇒ THIS CHANGE RE-OPENS
+   EVERY EXISTING SCREEN APPROVAL. That is a KNOWN and ACCEPTED cost of the
+   decision, ⛔ not an oversight — see the ledger entry.
+   📌 SCOPE, STATED: a full sweep found **68** shared/base rules under 13px.
+   ⛔ Only the FIVE named in the closure matrix are raised here; the other 63
+   (`.cap-table th`, `.rt-btn`, `.flt`, `.btn-export`, `.panel-sub`, `.kpi-label`,
+   `.dt-th` …) are a SEPARATE and much larger decision and are UNTOUCHED. */
+.sb-label { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); }
 .sb-num { font-size: 1.05rem; font-weight: 700; font-variant-numeric: tabular-nums; }
-.sb-pill { font-size: .78rem; font-weight: 700; padding: 2px 8px; border-radius: 999px; width: fit-content; }
+.sb-pill { font-size: 13px; font-weight: 700; padding: 2px 8px; border-radius: 999px; width: fit-content; }
 .pill-ok { background: var(--pos-tint); color: var(--pos); }
 .pill-down { background: var(--neg-tint); color: var(--neg); animation: pulse 1.2s infinite; }
 .pill-mode { background: var(--accent-tint); color: var(--blue); }
 .pill-phase { background: var(--purple-tint); color: var(--purple); }
-.sb-poll { font-size: .62rem; color: var(--dim); }
+.sb-poll { font-size: 13px; color: var(--dim); }
 .sb-right { margin-left: 8px; }
 .btn-logout { background: transparent; border: 1px solid var(--border); color: var(--muted);
   padding: 5px 10px; border-radius: 6px; cursor: pointer; font-size: .78rem; }
@@ -323,7 +336,7 @@ tr.ost-CANCELLED td:first-child { border-left: 3px solid var(--purple); }
 .sb-brand { font-weight: 900; letter-spacing: .2em; color: var(--accent); padding: 4px 16px 10px;
   font-size: .85rem; display: flex; align-items: center; gap: 8px; }
 .sb-brand-mark { flex: 0 0 auto; border-radius: 6px; }
-.nv-group { font-size: .62rem; text-transform: uppercase; letter-spacing: .1em; color: var(--dim);
+.nv-group { font-size: 13px; text-transform: uppercase; letter-spacing: .1em; color: var(--dim);
   padding: 10px 16px 4px; }
 .nv-item { display: flex; align-items: center; gap: 9px; padding: 6px 14px; color: var(--muted);
   text-decoration: none; font-size: .85rem; border-left: 3px solid transparent; }
@@ -781,7 +794,7 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 .summary-bar .sb-gap { margin-left: 22px; }
 .summary-bar .sb-datetime.sb-right { margin-left: auto; }
 .summary-bar .sb-hl { color: var(--blue); font-weight: 700; }
-.sb-ver { padding: 14px 16px 4px; font-size: 11px; color: var(--dim); opacity: .75; }
+.sb-ver { padding: 14px 16px 4px; font-size: 13px; color: var(--dim); opacity: .75; }
 
 /* ══════════════════════════════════════════════════════════════════════════
    == Screen 03 — Strategies (Strategy Control Tower) ==
