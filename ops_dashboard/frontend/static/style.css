@@ -687,6 +687,16 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 .dash-page .cap-tbl td { padding: 9px 8px; border-bottom: 1px solid var(--border-soft); vertical-align: middle; }
 .dash-page .cap-tbl tr:last-child td { border-bottom: none; }
 .dash-page .cap-tbl .rt { text-align: right; }
+/* ⭐ HEADINGS ONLY, centred on Rama's instruction (19-Aug): USED · CAP · LEFT ·
+   USAGE % · STATUS. ⛔ SCOPED TO `thead th` ON PURPOSE — `.rt` is shared by the
+   header AND the data cells, so overriding `.rt` itself would have re-aligned
+   every number in the table. ⭐ MEASURED, and it explains the complaint: the
+   BODY figures were ALREADY centred while these headings were right/left
+   aligned, so the labels never sat over their own numbers. Centring the labels
+   makes the two agree. Body alignment, bars, values and column widths are
+   untouched — verified by stash-and-remeasure. `:first-child` (LIMIT) stays
+   left, as drawn. */
+.dash-page .cap-tbl thead th:not(:first-child) { text-align: center; }
 .dash-page .cap-lim { font-weight: 600; white-space: nowrap; }
 .dash-page .cap-new { margin-left: 6px; padding: 1px 5px; font-size: 13px; font-weight: 700;
   color: var(--blue); background: rgba(var(--t-blue), .14); border-radius: 4px; vertical-align: middle; }

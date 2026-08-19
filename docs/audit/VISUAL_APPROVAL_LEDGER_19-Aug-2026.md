@@ -14,7 +14,7 @@ PNG, ⛔ not source HTML, ⛔ not a description.
 | # | screen | browser shown | discussion | corrections | explicit approval | status |
 |---|---|---|---|---|---|---|
 | **S01** | Login | ✅ 22:0x IST · live `/login` @1920 + 1440 | ✅ | ✅ **1** — hero/card gap, then a 3.0% left nudge of the chip | ✅ **"Approved"** — 19-Aug-2026 **22:36 IST** | 🟢 **VISUALLY APPROVED** |
-| **S02** | Dashboard | ⏳ | — | — | — | ⏳ PENDING |
+| **S02** | Dashboard | ✅ live `/` @1920+1440 | ✅ | ✅ **1** — capacity-monitor headings centred | ✅ **"Approved"** — 19-Aug-2026 **23:0x IST** | 🟢 **VISUALLY APPROVED** |
 | **S03** | Strategies | ⏳ | — | — | — | ⏳ PENDING |
 | **S04** | Signals | ⏳ | — | — | — | ⏳ PENDING |
 | **S05** | Orders | ⏳ | — | — | — | ⏳ PENDING |
@@ -36,7 +36,7 @@ PNG, ⛔ not source HTML, ⛔ not a description.
 | **S21** | Scanner Attribution | ⏳ | — | — | — | ⏳ PENDING |
 | **S22** | Holdings | ⏳ | — | — | — | ⏳ PENDING |
 
-**APPROVED: 1 of 22.**
+**APPROVED: 2 of 22.**
 
 ---
 
@@ -99,3 +99,62 @@ authentication behaviour · login/dashboard routing · S01 numbering · dashboar
 `POST /login` on success redirects to `dashboard_page`; `/` renders `dashboard.html`;
 `login.html` extends nothing and loads no `style.css`; and S01's spec forbids a dashboard preview.
 ⛔ **Numbering unchanged; no duplicate screen invented.**
+
+
+---
+
+## S02 — DASHBOARD · APPROVED 19-Aug-2026 23:0x IST
+
+**Approval basis:** browser mode — the live application at **http://127.0.0.1:8599/**, viewport
+**1896 × 988** (page 1896 × 1212), re-verified at **1416 × 808**.
+
+**Rama's words:** *"Approved"* (after *"The highlighted column headings in the DAILY CAPACITY
+MONITOR must be CENTER-ALIGNED"*, illustrated on `Downloads/dashboard.jpg`).
+
+### CORRECTION APPLIED BEFORE APPROVAL — one CSS rule
+```css
+.dash-page .cap-tbl thead th:not(:first-child) { text-align: center; }
+```
+⭐ **Scoped to `thead th` deliberately:** `.rt` is shared by the header **and** the data cells, so
+overriding `.rt` itself would have re-aligned every number in the table.
+
+### ⭐ WHAT THE MEASUREMENT REVEALED — it explains the complaint
+**The body figures were ALREADY centred** while the headings were right-aligned (USED/CAP/LEFT/
+STATUS) or left-aligned (USAGE %) ⇒ the labels never sat over their own numbers. Centring the
+labels makes the two agree.
+
+| cell | heading before | heading after | body (untouched) |
+|---|---|---|---|
+| LIMIT | left | **left** | left |
+| USED / CAP / LEFT | right | **center** | center |
+| USAGE % | left | **center** | left (the % text sits beside its bar) |
+| STATUS | right | **center** | center |
+
+### VERIFIED
+**Column geometry identical to 0.1px** — `203/166.6 · 369.6/98.4 · 467.9/98.4 · 566.3/98.4 ·
+664.6/153.7 · 818.3/114.9`. 9 capacity rows, values and `usage-fill` bars unchanged.
+**Data-row alignment proved unchanged by STASH-AND-REMEASURE**, ⛔ not by assertion.
+No horizontal overflow at either viewport · 0 sub-13px text · no clipping/overlap/wrapping.
+Focused tests **107 passed**.
+
+### ACCEPTED DEVIATIONS — exact wording
+1. **Header carries three items the artwork does not** — **BROKER ID (`LFL836`)**, **CLIENT NAME
+   (`—`)**, **`poll 60s`**. The TXT says *"HEADER BAR — Keep compact… Do NOT clutter with
+   unnecessary information."* ⚠️ This strip is in `base.html` ⇒ **shared chrome on all 21 screens**.
+   ✅ **Accepted as rendered.**
+2. **An alert banner above the KPI deck** — `1 critical · 2 alert(s) today · latest: SL_HIT AAA
+   gap_fade_long`. Not in the artwork. ✅ **Accepted as rendered.**
+3. **Service Health renders ONE row** (`trading-system` / UNAVAIL) where the artwork shows six.
+   ⚠️ **QA fixture data, ⛔ not design** — so the panel's populated appearance was **not** fully
+   judged from this render. ✅ **Accepted on that basis.**
+4. **USAGE % heading is centred while its cell content stays left.** Reported at approval time.
+   ✅ **Accepted as rendered.**
+
+### 🔴 A CLAIM OF MINE CORRECTED AT THIS SCREEN
+The 22-screen package flagged *"Manual Exit is a 13th pipeline stage not in the spec's Preferred
+Flow — a deviation to judge."* **The ARTWORK draws Manual Exit.** The TXT list omits it, the PNG
+includes it, the build follows the PNG ⇒ ⛔ **not a deviation.** Corrected rather than left standing.
+
+### ⛔ CONFIRMED UNCHANGED
+header chrome · alert banner · service-health fixture · KPI cards · pipeline · Strategy Summary ·
+sidebar · fonts · colours · data · numbering · every other screen. **Diff = 1 CSS rule.**
