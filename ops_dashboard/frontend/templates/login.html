@@ -34,10 +34,16 @@
     }
 
     /* ── Left: hero pane (40-45%), matte charcoal + faint PCB grid, no animation ── */
+    /* ⭐ THE CHIP HUGS THE SPLIT LINE instead of centring in its own pane.
+       Each pane was centring its own content, so the hero's slack (188px) and the
+       card's slack (336px) met in the middle and became ONE 548px void at 1920 --
+       the band Rama boxed in red. Biasing both panes inward closes it.
+       ⛔ The 42% pane, its background, its overflow:hidden and the chip's own
+       min(64%, 420px) size are ALL unchanged. */
     .login-hero {
       flex: 0 0 42%;
       position: relative;
-      display: flex; align-items: center; justify-content: center;
+      display: flex; align-items: center; justify-content: flex-end;
       background:
         radial-gradient(ellipse at center, #0a0e16 0%, #05070c 70%),
         repeating-linear-gradient(0deg, rgba(88,166,255,.035) 0px, rgba(88,166,255,.035) 1px, transparent 1px, transparent 32px),
@@ -45,13 +51,24 @@
       overflow: hidden;
       isolation: isolate;
     }
-    .login-hero img { width: min(64%, 420px); height: auto; mix-blend-mode: lighten; }
+    /* ⛔ THE OFFSET IS A MARGIN ON THE IMAGE, ⛔ NOT PADDING ON THE PANE.
+       Padding shrinks the pane's CONTENT BOX, and the chip's width is a
+       PERCENTAGE of that box -- so the first attempt silently shrank the chip on
+       narrower screens (380.6px -> 335px at 1440, 316px -> 278px at 1200) while
+       leaving 1920 untouched, because the 420px cap was binding there and hid it.
+       A margin moves the chip without touching the box it measures itself
+       against, so min(64%, 420px) resolves exactly as it always did. */
+    .login-hero img {
+      width: min(64%, 420px); height: auto; mix-blend-mode: lighten;
+      margin-right: clamp(32px, 8vw, 160px);
+    }
 
     /* ── Right: card pane (55-60%) ── */
     .login-card-wrap {
       flex: 1 1 58%;
-      display: flex; align-items: center; justify-content: center;
+      display: flex; align-items: center; justify-content: flex-start;
       padding: 24px;
+      padding-left: clamp(32px, 5vw, 100px);
     }
     .card {
       width: 100%; max-width: 380px;
@@ -91,7 +108,9 @@
     /* ── Mobile: hide hero, card only, centered ── */
     @media (max-width: 780px) {
       .login-hero { display: none; }
-      .login-card-wrap { flex: 1 1 100%; }
+      /* ⛔ With the hero gone there is no split line to hug, so the card returns
+         to dead centre -- otherwise the inward bias above would pin it left. */
+      .login-card-wrap { flex: 1 1 100%; justify-content: center; padding-left: 24px; }
     }
   </style>
 </head>
