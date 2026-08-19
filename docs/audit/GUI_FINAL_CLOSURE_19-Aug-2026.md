@@ -1,87 +1,143 @@
-# GUI FINAL CLOSURE — FOUR QUEUES, D3 TIERS, AND THE APPROVAL CHECKLIST
-**19-Aug-2026 ~19:50 IST · HEAD `5dfbdbf` · tree CLEAN · 54 ahead / 5 behind**
-**PUSHED = NO · DEPLOYED = NO** · suite **1 failed / 2,045 passed**, known environmental
-`test_isolation::test_c_venv_has_no_kiteconnect` — ⛔ untouched.
-⛔ **No source changed in this pass.**
+# GUI FINAL CLOSURE — STATUS MODEL, FOUR QUEUES, D3 TIERS, APPROVAL CHECKLIST
+**19-Aug-2026 ~19:55 IST · tree CLEAN · PUSHED = NO · DEPLOYED = NO**
+Suite **1 failed / 2,045 passed** — sole failure the known environmental
+`test_isolation::test_c_venv_has_no_kiteconnect`, ⛔ **untouched** (⛔ the environment was ⛔ not
+modified to make it pass).
+⛔ **No source changed in this pass. Documentation only.**
 
 ## 🔑 STATEMENTS REQUIRED
 > ### **Authorized technical work remaining = 0.**
 > ### **Deferred monitored risk: S08 KPI internal overflow.**
 
-## 1 · FINAL GUI STATUS
-| | count | detail |
+---
+
+## 0 · THE STATUS MODEL — ⛔ "TECHNICALLY COMPLETE" IS ⛔ NOT "PROJECT COMPLETE"
+⭐ **The word CLOSED was carrying two meanings. It now carries one, and the other has its own
+word.** ⛔ **"22/22 closed" must NEVER be written without "technically".**
+
+| dimension | figure | meaning |
 |---|---|---|
-| **Technically closed** (code · tests · browser all complete) | **22 of 22** | ⭐ incl. **S14** `8f78c67` and **S17** `b14dea3`, the only two ever genuinely BLOCKED |
-| **Awaiting visual approval** | **20** | ⛔ **0 screens CLOSED** — approval is Rama's, ⛔ never assumed |
-| **Business / spec decisions open** | **6** | Queue B |
-| **Deferred / monitored risks** | **3** | Queue D |
-📌 **S01 and S22 are not in the 20** — S01 needs first approval but is ⛔ **outside Q2's radius**;
-it is listed in Queue A separately. *(20 = the Q2-affected campaign screens + those changed
-today; S01 is the 21st line and is marked independent.)*
+| **IMPLEMENTATION** | **22 / 22 technically complete** | code · tests · browser QA all done |
+| **FINAL CLOSURE** | **0 / 22 finally closed** | ⛔ visual approval has ⛔ **not** been granted |
+| **AUTHORIZED TECHNICAL WORK** | **0 remaining** | Queue C is empty |
+| **VISUAL APPROVAL** | **22 awaiting Rama** | see the correction in §2 |
+| **BUSINESS / SPEC DECISIONS** | **6 groups open** | Queue B |
+| **MONITORED RISKS** | **3** | Queue D — ⛔ **NOT "remaining technical work"** |
 
 ---
 
-## 2 · THE FOUR QUEUES
+## 1 · IMPLEMENTATION — 22 / 22 TECHNICALLY COMPLETE
+⭐ Includes the only two screens ever genuinely BLOCKED:
+- ✅ **S14 Trade Logs — TECHNICALLY CLOSED** (`8f78c67`): `.tlg-row4` bare-`fr` → `minmax(0,…)`,
+  **8 widths verified clean**, the former 1440 page overflow **eliminated**, internal table
+  scrolling **preserved**, rail/main relationship **preserved**. ⛔ No breakpoint, ⛔ no
+  `main.content` rule, ⛔ no global overflow workaround. Both disproved hypotheses are **pinned
+  by tests** so they cannot return.
+- ✅ **S17 Controls — TECHNICALLY FIXED** (`b14dea3`): D2-B + D2-C completed, **10 viewport
+  checks clean**, seven-screen KPI regression clean.
 
-### QUEUE A — VISUAL APPROVAL REQUIRED
-⛔ **None may be marked closed without Rama's visual confirmation.**
+---
 
-| category | screens |
+## 2 · QUEUE A — VISUAL APPROVAL
+⛔ **No screen may be marked CLOSED without Rama's visual confirmation.**
+
+### 🔴 A COUNT CORRECTION, MEASURED — ⛔ THE FIGURE IS **22**, ⛔ NOT 20
+📌 **Stated plainly, because a wrong denominator under-reports what is owed.** The 19:45
+directive gives *"20 screens total"* and then enumerates **21** (5 + 5 + 11), with **S08 absent
+from every group**. Neither figure survives measurement:
+
+| check | result |
 |---|---|
-| **First approval** | **S01** ⭐ *(pre-auth · standalone `login.html` · never loads `style.css` · ⛔ **independent of Q2**)* · S04 · S05 · S06 · S07 |
-| **Re-approval — changed today** | **S03** *(Q3 columns)* · **S09** *(axis labels)* · **S12** *(collision fix)* · **S14** *(overflow)* · **S17** *(4px + KPI ramp)* |
-| **Re-approval — Q2 chrome strip only** | S02 · S10 · S11 · S13 · S15 · S16 · S18 · S19 · S20 · S21 · S22 |
+| rows in the authoritative approval matrix marked **⏳ awaiting** | **22 of 22** |
+| rows marked **visually approved** | **0** |
+| ⇒ screens that could account for a *"remaining 2"* | ⛔ **none exist** |
+| screens inside Q2's radius (`extends "base.html"`) | **21** — measured; **includes S08** `capital_risk.html` and **S22** `holdings.html` |
+| screens outside it | **1** — **S01** `login.html`, ⛔ never extends `base.html`, ⛔ never loads `style.css` |
 
-### QUEUE B — BUSINESS / SPECIFICATION DECISIONS · **6 open**
-🔴 **A NAMING COLLISION IS RESOLVED HERE, ⛔ NOT PAPERED OVER — there are TWO items called
-"D1", and they are unrelated:**
+⇒ 🔑 **The 20 / 21 gap is an enumeration slip — S08 dropped, and the stated count one lower than
+its own list — ⛔ NOT two screens that were quietly approved.** ⛔ **No "2 closed" figure is
+manufactured here:** the authoritative register identifies **zero** screens as visually approved.
+**6 + 5 + 11 = 22**, every screen appearing exactly once, S01–S22 fully covered.
 
-| | item | status |
+| group | n | screens |
 |---|---|---|
-| — | **PLACEMENT D1** — SL/TGT/ROI main-table placement (A/B/C) | ✅ **CLOSED — ACCEPTED = A.** ⛔ Never listed as unresolved |
-| **B-1** | **D3 — the remaining 63 sub-13px rules** | 🔴 OPEN — rule **per tier**, ⛔ no blanket conversion |
-| **B-2** | **Decorative-glyph exemption** | 🔴 OPEN — every `.txt` sets a 13px minimum; the closure pass exempted grips/sort-arrows and ⛔ **that exemption was never ruled on** |
-| **B-3** | **S07 RR Damage %** | 🔴 OPEN — `rr_damage_pct` lives in `trade_slippage_log`, a table Trade Explorer does not read; plus a prior ruling that R-multiple is never printed in an R:R column |
-| **B-4** | **Rejection taxonomy (Screen 02 funnel)** | 🔴 OPEN — `_RISK_REJECT_STATUSES` (10) / `_CAPITAL_REJECT_STATUSES` (3), frozen tuples pinned by test |
-| **B-5** | **S03 EXPORT (F1/Q3)** | 🔴 OPEN — disabled stub; blocked on the **Q3 copy-protection acceptance** ruling, ⭐ a data-egress question, ⛔ not a UI one |
-| **B-6** | **S03 CAPITAL SEMANTICS** — ⚠️ *historically labelled "S03 D1/D2"; ⛔ **NOT** the placement D1* | 🔴 OPEN — no per-strategy cap exists; backend declares `allocation_configured: None`, `allocation_basis: "global bucket"`; UI derives `alloc = used + remaining` |
+| **1 · FIRST APPROVAL** | **6** | **S01** ⭐ *(pre-auth · standalone `login.html` · ⛔ **independent of Q2** · ⚠️ never browser-tested)* · S04 · S05 · S06 · S07 · **S08** |
+| **2 · RE-APPROVAL — CHANGED TODAY** | **5** | **S03** *(Q3 columns)* · **S09** *(axis labels)* · **S12** *(collision fix)* · **S14** *(overflow)* · **S17** *(4px + KPI ramp)* |
+| **3 · RE-APPROVAL — Q2 SHARED-CHROME STRIP** | **11** | S02 · S10 · S11 · S13 · S15 · S16 · S18 · S19 · S20 · S21 · S22 |
 
-### QUEUE C — AUTHORIZED TECHNICAL WORK · **EMPTY**
-> **Authorized technical work remaining = 0.**
-
-⭐ **S14 = technically closed. S17 = technically fixed.** ⛔ No other technical item is
-authorized. ⛔ **C-1 is NOT manufactured into work** — it is reclassified into Queue D, exactly
-because *"remaining technical work"* must mean **authorised/required** work, ⛔ not every latent
-edge case QA turns up.
-
-### QUEUE D — DEFERRED / MONITORED RISKS · **3** ⛔ none authorised for implementation
-| | risk | evidence | why deferred |
-|---|---|---|---|
-| **D-1** | **S08 KPI internal overflow** 🟡 | `₹100000.00` at 27.2px ≈ 159px in a **150px** value box @1440 ⇒ `over 9`. Fits at 1920 (card 245.7). **Page overflow 0 at both.** Pre-existing — stash-and-remeasure proved it, ⛔ not caused by D2-C | ⭐ **fixture-sensitive**: today's real capital **₹10,622.70** is one character shorter and **fits**. ⛔ **Not confirmed in live data.** Bites only at six-figure capital |
-| **D-2** | **104 latent bare-`fr` declarations** | 105 found; **1 was symptomatic (`.tlg-row4`, fixed)**. Sweep of all 21 screens @1440: **0 grids at or over their content floor** | ⛔ **NOT proof future data can never trigger them** — S14's own was invisible until its data grew. ⛔ **No mass refactor.** ⭐ The durable output is the **predicate**, ⛔ not a patch list |
-| **D-3** | **`main.content` guard absent on S08 · S13 · S14 · S15** | `main.content` measures **1236px on all six screens tested**, constrained and unconstrained alike | ⭐ Re-measured and **narrowed**: the `:has()` rule is a **safety net, ⛔ not the sizing mechanism**; inert until content pushes against it. S14's cause was fixed at source instead |
-
-⭐ **THE BARE-`fr` PREDICATE — recorded as a future capability, ⛔ not a task:**
-`display: grid` **+** `overflow-x: visible` **+** `scrollWidth > clientWidth`, asserted **zero**.
-⛔ **Layout-assurance Option A/B is NOT implemented and is not proposed here.**
+⭐ **Q2 RE-QA STAYS TARGETED — measured, ⛔ not assumed:** all five raised classes occur in
+**`base.html` and nowhere else** (18 occurrences there; **0** across the other 29 templates) ⇒
+the changed surface is the **sidebar + top status strip**, identical on all 21. ⇒ check **that
+strip plus a page-overflow glance at the required viewport**, ⛔ **not** a full re-audit of
+unchanged page bodies.
 
 ---
 
-## 3 · D3 DECISION-READY TIERS
+## 3 · QUEUE B — BUSINESS / SPECIFICATION DECISIONS · **6 open** ⛔ no code until ruled
+
+### 🔑 THE S03 NAMING SEPARATION — ⛔ TWO UNRELATED THINGS ARE BOTH CALLED "D1"
+| item | status |
+|---|---|
+| **S03 PLACEMENT DECISION (placement D1)** — SL / TGT / ROI main-table placement, options A/B/C | ✅ **CLOSED — ACCEPTED = A.** Current main-table placement accepted. ⛔ It was **never** an unresolved item |
+| **S03 CAPITAL SEMANTICS** — *historically shorthanded "S03 D1/D2"* | 🔴 **OPEN** — the Allocated / Used / Remaining derivation and the per-strategy allocation-cap question |
+⛔ **The two must never be merged under one label again**: the shorthand can make a resolved item
+look open, or an open item look resolved.
+
+| | group | what is owed | ⛔ prohibition standing tonight |
+|---|---|---|---|
+| **B1** | **D3 TYPOGRAPHY — the 63 remaining sub-13px rules** | a **risk-based ruling per tier** — see §6 | ⛔ do **NOT** raise all 63 automatically |
+| **B2** | **DECORATIVE-GLYPH EXEMPTION** | an explicit ruling; ⭐ kept **separate** from the 63-rule classification | ⛔ do **not silently broaden** it — the existing exemption concerns **page-scoped grips / sort-arrows** (`.aud-grip`, `.exec-grip`, `.st-arw`) and does ⛔ **not** mean every sub-13px glyph is automatically exempt |
+| **B3** | **S07 RR DAMAGE %** | a ruling. `rr_damage_pct` lives in `trade_slippage_log`, a table Trade Explorer does not read; plus a prior ruling that R-multiple is never printed in an R:R column | ⛔ do not add or change the field without explicit ruling |
+| **B4** | **REJECTION TAXONOMY (Screen 02 funnel)** | a ruling. `_RISK_REJECT_STATUSES` (10) / `_CAPITAL_REJECT_STATUSES` (3) are frozen tuples pinned by test | ⛔ do not alter shared rejection status semantics |
+| **B5** | **S03 CAPITAL SEMANTICS** | a ruling on Allocated / Used / Remaining and the per-strategy cap. Backend declares `allocation_configured: None`, `allocation_basis: "global bucket"`; the UI derives `alloc = used + remaining` | ⛔ do not implement per-strategy allocation caps, ⛔ do not alter capital derivation |
+| **B6** | **S03 EXPORT (F1 / Q3)** | the **Q3 copy-protection acceptance** ruling — ⭐ a **data-egress** question, ⛔ not a UI one. Currently a disabled stub | ⛔ do not enable XLSX / export functionality without explicit authorization |
+
+---
+
+## 4 · QUEUE C — AUTHORIZED TECHNICAL WORK · **EMPTY**
+> ### **Authorized technical work remaining = 0.**
+
+⭐ **S14 and S17 are resolved. ⛔ No authorized code item remains.**
+⛔ **Technical work is NOT manufactured simply because QA discovered a latent edge case.** The
+S08 finding is **reclassified into Queue D**, precisely because *"remaining technical work"* must
+mean **authorised / required** work — ⛔ not every latent edge case a sweep turns up.
+
+---
+
+## 5 · QUEUE D — DEFERRED / MONITORED RISKS · **3**
+⚠️🔑 **READ THESE AS RISK-1 / RISK-2 / RISK-3.** They are numbered D1 / D2 / D3 to match the
+directive, but ⛔ **they are NOT the decision D1 / D2 / D3** (placement D1 · D2-A/B/C · D3
+typography). ⭐ **A third label collision is flagged here rather than left to be discovered.**
+⛔ **QUEUE D IS NOT "REMAINING TECHNICAL WORK". ⛔ None of it is authorised for implementation.**
+
+| | risk | evidence | classification |
+|---|---|---|---|
+| **D1** *(risk-1)* | **S08 KPI INTERNAL OVERFLOW** 🟡 | Observed **only** with the QA/fixture value **`₹100000.00`** at 1440: 27.2px ≈ 159px inside a **150px** value box ⇒ **~9px** internal KPI overflow. **Page-level overflow = 0.** **Fits at 1920** (card 245.7). ⭐ The current reported live capital **₹10,622.70** is one character shorter and **fits**. **Pre-existing** — proved by stash-and-remeasure, ⛔ **not** caused by D2-C | **DEFERRED / MONITORED RISK.** ⛔ **NOT a current GUI closure blocker.** ⛔ **Do NOT fix it now.** ⛔ Not confirmed live; it bites only once capital reaches six figures |
+| **D2** *(risk-2)* | **104 LATENT BARE-`fr` DECLARATIONS** | The sweep found **105** in total (62 explicit, 43 `repeat(n, 1fr)`). **1 was symptomatic — `.tlg-row4`, now fixed.** Across all 21 authenticated screens @1440: **0 grids at or over their content floor**, **0 pages overflowing** | ⛔ **Do NOT mass-refactor them.** ⚠️ Fixture-bound: S14's own defect was invisible until its data grew ⇒ *"no grid at its floor today"* is ⛔ not *"no grid ever will be"* |
+| **D3** *(risk-3)* | **`main.content` GUARD ABSENT on S08 · S13 · S14 · S15** | **The earlier hypothesis was narrowed by measurement:** `main.content` reads **1236px on all six screens tested**, constrained and unconstrained alike ⇒ the `:has()` rule is a **safety net, ⛔ not the sizing mechanism**. S14's actual cause was `.tlg-row4` intrinsic-width expansion and is **already fixed at source** | ⛔ **Do NOT add a global / `main.content` safety rule merely because it appears useful.** ⛔ **Do NOT reopen S08 / S13 / S15 opportunistically** |
+
+⭐ **THE DURABLE OUTPUT OF D2 IS THE MEASURABLE DETECTOR, ⛔ NOT A PATCH LIST:**
+`display: grid` **+** `overflow-x: visible` **+** `scrollWidth > clientWidth`, asserted **zero**.
+📌 It belongs to future **layout-assurance Option A/B**, which ⛔ **remains unauthorized** and is
+⛔ **not proposed here**. ⭐ It would have caught S14 instantly.
+
+---
+
+## 6 · B1 / D3 — DECISION-READY TIER TABLE
 ⛔ **Not every `<13px` rule violates the visual requirement**, so each class carries a **KIND**:
 **TEXT** = functional readable text · **COMPACT** = dense data/meta · **GLYPH** = decorative.
 **Measured across the 63: 44 TEXT · 18 COMPACT · 1 GLYPH.**
-📌 ⭐ The closure pass's glyph exemption covers **page-scoped** grips and sort-arrows
-(`.aud-grip`, `.exec-grip`, `.st-arw`) — ⛔ those are **not in this 63 at all**, which is why only
-one GLYPH appears here.
+📌 ⭐ The closure pass's glyph exemption covers **page-scoped** grips and sort-arrows — ⛔ those
+are **not in this 63 at all**, which is why only one GLYPH appears here. ⇒ **B2 remains a
+separate ruling** and is ⛔ not answered by this table.
 
-| tier | n | reach | ARTWORK REQUIREMENT | RISK IF RAISED | RECOMMENDATION *(⛔ not a decision)* |
-|---|---|---|---|---|---|
-| **① BASE** | **4** | **ALL 21** | `.txt` 13px minimum applies — all readable | ⚠️ re-opens **21** screens; ⭐ **same radius Q2 already paid** | ⭐ **cheapest genuine win** — could ride Q2's re-approval. `.btn-logout` 12.48 is readable text on every screen |
-| **② MACRO** | **20** | via `components.html` — `.mono` **15 scr**, `.rt-btn` 9, `.events` 8 | mixed: mostly COMPACT data + controls | 🔴 **HIGHEST** — changes control and monospace density everywhere | ⛔ **do NOT raise wholesale**; if any, take `.rt-btn`/`.btn-export` (controls) and leave `.mono` (dense data) |
-| **③ MULTI** | **6** | `.cap-table` **13 scr**, `.panel-sub` **13** | table density is drawn tight in every artwork | 🔴 **HIGH** — `.cap-table` governs row height on 13 screens; raising it changes rows-per-screen | ⛔ **highest-regret group.** Defer unless a specific screen is illegible |
-| **④ SINGLE** | **5** | 1 screen each (S08 ×3, S20, S17) | per-screen | 🟢 **LOW** — one screen re-approval each | ⭐ **safe to raise individually** if any is judged illegible |
-| **⑤ NO REACH** | **28** | legacy routes or nothing | outside the 01–22 campaign | 🟢 **~NONE on campaign screens** | ⭐ **cheapest to raise, least value.** ⛔ Search width stated: token grep only; **8 of 28 checked** |
+| tier | n | KIND mix | screen reach | ARTWORK REQUIREMENT | RISK IF RAISED | RECOMMENDATION *(⛔ not a decision)* |
+|---|---|---|---|---|---|---|
+| **① BASE** | **4** | TEXT 4 | **ALL 21** | `.txt` 13px minimum applies — all four are readable text | ⚠️ re-opens **21** screens; ⭐ **the same radius Q2 has already paid** | ⭐ **cheapest genuine win** — could ride Q2's re-approval. `.btn-logout` 12.48px is readable text on every screen |
+| **② MACRO** | **20** | TEXT 11 · COMPACT 9 | via `components.html` — `.mono` **15 scr**, `.rt-btn` **9**, `.events` **8** | mixed: mostly COMPACT data + controls | 🔴 **HIGHEST** — changes control and monospace density everywhere at once | ⛔ **do NOT raise wholesale.** If any, take `.rt-btn` / `.btn-export` (controls) and leave `.mono` (dense data) |
+| **③ MULTI** | **6** | TEXT 4 · COMPACT 2 | `.cap-table` **13 scr** · `.panel-sub` **13 scr** | table density is drawn tight in every artwork | 🔴 **HIGH** — `.cap-table` governs row height on **13 screens**; raising it changes rows-per-screen | ⛔ **highest-regret group.** Defer unless a specific screen is judged illegible |
+| **④ SINGLE** | **5** | TEXT 4 · COMPACT 1 | 1 screen each (S08 ×3 · S20 · S17) | per-screen | 🟢 **LOW** — one screen re-approval each | ⭐ **safe to raise individually** if any is judged illegible |
+| **⑤ NO REACH** | **28** | TEXT 21 · COMPACT 6 · GLYPH 1 | legacy routes or nothing | outside the 01–22 campaign | 🟢 **~NONE on campaign screens** | ⭐ **cheapest to raise, least value.** ⛔ **Search width stated:** token grep only; **8 of 28** individually checked |
 
 ### D3 — THE 63 CLASSIFIED (px · reach · kind)
 
@@ -175,49 +231,84 @@ one GLYPH appears here.
 
 ---
 
-## 4 · VISUAL APPROVAL CHECKLIST
-⛔ **Not "all okay?" — each row names the ONE area that changed and the check that would catch a
-regression there.** ⭐ The **old artwork in `D:/Projects/trading-system/gui` remains binding**
-except where Rama explicitly chose the written spec over it (Q3 on S03).
-📌 **Every row also carries the standing checks** — colours/fonts/cosmetics unchanged · table
-alignment · headings and drag placement · charts/donuts where present · live-update areas ·
-screen-space utilisation · no page overflow · no clipping or overlap.
 
-### 4a · CHANGED TODAY — ⭐ look here first
+---
+
+## 7 · FINAL PROJECT COMPLETION — WHAT IS STILL REQUIRED
+⛔ **"Technically complete" is ⛔ NOT "project complete".** All seven must land, in order:
+
+| | prerequisite | state |
+|---|---|---|
+| **1** | **Rama's visual approval** of every screen still pending | 🔴 **22 pending** — §8 |
+| **2** | **Resolution of the six business / spec decision groups** required for the final specification | 🔴 **6 open** — §3 |
+| **3** | **Final 01–22 regression confirmation** *after* all approved changes | ⏳ not yet — nothing approved yet |
+| **4** | **Clean working tree** | ✅ CLEAN |
+| **5** | **Local commits + unpushed ledger updated** | ✅ this pass included |
+| **6** | **Deployment gate / `gui-dashboard.service` verification** — ⛔ **only after Rama's explicit final authorization** | ⛔ not started, ⛔ not authorized |
+| **7** | **Push / deployment** — ⛔ only when explicitly authorized | ⛔ **PUSHED = NO · DEPLOYED = NO** |
+
+---
+
+## 8 · VISUAL APPROVAL CHECKLIST
+⛔ **Not "approve all 22".** Each row below names the **ONE area that changed** and the check
+that would catch a regression there. Compare every pending screen against its old design in
+**`D:\Projects\trading-system\gui\<NN. Name>.png` + `.txt`**.
+
+### 8·0 · THE STANDING COMPARISON — applies to every screen below
+| # | verify | # | verify |
+|---|---|---|---|
+| 1 | same **colours** | 8 | **pie / donut charts** present and correct |
+| 2 | same **fonts** | 9 | **graph charts** present and correct |
+| 3 | same **headings** | 10 | **real-time dashboard data areas** live and populating |
+| 4 | **table alignment** | 11 | **screen-space utilisation** |
+| 5 | **strategy — ⛔ NOT scanner — as the operational entity** | 12 | **no page overflow** |
+| 6 | **drag / move placement** | 13 | **no clipping** · **no unintended wrapping** |
+| 7 | **populated-data appearance** | 14 | matches the artwork *unless* the written **TXT / spec explicitly overrides it** |
+⚠️ **Where written TXT/spec explicitly overrides artwork, the written spec governs** (this is how
+**Q3** was ruled on S03). ⛔ **Neither source may be silently reinterpreted.**
+
+### 8a · GROUP 2 — RE-APPROVAL, CHANGED TODAY ⭐ *look here first*
 | Screen | Key changed area | Required visual check | Status |
 |---|---|---|---|
-| **S03** Strategies | **4 new main-table columns**: Trading Type (col 2) + SL Hit · TGT Hit · ROI % | Trading Type reads Intraday/Delivery/`—` and sits **immediately after Strategy** · **Scanner still absent** · ROI shows **`—` not `0%`** where null · row alignment unchanged (labels left, numerics right) · table still fits, no page scroll | ⏳ |
+| **S03** Strategies | **4 new main-table columns**: Trading Type (col 2) + SL Hit · TGT Hit · ROI % | Trading Type reads Intraday/Delivery/`—` and sits **immediately after Strategy** · **Scanner still absent** (point 5) · ROI shows **`—` not `0%`** where null · row alignment unchanged (labels left, numerics right) · table still fits, no page scroll | ⏳ |
 | **S09** P&L Analytics | **Equity-curve axis labels (new)** | ₹ scale down the left, session timeline underneath · labels **clear of the plot**, none clipped at the panel edge · curve shape unchanged · **compare against `09. PnL_Analytics.png`** | ⏳ |
-| **S12** System Health | **Health-trend x-axis** (Disk tab) | click **Disk** — the chart's **last two time labels no longer overlap** · y-axis values still present · CPU/RAM/Response still read **NOT INSTRUMENTED** (correct, not a bug) | ⏳ |
+| **S12** System Health | **Health-trend x-axis** (Disk tab) | click **Disk** — the chart's **last two time labels no longer overlap** · y-axis values still present · CPU/RAM/Response still read **NOT INSTRUMENTED** (correct, ⛔ not a bug) | ⏳ |
 | **S14** Trade Logs | **Bottom row-4 panels** (`.tlg-errs` / `.tlg-export`) | **no sideways page scroll at 1440** · the **rail stays beside** the main table · Recent-Errors and Export panels now sit in their **intended 1.6 : 0.8 proportion** (Export was previously squashed) · event table still scrolls **inside** its own region | ⏳ |
 | **S17** Controls | **Control-History rail rows + KPI values** | no sideways page scroll at any width · **Control History** action text wraps rather than spilling out of the rail · **`Last Control Change`** value wraps inside its card ⚠️ *(it renders a **raw ISO timestamp** — see note)* | ⏳ |
 
 ⚠️ **S17 note, so it is judged rather than discovered:** `Last Control Change` displays the raw
-`2026-08-19T17:05:00+05:30`. The overflow is fixed, but **the value is unformatted** — the real
-remedy is to format it, which is a **template** change outside D2-C's authorised CSS-only shape.
-⛔ Reported, ⛔ not fixed.
+`2026-08-19T17:05:00+05:30`. The **overflow is fixed**, but **the value is unformatted** — the
+real remedy is to format it, which is a **template** change outside D2-C's authorised CSS-only
+shape. ⛔ Reported, ⛔ not fixed.
 
-### 4b · Q2 CHROME STRIP ONLY — ⭐ one identical check, eleven screens
-| Screen | Key changed area | Required visual check | Status |
+### 8b · GROUP 3 — RE-APPROVAL, Q2 CHROME STRIP ONLY ⭐ *one identical check, eleven screens*
+| Screens | Key changed area | Required visual check | Status |
 |---|---|---|---|
-| S02 · S10 · S11 · S13 · S15 · S16 · S18 · S19 · S20 · S21 · S22 | **Sidebar + top status strip only** (`base.html`) | **TRADING/ANALYTICS/OPERATIONS/INVESTIGATION** nav headings · **TRADER/MODE/KILL/PHASE** labels · the status **pills** · **"poll 5s"** · **"version 2.0.0"** — all now **13px**; check they still fit their strip, wrap nowhere, and have not pushed the page | ⏳ |
+| S02 · S10 · S11 · S13 · S15 · S16 · S18 · S19 · S20 · S21 · S22 | **Sidebar + top status strip only** (`base.html`) | **TRADING / ANALYTICS / OPERATIONS / INVESTIGATION** nav headings · **TRADER / MODE / KILL / PHASE** labels · the status **pills** · **"poll 5s"** · **"version 2.0.0"** — all now **13px**; check they still fit their strip, wrap nowhere, and have not pushed the page | ⏳ |
 📌 ⭐ **The page bodies of these eleven did NOT change** — ⛔ a full re-audit is not required, only
-the strip plus a page-overflow glance.
+the strip plus a page-overflow glance at the required viewport.
 
-### 4c · FIRST APPROVAL — ⭐ never approved before
+### 8c · GROUP 1 — FIRST APPROVAL ⭐ *never approved before*
 | Screen | Key changed area | Required visual check | Status |
 |---|---|---|---|
 | **S01** Login | ⛔ **NOTHING changed** — standalone `login.html`, own inline `<style>`, **never loads `style.css`** | Full first-approval pass against `01. Login-Screen.png`. ⛔ **Independent of Q2** · ⚠️ **never browser-tested** (pre-auth; the QA harness force-authenticates) | ⏳ |
-| **S04** Signals | Q2 strip only | full first-approval pass vs `04. Signals.png` + strip | ⏳ |
+| **S04** Signals | Q2 strip only | full first-approval pass vs `04. Signals.png` + the strip | ⏳ |
 | **S05** Orders | Q2 strip only | full first-approval pass vs `05. Orders.png` — ⭐ incl. the **two donuts** restored in the closure pass | ⏳ |
 | **S06** Positions | Q2 strip only | full first-approval pass vs `06. Positions.png` | ⏳ |
-| **S07** Trade Explorer | Q2 strip only | full first-approval pass vs `07. Trade_Explorer.png` — ⚠️ **RR Damage % is deliberately absent** (B-3) | ⏳ |
-| **S08** Capital & Risk | Q2 strip only | full first-approval pass vs `08. Capital_Risk.png` — ⭐ incl. the **gauge + top-consumer bars** restored in the closure pass · ⚠️ **note D-1**: at 1440 `Opening Cash` / `Total Real Cash` can overrun their card by ~9px with six-figure values | ⏳ |
+| **S07** Trade Explorer | Q2 strip only | full first-approval pass vs `07. Trade_Explorer.png` — ⚠️ **RR Damage % is deliberately absent** (B3) | ⏳ |
+| **S08** Capital & Risk | Q2 strip only | full first-approval pass vs `08. Capital_Risk.png` — ⭐ incl. the **gauge + top-consumer bars** restored in the closure pass · ⚠️ **note Queue D risk-1**: at 1440 `Opening Cash` / `Total Real Cash` can overrun their card by ~9px with six-figure values | ⏳ |
 
 ---
 
-## 5 · WHAT IS **NOT** BEING DONE
-⛔ No source change · ⛔ no S08 fix · ⛔ no D3 typography change · ⛔ no layout-assurance harness ·
-⛔ no mass bare-`fr` refactor · ⛔ no visual redesign · ⛔ no push · ⛔ no deploy · ⛔ S14 not
-reopened (`main.content`, breakpoint, `.tlg-row4`, rail, table widths, global overflow — all
-untouched) · ⛔ no unrelated screen reopened because a different screen was fixed.
+## 9 · WHAT IS **NOT** BEING DONE
+⛔ No source change · ⛔ **no S08 fix** · ⛔ no change to the **104 latent bare-`fr`** declarations ·
+⛔ **no D3 implementation** · ⛔ no alteration of **glyph exemptions** · ⛔ no **S07 RR Damage %** ·
+⛔ no change to the **rejection taxonomy** · ⛔ no change to **S03 capital semantics** · ⛔ **S03
+export not enabled** · ⛔ **no push** · ⛔ **no deploy** · ⛔ no layout-assurance harness · ⛔ no
+visual redesign · ⛔ **S14 not reopened** (`main.content`, breakpoint, `.tlg-row4`, rail, table
+widths, global overflow — all untouched) · ⛔ no unrelated screen reopened because a different
+screen was fixed · ⛔ **the environment was NOT modified to eliminate the known
+`test_c_venv_has_no_kiteconnect` failure** · ⛔ no prior implementation commit amended.
+📌 **Live trading is active** — this pass touched ⛔ no live order, ⛔ no position, ⛔ no broker
+state, ⛔ no production DB, ⛔ no production configuration, ⛔ no trading process. QA data is
+isolated; VM evidence is read-only.
