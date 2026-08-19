@@ -423,9 +423,27 @@ class TestPendingItemsRemainPending:
 
 
     def test_capital_arithmetic_is_untouched(self):
-        """⏸️ D1/D2 PENDING. The Allocated/Used/Remaining derivation must not move
-        until the per-strategy-allocation question is ruled — and the backend
-        must keep DECLARING that no per-strategy cap exists.
+        """✅ B5 RULED 19-Aug-2026 — VALIDATED, ⛔ NO CODE CHANGE. (Formerly the
+        "D1/D2 PENDING" guard. ⛔ This is the CAPITAL item, ⛔ not the already-closed
+        PLACEMENT D1.)
+
+        The derivation was checked end to end and is internally consistent:
+            capital_used      = the strategy's own open margin
+            capital_remaining = bucket_limit − that same margin
+            bucket_limit      = intraday_bucket_pct x opening   (GLOBAL)
+        ⇒ the screen's `used + remaining` resolves to the global intraday bucket,
+        which is exactly what `allocation_basis: "global bucket"` declares. No
+        per-strategy cap is configured, and the spec does not require one, so
+        nothing is implemented.
+
+        ⚠️ RECORDED, ⛔ not fixed: each row subtracts only ITS OWN margin from the
+        SHARED bucket, so Remaining is honest PER ROW but is ⛔ NOT ADDITIVE across
+        rows — two strategies can each show headroom that is the same rupees. That
+        is a property of the declared basis, ⛔ not an inconsistency in it, and it
+        is why the basis is declared rather than assumed.
+
+        The guard STAYS, and is now deliberate rather than provisional: it fails
+        if the derivation moves or if a per-strategy cap appears without a ruling.
         """
         code = _tpl_code()
         assert "const alloc = (rem === null) ? null : (used + rem);" in code, (
@@ -433,6 +451,13 @@ class TestPendingItemsRemainPending:
         src = inspect.getsource(strategy_tower.build_strategy_tower)
         assert '"allocation_configured": None' in src
         assert '"allocation_basis": "global bucket"' in src
+        # ⛔ The bucket must stay GLOBAL. If a per-strategy key ever feeds
+        #    `bucket_limit`, the declared basis becomes a false statement --
+        #    so fail here rather than let the label and the arithmetic diverge.
+        assert 'cap_cfg.get("intraday_bucket_pct")' in src, (
+            "bucket_limit no longer comes from the global intraday bucket")
+        assert "per_strategy" not in src, (
+            "a per-strategy allocation key appeared without a ruling")
 
     def test_the_trading_type_column_exists_and_sits_where_the_spec_puts_it(self):
         """✅ F3 RULED 19-Aug-2026 (Rama Q3 = the TXT wins over the artwork).
