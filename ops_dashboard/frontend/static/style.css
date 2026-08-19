@@ -919,7 +919,14 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 .slg-page .btn-primary:hover { filter: brightness(1.08); }
 
 /* Strategy hierarchy */
-.strat-page .hier-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+/* ⛔ THE 240px FLOOR WAS SIZED FOR THE FIXTURE'S SHORT NAMES. With the real
+   sixteen strategies the longest family, `positional_sector_rotation`, needs a
+   260px CONTENT box — measured, ⛔ not estimated — and at 1280 / 1600 / 2560 the
+   auto-fill packing left only 244-257px, so the name spilled its card
+   (`overflow-x: visible`, so it would have been VISIBLE spill, not a clip).
+   ⭐ Raising the FLOOR keeps the identical card treatment and the design's own
+   wrap behaviour; ⛔ nothing is shrunk and no font is touched. */
+.strat-page .hier-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(292px, 1fr)); gap: 12px; }
 .strat-page .hier-card { display: flex; align-items: center; justify-content: space-between; gap: 10px;
   padding: 14px 16px; background: var(--card); border: 1px solid var(--card-bd); border-radius: 10px; min-height: 62px; }
 .strat-page .hier-name { font-size: 14px; font-weight: 700; color: var(--text); }
@@ -941,6 +948,28 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 .strat-page .st-tbl th.rt { text-align: right; }
 .strat-page .st-tbl th:hover { color: var(--muted); }
 .strat-page .st-arw { margin-left: 3px; color: var(--blue); }
+/* ── Screen-03 drag-to-reorder, 19-Aug — the SAME treatment approved on
+   Screen 04, ⛔ not a new visual concept. The grip is invisible until the
+   heading is hovered, so the header row stays exactly as drawn. */
+.strat-page .st-grip { display: inline-block; width: 0; overflow: hidden; opacity: 0;
+  color: var(--dim); font-size: 10px; vertical-align: 1px;
+  transition: width .12s ease, opacity .12s ease; }
+.strat-page .st-tbl th:hover .st-grip { width: 11px; opacity: .8; }
+.strat-page .st-tbl th.is-drag { opacity: .45; }
+.strat-page .st-tbl th.is-over { box-shadow: inset 2px 0 0 var(--blue); color: var(--muted); }
+.strat-page .st-tbl th { cursor: grab; }
+.strat-page .st-tbl th:active { cursor: grabbing; }
+.strat-page .st-colreset { padding: 3px 9px; font-size: 13px;
+  border: 1px solid var(--border); background: transparent; color: var(--muted);
+  border-radius: 6px; cursor: pointer; }
+.strat-page .st-colreset:hover { color: var(--text); border-color: var(--blue); }
+.strat-page .st-tb-right { display: inline-flex; align-items: center; gap: 10px; }
+/* ⛔ `.st-name` is display:flex ON THE CELL. The body now wraps its two children
+   in one element (Alpine's x-if needs a single root), so that wrapper must
+   DISAPPEAR from the box tree or the glyph and the name stop being flex items
+   and the approved 9px gap collapses. */
+.strat-page .st-nm { display: contents; }
+.strat-page .st-usage-cell { display: contents; }
 .strat-page .st-tbl td { padding: 9px 7px; border-bottom: 1px solid var(--border-soft); white-space: nowrap; }
 .strat-page .st-tbl tbody tr:hover { background: var(--card); }
 .strat-page .st-tbl .rt { text-align: right; font-variant-numeric: tabular-nums; }

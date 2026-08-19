@@ -151,18 +151,82 @@ class TestPagination:
 # ══════════════════════════════════════════════════════════════════════════
 class TestHierarchy:
 
-    def test_four_cards_then_and_more(self):
-        code = _tpl_code()
-        assert "HIER_SHOWN: 4" in code, "the artwork's four-card cap is missing"
-        assert "hierarchyShown()" in code and "hierarchyOverflow()" in code
-        assert "and ' + hierarchyOverflow() + ' more'" in code
+    def test_every_family_is_shown_and_the_four_card_cap_is_retired(self):
+        """✅ RULED 19-Aug-2026 (Rama). ⛔ This test was the guard KEEPING the
+        artwork's four-card cap; it is flipped DELIBERATELY, ⛔ not rewritten to
+        make a build pass.
 
-    def test_the_cap_does_not_truncate_the_underlying_data(self):
-        """⛔ `hierarchy()` must still hold EVERY family, and the table below must
-        still page over the full filtered set — only the strip is capped."""
+        The cap hid real strategies: production configures SIXTEEN
+        (`config/strategies/*.yaml`) = twelve families, so four cards plus
+        "… and more" concealed eight. The QA fixture's five strategies made the
+        cap invisible, which is exactly why it survived this long."""
         code = _tpl_code()
-        assert "hierarchyShown() { return this.hierarchy().slice(0, this.HIER_SHOWN); }" in code
+        assert "HIER_SHOWN" not in code, "the four-card cap came back"
+        assert "hierarchyOverflow" not in code, "the '... and more' card came back"
+        assert "hierarchyShown()" in code
+        assert "this.hierarchy().slice().sort(" in code, (
+            "hierarchyShown() no longer returns every family")
+
+    def test_the_hierarchy_still_reads_the_full_family_set(self):
+        """⛔ `hierarchy()` must still derive from every mapped row, and the table
+        below must still page the full filtered set."""
+        code = _tpl_code()
+        assert "this.rowsMapped().forEach(r => {" in code
         assert "tPaged(filtered())" in code, "the table no longer pages the full set"
+
+    def test_the_hierarchy_card_floor_fits_the_longest_configured_family(self):
+        """⛔ A card floor sized for the FIXTURE is not sized for production.
+
+        MEASURED with the real sixteen: the longest family,
+        `positional_sector_rotation`, needs a **260px content box**, and the old
+        `minmax(240px, 1fr)` left only 244-257px at 1280 / 1600 / 2560 — so the
+        name spilled its card (the card is `overflow-x: visible`, so it would
+        have been visible spill, ⛔ not a tidy clip). The floor is now 292px and
+        seven widths measure clean.
+
+        ⭐ This test goes RED if a longer family name is configured later, which is
+        the point: the number is a MEASUREMENT, and a new longest name invalidates
+        it. Re-measure, ⛔ do not just raise the constant."""
+        from backend.readers import config_reader
+        repo = os.path.dirname(_ROOT)
+        cfg = {"paths": {"config_dir": os.path.join(repo, "config")}}
+        strategies = config_reader.get_strategies(cfg)
+        longest = max((strategy_tower._family_of(n, m.get("direction"))
+                       for n, m in strategies.items()), key=len)
+        assert len(longest) <= 26, (
+            "a longer family name appeared (%r, %d chars) — RE-MEASURE the "
+            "hier-grid floor rather than guessing" % (longest, len(longest)))
+        with open(_CSS, encoding="utf-8") as fh:
+            css = fh.read()
+        m = re.search(r"\.strat-page \.hier-grid \{[^}]*minmax\((\d+)px", css)
+        assert m, "the hier-grid track declaration moved"
+        assert int(m.group(1)) >= 292, (
+            "hier-grid floor is %spx — below the measured 292px need" % m.group(1))
+
+    def test_the_hierarchy_covers_all_sixteen_CONFIGURED_strategies(self):
+        """🔑 Checked against the SOURCE OF TRUTH, ⛔ not the fixture:
+        `config/strategies/*.yaml` in this repo.
+
+        ⚠️ The QA fixture writes FIVE strategies, so the browser shows four family
+        cards. That is FIXTURE SHAPE, ⛔ not the product — asserting against the
+        fixture would prove nothing about production."""
+        from backend.readers import config_reader
+        repo = os.path.dirname(_ROOT)
+        cfg = {"paths": {"config_dir": os.path.join(repo, "config")}}
+        strategies = config_reader.get_strategies(cfg)
+        assert len(strategies) == 16, (
+            "expected the 16 configured production strategies, found %d" % len(strategies))
+        intents = {}
+        for meta in strategies.values():
+            intents[meta.get("intent")] = intents.get(meta.get("intent"), 0) + 1
+        assert intents.get("INTRADAY") == 13 and intents.get("DELIVERY") == 3, intents
+        fams = {strategy_tower._family_of(n, m.get("direction"))
+                for n, m in strategies.items()}
+        assert len(fams) >= 10, "family derivation collapsed: %s" % sorted(fams)
+        assert all(strategy_tower._family_of(n, m.get("direction")) in fams
+                   for n, m in strategies.items())
+
+
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -173,7 +237,10 @@ class TestTypeFloor:
     #: ⛔ `.flt-k` (12px) is the APPROVED shared filter-label language reaching
     #: Screens 19/20/22. It is named here so the exemption is a DECISION and not
     #: an oversight, and so a future pass cannot quietly "fix" it.
-    SHARED_EXEMPT = (".flt-k",)
+    #: ⛔ `.st-grip` is the DRAG HANDLE glyph (10px) — the same decorative,
+    #: non-readable symbol exempted on Screens 04/05 under B2, and hidden until
+    #: the heading is hovered. It carries no readable text.
+    SHARED_EXEMPT = (".flt-k", ".st-grip")
 
     def test_no_screen03_scoped_rule_is_below_13px(self):
         """`gui/03. Strategies.txt`, READABILITY: "Minimum 13px"."""
@@ -229,7 +296,7 @@ class TestScannerIsNotAnIdentity:
         """The table's identity IS the strategy; a Scanner column would print the
         row's own identity twice (scanner and strategy are 1:1)."""
         tpl = _tpl()
-        m = re.search(r"cols: \[(.*?)\],\n", tpl, re.S)
+        m = re.search(r"DEFAULT_COLS: \[(.*?)\],\n", tpl, re.S)
         assert m, "column list not found"
         assert "scanner" not in m.group(1).lower(), "a Scanner column returned"
 
@@ -239,7 +306,7 @@ class TestScannerIsNotAnIdentity:
 
     def test_strategy_remains_the_identity(self):
         tpl = _tpl()
-        m = re.search(r"cols: \[(.*?)\],\n", tpl, re.S)
+        m = re.search(r"DEFAULT_COLS: \[(.*?)\],\n", tpl, re.S)
         assert 'key: "strategy"' in m.group(1)
         assert "strategyOptions()" in tpl, "the Strategy filter was lost"
 
@@ -266,7 +333,7 @@ class TestNoDataRegression:
 
     def test_the_column_set_is_unchanged(self):
         tpl = _tpl()
-        m = re.search(r"cols: \[(.*?)\],\n", tpl, re.S)
+        m = re.search(r"DEFAULT_COLS: \[(.*?)\],\n", tpl, re.S)
         keys = re.findall(r'key: "(\w+)"', m.group(1))
         assert keys == self.ARTWORK_COLUMNS, "the column set moved: %s" % keys
 
@@ -275,7 +342,7 @@ class TestNoDataRegression:
         approved ones. Every pre-Q3 key must still be present in its original
         relative order."""
         keys = re.findall(r'key: "(\w+)"',
-                          re.search(r"cols: \[(.*?)\],\n", _tpl(), re.S).group(1))
+                          re.search(r"DEFAULT_COLS: \[(.*?)\],\n", _tpl(), re.S).group(1))
         kept = [k for k in keys if k in self.PRE_Q3_COLUMNS]
         assert kept == self.PRE_Q3_COLUMNS, (
             "an approved column was dropped or reordered: %s" % kept)
@@ -493,7 +560,7 @@ class TestPendingItemsRemainPending:
         `03. Strategies.txt` puts `Trading type: (INTRADAY/DELIVERY)` SECOND, right
         after Strategy. ⛔ Scanner stays absent (approved override: scanner=strategy)."""
         tpl = _tpl()
-        m = re.search(r"cols: \[(.*?)\],\n", tpl, re.S)
+        m = re.search(r"DEFAULT_COLS: \[(.*?)\],\n", tpl, re.S)
         keys = re.findall(r'key: "([a-z_]+)"', m.group(1))
         assert "trade_type" in keys, "the Trading Type column is gone"
         assert keys.index("trade_type") == 1, (
@@ -507,7 +574,7 @@ class TestPendingItemsRemainPending:
         in the UI; the ROI base stays attribution R4 (net / Σ margin_reserved)."""
         code = _tpl_code()
         assert "r.sl_tgt_hits" in code and "r.performance.roi_pct" in code
-        keys = re.findall(r'key: "([a-z_]+)"', re.search(r"cols: \[(.*?)\],\n", _tpl(), re.S).group(1))
+        keys = re.findall(r'key: "([a-z_]+)"', re.search(r"DEFAULT_COLS: \[(.*?)\],\n", _tpl(), re.S).group(1))
         for k in ("sl_hits", "tgt_hits", "roi"):
             assert k in keys, "%s column missing" % k
         # ⛔ null must survive: "no margin reserved today" is NOT "0% return".
@@ -517,17 +584,53 @@ class TestPendingItemsRemainPending:
         assert "roi_pct" in src and "sl_tgt_hits" in src, (
             "the backend stopped supplying what the UI now renders")
 
-    def test_the_table_body_still_has_one_cell_per_declared_column(self):
-        """⛔ The body is hand-written <td>s matched POSITIONALLY to `cols`, so a
-        column added without its cell silently shifts every value one column
-        left. This counts both sides."""
+    def test_the_body_is_driven_by_the_column_list_not_by_positional_cells(self):
+        """✅ RULED 19-Aug-2026. ⛔ This test previously counted hand-written <td>s
+        matched POSITIONALLY to `cols`; it is flipped DELIBERATELY, because that
+        structure is precisely what made a draggable heading unsafe — reordering
+        the header would have moved labels while the values stayed put.
+
+        ⭐ The invariant is now STRONGER than a count: the body iterates the SAME
+        `cols` array as the header, so heading, data, sort control and alignment
+        move together by construction and cannot drift."""
         tpl = _tpl()
-        cols = re.findall(r'key: "([a-z_]+)"',
-                          re.search(r"cols: \[(.*?)\],\n", tpl, re.S).group(1))
         body = tpl[tpl.index('<template x-for="(r, i) in tPaged(filtered())"'):]
-        body = body[:body.index("</template>")]
-        assert body.count("<td") == len(cols), (
-            "%d <td> for %d columns — the row is misaligned" % (body.count("<td"), len(cols)))
+        body = body[:body.index('<tr x-show="!filtered().length"')]
+        assert '<template x-for="c in cols" :key="c.key">' in body, (
+            "the row no longer iterates the column list")
+        assert body.count("<td") == 1, (
+            "%d <td> in the row — positional cells came back" % body.count("<td"))
+        assert ':class="cellCls(c, r)"' in body
+
+    def test_a_reordered_column_carries_its_data_and_its_sort_control(self):
+        """⛔ THE RULING'S CORE REQUIREMENT: the movable unit is HEADER + DATA +
+        SORT CONTROL + ALIGNMENT, ⛔ not the label alone. Checked structurally
+        because that is what makes it true for EVERY column rather than the one
+        a click happened to exercise."""
+        tpl = _tpl()
+        head = tpl[tpl.index("<thead>"):tpl.index("</thead>")]
+        # the sort arrow and the sort click are keyed on the SAME c.key the
+        # header iterates, so they follow the column when `cols` is reordered
+        assert 'x-text="tArrow(c.key)"' in head
+        assert '@click="headClick(c.key)"' in head
+        assert 'draggable="true"' in head and '@drop.prevent="onDrop(c.key)"' in head
+        code = _tpl_code()
+        # onDrop mutates the ONE array both thead and tbody consume
+        assert "const next = this.cols.slice();" in code
+        assert "next.splice(to, 0, next.splice(from, 1)[0]);" in code
+        assert "this.cols = next;" in code
+        # ⛔ a drag must never be read as a sort click
+        assert "headClick(key) { if (Date.now() - this._dragEndAt < 250) return;" in code
+
+    def test_the_saved_column_order_cannot_hide_or_resurrect_a_column(self):
+        """⛔ A stale localStorage order must not drop a column added later, nor
+        bring back one that was removed (`scanner`)."""
+        code = _tpl_code()
+        assert 'COLS_KEY: "screen03.strategies.colOrder.v1"' in code
+        assert "if (byKey[k] && next.indexOf(byKey[k]) === -1) next.push(byKey[k]);" in code
+        assert "this.DEFAULT_COLS.forEach(c => { if (next.indexOf(c) === -1) next.push(c); });" in code
+        assert "if (next.length === this.DEFAULT_COLS.length) this.cols = next;" in code
+
 
     def test_the_q2_rejection_taxonomy_is_untouched(self):
         """⏸️ Q2 PENDING. Screen 03 does not render the reject split, so this pass

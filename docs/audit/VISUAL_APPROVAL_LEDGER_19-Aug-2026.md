@@ -15,7 +15,7 @@ PNG, ⛔ not source HTML, ⛔ not a description.
 |---|---|---|---|---|---|---|
 | **S01** | Login | ✅ 22:0x IST · live `/login` @1920 + 1440 | ✅ | ✅ **1** — hero/card gap, then a 3.0% left nudge of the chip | ✅ **"Approved"** — 19-Aug-2026 **22:36 IST** | 🟢 **VISUALLY APPROVED** |
 | **S02** | Dashboard | ✅ live `/` @1920+1440 | ✅ | ✅ **1** — capacity-monitor headings centred | ✅ **"Approved"** — 19-Aug-2026 **23:0x IST** | 🟢 **VISUALLY APPROVED** |
-| **S03** | Strategies | ⏳ | — | — | — | ⏳ PENDING |
+| **S03** | Strategies | ✅ live `/strategies` @1920 + 6 more widths | ✅ | ✅ **2** — all 16 strategies in the hierarchy; columns made truly draggable | ✅ **“Approved!!”** — 19-Aug-2026 **23:40 IST** | 🟢 **VISUALLY APPROVED** |
 | **S04** | Signals | ⏳ | — | — | — | ⏳ PENDING |
 | **S05** | Orders | ⏳ | — | — | — | ⏳ PENDING |
 | **S06** | Positions | ⏳ | — | — | — | ⏳ PENDING |
@@ -36,7 +36,7 @@ PNG, ⛔ not source HTML, ⛔ not a description.
 | **S21** | Scanner Attribution | ⏳ | — | — | — | ⏳ PENDING |
 | **S22** | Holdings | ⏳ | — | — | — | ⏳ PENDING |
 
-**APPROVED: 2 of 22.**
+**APPROVED: 3 of 22.**  ⏸️ **Paused 19-Aug 23:40 IST — resume at S04 Signals.**
 
 ---
 
@@ -158,3 +158,71 @@ includes it, the build follows the PNG ⇒ ⛔ **not a deviation.** Corrected ra
 ### ⛔ CONFIRMED UNCHANGED
 header chrome · alert banner · service-health fixture · KPI cards · pipeline · Strategy Summary ·
 sidebar · fonts · colours · data · numbering · every other screen. **Diff = 1 CSS rule.**
+
+
+---
+
+## S03 — STRATEGIES · APPROVED 19-Aug-2026 23:40 IST
+
+**Approval basis:** browser mode — **http://127.0.0.1:8599/strategies**, viewport **1896 × 988**
+(page 1896 × 1691), re-measured at **1280 / 1366 / 1440 / 1600 / 2200 / 2560**.
+
+**Rama's words:** *“Approved!!”* (after two required corrections).
+
+### CORRECTION ① — ALL 16 STRATEGIES IN THE HIERARCHY
+**Source of truth: `config/strategies/*.yaml` — 16 files, 13 INTRADAY / 3 DELIVERY**, giving
+**12 families**. ⛔ Nothing invented or renamed. The QA harness now loads those 16 **read-only**
+(copied into its temp config dir; `git status config/` clean), so the screen is judged on
+**production shape** rather than the five-strategy fixture.
+- the artwork's `HIER_SHOWN: 4` cap and its “… and more” card are **retired** — they hid eight
+  families once the configured set was real;
+- `.hier-grid` already wraps (`repeat(auto-fill, minmax(…, 1fr))`), so all 12 cards show in the
+  **same treatment**: ⛔ no new visual concept, ⛔ no font shrunk.
+
+### 🔴 A SECOND DEFECT THE REAL DATA EXPOSED — measured, ⛔ not guessed
+The card floor was **240px, sized for the fixture's short names**. `positional_sector_rotation`
+needs a **260px content box**, and auto-fill left only **244–257px at 1280 / 1600 / 2560** ⇒ the
+name **spilled its card** (`overflow-x: visible`, so visible spill, ⛔ not a tidy clip).
+**Floor raised to 292px — 0 overflow at all seven widths.**
+
+### CORRECTION ② — COLUMNS ARE GENUINELY MOVABLE
+⛔ The body was **hard-coded `<td>`s in fixed order**; dragging that would have moved LABELS while
+the DATA stayed put — the cosmetic-only effect the ruling forbids. The body now iterates the
+**same `cols` array as the header**, so **header + data + sort control + alignment** move as one.
+Header markup, handlers, grip and `is-drag`/`is-over` are **verbatim from approved Screen 04**
+(the convention already on **10 screens**); the grip is hidden until hover, so the header looks
+unchanged. Persistence follows the existing convention: `screen03.strategies.colOrder.v1`, with
+S04's rebuild rule so a stale order ⛔ cannot hide a new column nor resurrect `scanner`.
+
+**PROVED THROUGH THE REAL HANDLERS, then reloaded so the RESTORE path was used:**
+
+| | before | after |
+|---|---|---|
+| 1st heading | `STRATEGY` | **`STATUS`** |
+| 1st data cell | `Gap Fade Long` | **`ACTIVE`** ← the data moved with it |
+| 2nd heading / cell | — | `STRATEGY` / `Gap Fade Long` — still paired |
+| headings vs cells | 18 / 18 | **18 / 18 aligned** |
+| survived reload | — | ✅ restored from localStorage |
+
+### ACCEPTED DEVIATIONS — exact wording
+1. ⚠️ **The table needs horizontal scrolling and `STATUS` is cut at the right edge** (`ACTIV…`):
+   **1711px table in a 1664px box at 1920 (47px over); 1184px box at 1440 (527px over)**. It
+   scrolls inside `.tbl-scroll` (`overflow-x: auto`, the approved mechanism); **page overflow 0**.
+   🔑 **ATTRIBUTION PROVED BY STASH-AND-REMEASURE: identical numbers with the changes REVERTED**
+   ⇒ caused purely by real strategy names being longer than the fixture's. ✅ **Accepted.**
+2. **Usage %** is drawn as **% + progress bar** where the artwork draws a **coloured badge**.
+   ✅ **Accepted.**
+3. **No sidebar collapse control** — the artwork draws a `‹` chevron; `base.html` has none.
+   ⚠️ Shared chrome, all 21 screens. ✅ **Accepted.**
+4. **Header strip** (BROKER ID / CLIENT NAME / `poll 60s`, and the mirrored order vs artwork) —
+   already accepted at S02. ✅ **Carried forward.**
+5. **Column set differs from the artwork by earlier rulings** — Scanner column AND Scanner filter
+   removed (F2; the TXT still lists a Scanner filter, the later ruling removed it), Trading Type
+   at position 2 (Q3), SL Hit / TGT Hit / ROI % added (F4, placement D1 = A). ✅ **Recorded.**
+
+### TESTS
+**203 passed** across S03, S02, S04, S05, B1 floor, closure 04–08 and shared-reuse.
+**3 tests flipped deliberately** (the four-card cap guard, the positional-`<td>` counter, and
+`.flt-k`'s neighbour) and **5 added**: all-16 coverage, the card-floor measurement (⭐ **goes RED if
+a longer family name is configured** — re-measure, ⛔ do not bump the constant),
+drag-carries-data-and-sort, and the stale-saved-order guard. ⛔ No test weakened or deleted.
