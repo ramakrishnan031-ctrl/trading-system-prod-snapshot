@@ -399,6 +399,33 @@ class TestPendingItemsRemainPending:
         for f in ("strategy", "status", "trade_type", "direction"):
             assert f in src, "the export ignores the %s filter" % f
 
+    def test_each_filter_actually_narrows_the_workbook(self, client):
+        """⛔ A source-string check only proves the WORD is present. This drives
+        the real endpoint with the values Screen 03's own <option>s emit — which
+        is the part that can silently mismatch: the trade-type options are
+        "Intraday"/"Delivery" (title case), ⛔ not the uppercase the payload uses
+        elsewhere. A case mismatch here would return an EMPTY workbook while
+        every source assertion still passed."""
+        from openpyxl import load_workbook
+        import io as _io
+
+        def rows(qs=""):
+            r = client.get("/api/export/strategies" + qs)
+            assert r.status_code == 200, (qs, r.status_code)
+            wb = load_workbook(_io.BytesIO(r.data))
+            return len(list(wb[wb.sheetnames[0]].values)) - 1
+
+        total = rows()
+        assert total > 1, "fixture has too few strategies to test filtering"
+        intra, deliv = rows("?trade_type=Intraday"), rows("?trade_type=Delivery")
+        assert intra and deliv, (intra, deliv)
+        assert intra + deliv <= total
+        assert rows("?direction=LONG") < total, "the direction filter did nothing"
+        assert rows("?strategy=Gap Fade Long") == 1
+        # ⛔ An unmatched value must yield an EMPTY sheet, ⛔ never the whole set:
+        #    a filter that silently falls back to "everything" is worse than none.
+        assert rows("?trade_type=NoSuchType") == 0
+
     def test_the_export_never_turns_an_unset_bucket_into_a_zero(self):
         """⭐ B5's capital truth, carried into the workbook: "no bucket configured"
         and "zero allocated" are DIFFERENT facts, and the export must not merge
