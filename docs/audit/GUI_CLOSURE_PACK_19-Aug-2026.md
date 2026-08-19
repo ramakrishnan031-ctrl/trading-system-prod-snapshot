@@ -33,10 +33,24 @@ contains **zero** occurrences of `.nv-group`, `.sb-label`, `.sb-poll`, `.sb-pill
 
 | quantity | count | basis |
 |---|---|---|
-| **Total registered screens** | **22** | numbered artwork specs `01.`–`22.` in `D:\Projects	rading-system\gui` |
+| **Total registered screens** | **22** | numbered artwork specs `01.`–`22.` in `D:/Projects/trading-system/gui` |
 | **Screens browser-tested** | **21** | S02–S22. ⛔ **S01 excluded because it is the PRE-AUTH screen** and the QA harness force-authenticates every request, so it cannot render its real unauthenticated state |
 | **Screens in Q2's blast radius** | **21** | every campaign screen that extends `base.html`. ⛔ **S01 is NOT in it** |
 | **Screens still requiring visual approval** | **22** | 21 re-opened by Q2 **＋ S01, which has never had a first approval** — ⭐ for its own reason, ⛔ not because of Q2 |
+
+### 🔒 THE FOUR COUNTS — ⛔ NEVER COLLAPSE THESE INTO ONE NUMBER
+
+| count | means | membership | ⛔ do NOT call it |
+|---|---|---|---|
+| **22** | **campaign register** | numbered artwork `01.`–`22.` | a browser-sweep or a Q2 figure |
+| **21** | **authenticated campaign sweep** | S02–S22 browser-tested | the register |
+| **21** | **Q2 campaign blast radius** | campaign screens extending `base.html` | 22 |
+| **30** | **`base.html` consumers** | 21 campaign **+ 9 legacy** templates | ⛔ **an approval scope** |
+
+⭐ **AND S01 IS INSULATED FROM *ALL* SHARED-CSS DECISIONS, ⛔ not merely from Q2 — MEASURED:**
+`login.html` carries its **own inline `<style>` block and never loads `style.css`**. ⇒ neither
+the five raised rules **nor the other 63** can reach it. 📌 So a future D3 ruling has the same
+radius as Q2: **21 campaign + 9 legacy, ⛔ never S01.**
 
 ⭐ **SO THE TWO NUMBERS WERE NEVER IN CONFLICT — they count different things**, and the closure
 pass's phrase *"all 21 **authenticated** screens"* was already precise. ⛔ What was imprecise was
@@ -71,7 +85,8 @@ the five appears in any screen's sub-13px set. Visible in every capture (sidebar
 ⛔ **SCOPE HELD AT FIVE — the remaining 63 are NOT implemented.** A full sweep found **68**
 non-page-scoped rules under 13px. ⛔ The 13px decision is **NOT** read as a blanket
 "all text everywhere must be 13px". The other 63 stay a **separate decision item** —
-raising them now would start a second uncontrolled 22-screen approval cycle.
+raising them now would start a second uncontrolled approval cycle over the **same 21
+campaign screens + 9 legacy templates**, ⛔ never S01 (see the scope table).
 ⚠️ **`.btn-logout` (12.48px) is the most visible survivor** — readable text, present on
 **every** screen's sub-13px list. It is listed, ⛔ not changed.
 
@@ -207,6 +222,7 @@ is marked as such**, ⭐ so the radius is neither overstated nor quietly rounded
    surface, or relocate to S20.
 2. 🔴 **S14 @1440 (344px) and S17 @1920/@1440 overflow** — authorise a fix, or accept and record.
 3. 🔴 **The other 63 sub-13px shared rules** — raise, exempt, or leave open.
-4. **Visual approvals** per the matrix above — 22 screens, all re-opened by Q2.
+4. **Visual approvals** per the matrix above — **22 screens: 21 re-opened by Q2, plus S01
+   for its own reason.** ⛔ S01 was NEVER re-opened by Q2.
 5. Still parked, ⛔ untouched: **S07 RR Damage %** · **Q2 rejection taxonomy** · **S03 D1/D2** ·
    **S03 F1/Q3 export** · **Gate E** · **layout-assurance Option A**.
