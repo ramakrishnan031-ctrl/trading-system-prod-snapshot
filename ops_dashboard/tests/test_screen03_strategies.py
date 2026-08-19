@@ -249,15 +249,38 @@ class TestScannerIsNotAnIdentity:
 # ══════════════════════════════════════════════════════════════════════════
 class TestNoDataRegression:
 
-    ARTWORK_COLUMNS = ["strategy", "signals", "orders", "trades", "success", "win_rate",
-                       "pnl", "allocated", "used", "remaining", "usage",
+    # ⭐ UPDATED 19-Aug-2026 for Rama's Q3 ruling (F3 + F4: the TXT wins over the
+    # artwork). The four ADDED keys are marked; ⛔ every pre-existing key keeps its
+    # relative order, so this still catches a reordering or a silent removal.
+    ARTWORK_COLUMNS = ["strategy",
+                       "trade_type",                       # F3 — spec, main table, 2nd
+                       "signals", "orders", "trades", "success", "win_rate",
+                       "sl_hits", "tgt_hits",              # F4
+                       "pnl",
+                       "roi",                              # F4
+                       "allocated", "used", "remaining", "usage",
                        "last_signal", "last_trade", "status"]
+    PRE_Q3_COLUMNS = ["strategy", "signals", "orders", "trades", "success", "win_rate",
+                      "pnl", "allocated", "used", "remaining", "usage",
+                      "last_signal", "last_trade", "status"]
 
     def test_the_column_set_is_unchanged(self):
         tpl = _tpl()
         m = re.search(r"cols: \[(.*?)\],\n", tpl, re.S)
         keys = re.findall(r'key: "(\w+)"', m.group(1))
         assert keys == self.ARTWORK_COLUMNS, "the column set moved: %s" % keys
+
+    def test_the_q3_additions_are_purely_additive(self):
+        """⛔ Q3 authorised ADDING four columns — ⛔ not reordering or dropping the
+        approved ones. Every pre-Q3 key must still be present in its original
+        relative order."""
+        keys = re.findall(r'key: "(\w+)"',
+                          re.search(r"cols: \[(.*?)\],\n", _tpl(), re.S).group(1))
+        kept = [k for k in keys if k in self.PRE_Q3_COLUMNS]
+        assert kept == self.PRE_Q3_COLUMNS, (
+            "an approved column was dropped or reordered: %s" % kept)
+        assert set(keys) - set(self.PRE_Q3_COLUMNS) == {
+            "trade_type", "sl_hits", "tgt_hits", "roi"}, "unexpected extra column"
 
     def test_the_tower_payload_still_carries_every_key_the_screen_reads(self, gui_config, today):
         tower = strategy_tower.build_strategy_tower(gui_config, today)
@@ -341,17 +364,48 @@ class TestPendingItemsRemainPending:
         assert '"allocation_configured": None' in src
         assert '"allocation_basis": "global bucket"' in src
 
-    def test_no_trading_type_column_was_added(self):
-        """⏸️ F3 PENDING — the spec lists it, the artwork's table does not draw it."""
+    def test_the_trading_type_column_exists_and_sits_where_the_spec_puts_it(self):
+        """✅ F3 RULED 19-Aug-2026 (Rama Q3 = the TXT wins over the artwork).
+        ⛔ This test was previously the PENDING guard asserting its ABSENCE; it is
+        flipped deliberately, ⛔ not rewritten to make a build pass.
+        `03. Strategies.txt` puts `Trading type: (INTRADAY/DELIVERY)` SECOND, right
+        after Strategy. ⛔ Scanner stays absent (approved override: scanner=strategy)."""
         tpl = _tpl()
         m = re.search(r"cols: \[(.*?)\],\n", tpl, re.S)
-        assert "trade_type" not in m.group(1), "a Trading Type column appeared while F3 is pending"
+        keys = re.findall(r'key: "([a-z_]+)"', m.group(1))
+        assert "trade_type" in keys, "the Trading Type column is gone"
+        assert keys.index("trade_type") == 1, (
+            "Trading Type must sit immediately after Strategy, per the spec: %s" % keys[:4])
+        assert "scanner" not in keys, "Scanner came back as a column"
 
-    def test_no_sl_tgt_or_roi_fields_were_added(self):
-        """⏸️ F4 PENDING."""
+    def test_the_sl_tgt_and_roi_fields_exist_and_invent_nothing(self):
+        """✅ F4 RULED 19-Aug-2026. ⭐ All three were ALREADY in the payload and
+        were simply never rendered — `sl_tgt_hits.{sl_hits,tgt_hits}` and
+        `performance.roi_pct`. ⛔ No backend read was added and no value derived
+        in the UI; the ROI base stays attribution R4 (net / Σ margin_reserved)."""
         code = _tpl_code()
-        for banned in ("sl_hit_count", "tgt_hit_count", "roi_pct"):
-            assert banned not in code, "%s appeared while F4 is pending" % banned
+        assert "r.sl_tgt_hits" in code and "r.performance.roi_pct" in code
+        keys = re.findall(r'key: "([a-z_]+)"', re.search(r"cols: \[(.*?)\],\n", _tpl(), re.S).group(1))
+        for k in ("sl_hits", "tgt_hits", "roi"):
+            assert k in keys, "%s column missing" % k
+        # ⛔ null must survive: "no margin reserved today" is NOT "0% return".
+        assert "roi_pct === null" in code and "? null :" in code, (
+            "roi was coerced to a number — a missing base would read as 0%")
+        src = inspect.getsource(strategy_tower.build_strategy_tower)
+        assert "roi_pct" in src and "sl_tgt_hits" in src, (
+            "the backend stopped supplying what the UI now renders")
+
+    def test_the_table_body_still_has_one_cell_per_declared_column(self):
+        """⛔ The body is hand-written <td>s matched POSITIONALLY to `cols`, so a
+        column added without its cell silently shifts every value one column
+        left. This counts both sides."""
+        tpl = _tpl()
+        cols = re.findall(r'key: "([a-z_]+)"',
+                          re.search(r"cols: \[(.*?)\],\n", tpl, re.S).group(1))
+        body = tpl[tpl.index('<template x-for="(r, i) in tPaged(filtered())"'):]
+        body = body[:body.index("</template>")]
+        assert body.count("<td") == len(cols), (
+            "%d <td> for %d columns — the row is misaligned" % (body.count("<td"), len(cols)))
 
     def test_the_q2_rejection_taxonomy_is_untouched(self):
         """⏸️ Q2 PENDING. Screen 03 does not render the reject split, so this pass

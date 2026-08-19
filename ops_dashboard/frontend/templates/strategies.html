@@ -154,12 +154,16 @@
                 <span class="st-glyph" :class="dirCls(r.direction)" x-html="dirGlyph(r.direction)"></span>
                 <span x-text="r.strategy"></span>
               </td>
+              <td class="rt" x-text="r.trade_type || '—'"></td>
               <td class="rt num" x-text="fmtInt(r.signals)"></td>
               <td class="rt num" x-text="fmtInt(r.orders)"></td>
               <td class="rt num" x-text="fmtInt(r.trades)"></td>
               <td class="rt num" x-text="pctFmt(r.success)"></td>
               <td class="rt num" x-text="pctFmt(r.win_rate)"></td>
+              <td class="rt num" x-text="fmtInt(r.sl_hits)"></td>
+              <td class="rt num" x-text="fmtInt(r.tgt_hits)"></td>
               <td class="rt num" :class="r.pnl > 0 ? 'txt-green' : (r.pnl < 0 ? 'txt-red' : '')" x-text="money(r.pnl)"></td>
+              <td class="rt num" x-text="pctFmt(r.roi)"></td>
               <td class="rt num" x-text="moneyIntOrDash(r.allocated)"></td>
               <td class="rt num" x-text="moneyInt(r.used)"></td>
               <td class="rt num" x-text="moneyIntOrDash(r.remaining)"></td>
@@ -244,14 +248,32 @@ function strategiesPage() {
     alerts: [],
     f:  { date: "", strategy: "", status: "", trade_type: "", direction: "" },
     af: { strategy: "", status: "", trade_type: "", direction: "" },
+    /* F3 + F4 (19-Aug-2026, Rama Q3 = the TXT wins over the artwork).
+       `03. Strategies.txt` lists `Trading type: (INTRADAY/DELIVERY)` in the MAIN
+       TABLE, second, right after Strategy — the artwork's table does not draw it.
+       ⛔ Scanner stays absent by the earlier approved override (scanner=strategy).
+       ⚠️ PLACEMENT DEVIATION, STATED: the TXT lists SL Hit Count / TGT Hit Count /
+       ROI % under `DETAIL PAGE → Additional`, ⛔ NOT in the main table — and
+       Screen 03 HAS NO DETAIL PAGE ("Strategy Details" is a quick-action link to
+       /strategy-health). They are therefore rendered in the only per-strategy
+       surface that exists. ⛔ Building a detail page would be the speculative
+       redesign the brief forbids.
+       ⭐ NOTHING IS INVENTED — all four already existed in the payload and were
+       simply never rendered: `basic.trade_type` (from the strategy YAML `intent`),
+       `sl_tgt_hits.{sl_hits,tgt_hits}`, and `performance.roi_pct`, whose base is
+       fixed by attribution R4 = net ÷ Σ margin_reserved today. */
     cols: [
       { key: "strategy", label: "Strategy" },
+      { key: "trade_type", label: "Trading Type" },
       { key: "signals", label: "Signals", num: true },
       { key: "orders", label: "Orders", num: true },
       { key: "trades", label: "Trades", num: true },
       { key: "success", label: "Success %", num: true },
       { key: "win_rate", label: "Win %", num: true },
+      { key: "sl_hits", label: "SL Hit", num: true },
+      { key: "tgt_hits", label: "TGT Hit", num: true },
       { key: "pnl", label: "P&L (₹)", num: true },
+      { key: "roi", label: "ROI %", num: true },
       { key: "allocated", label: "Allocated (₹)", num: true },
       { key: "used", label: "Used (₹)", num: true },
       { key: "remaining", label: "Remaining (₹)", num: true },
@@ -295,6 +317,13 @@ function strategiesPage() {
           success: (r.success_rate === null || r.success_rate === undefined) ? null : r.success_rate,
           win_rate: (r.trading.win_rate === null || r.trading.win_rate === undefined) ? null : r.trading.win_rate,
           pnl: Number(r.performance.net_pnl || 0),
+          /* F4: already in the payload, never rendered. ⛔ roi is nullable and
+             stays null — it is NOT coerced to 0, because "no margin reserved
+             today" and "0% return" are different states. */
+          sl_hits: Number((r.sl_tgt_hits || {}).sl_hits || 0),
+          tgt_hits: Number((r.sl_tgt_hits || {}).tgt_hits || 0),
+          roi: (r.performance.roi_pct === null || r.performance.roi_pct === undefined)
+               ? null : Number(r.performance.roi_pct),
           allocated: alloc, used: used, remaining: rem, usage: usage,
           last_signal: r.health.last_signal, last_trade: r.health.last_trade,
           status: this.statusOf(r), family: r.family,
