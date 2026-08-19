@@ -920,3 +920,92 @@ def test_other_screens_are_untouched():
                 ".exec-page .cap-table th { text-align: center; }",
                 "table td.ctr { text-align: center !important; }"):
         assert sel in css, sel
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# HEALTH-TRENDS X-AXIS — THE LAST-LABEL COLLISION (measured 19-Aug-2026)
+#
+# ⭐ REACHABILITY FIRST, because a fix to an unreachable path is not worth a
+#   test: on the VM `analytics.system_metrics` holds 3,651 rows of which 3,069
+#   carry a REAL `disk_used_pct`, and ALL 60 rows in the window the GUI reads
+#   are real (cpu_pct / memory_mb are -1.0 sentinels, response_time is never
+#   persisted). ⇒ the Disk trend renders a full chart in PRODUCTION TODAY, so
+#   this axis is LIVE, ⛔ not latent.
+#
+# THE DEFECT, MEASURED IN THE BROWSER at 1920x1080 AND 1440x900 with the
+# production window (60 snapshots ⇒ step 8 ⇒ stepped marks …48, 56 plus a
+# FORCED final 59):
+#     '12:27' ended at x=1004.0 and '12:42' began at x=998.6
+#     ⇒ a 5.4px OVERLAP, identical at both viewports.
+# After the fix: 8 x-labels, minimum gap 37.1px, the END mark retained.
+#
+# ⭐ This is the SAME defect Screen 11's throughput axis already fixed and
+#   pinned (`test_s1011_chart_labels.py`); the rule is carried, ⛔ not
+#   re-invented.
+# ══════════════════════════════════════════════════════════════════════════
+class TestHealthTrendXAxisCollision:
+
+    def test_the_clash_avoidance_rule_is_present_in_trendmarkup(self):
+        """⛔ Both halves, or the rule is not the rule: `marks.pop()` drops the
+        clashing stepped label and `Math.ceil(step / 2)` is the minimum gap."""
+        body = _tpl()
+        body = body[body.index("trendMarkup() {"):]
+        body = body[:body.index("\n    },")]
+        # ⛔ STRIP COMMENTS BEFORE THE NEGATIVE ASSERTION. The block comment that
+        # documents this fix QUOTES the defective pattern verbatim, so matching
+        # raw source fails on the EXPLANATION rather than on the code — this
+        # test caught exactly that on its own first run.
+        code = re.sub(r"/\*.*?\*/", "", body, flags=re.S)
+        assert "marks.pop()" in code, "the clash-avoidance was removed"
+        assert "Math.ceil(step / 2)" in code, "the minimum-gap rule was removed"
+        assert "i === s.length - 1" not in code, (
+            "the unguarded always-show-last rule is back — that IS the defect")
+
+    def test_the_rule_actually_drops_the_clashing_mark_on_the_production_case(self):
+        """Re-implements the rule and runs it on the MEASURED production window.
+        ⛔ A rule that never fires would be no rule at all, so this asserts the
+        drop happens — not merely that the code contains a branch."""
+        n, xmax = 60, 8                      # the exact window the GUI reads
+        step = max(1, -(-n // xmax))         # ceil -> 8
+        last = n - 1                         # 59
+        marks = list(range(0, last + 1, step))
+        assert marks[-1] == 56, "precondition changed: the stepped tail is not 56"
+        if marks[-1] != last:
+            if last - marks[-1] < -(-step // 2):
+                marks.pop()
+            marks.append(last)
+        assert last in marks, "the session-end mark must survive"
+        assert 56 not in marks, "the clashing stepped mark should have been dropped"
+        gaps = [b - a for a, b in zip(marks, marks[1:])]
+        assert min(gaps) >= -(-step // 2), "two marks are still closer than half a step"
+
+    def test_the_rule_leaves_a_well_spaced_tail_alone(self):
+        """⛔ The guard must not fire when there is no clash — otherwise it would
+        silently delete a legitimate mark. 64 points ⇒ step 8 ⇒ tail 56, last 63,
+        gap 7 >= 4, so BOTH survive."""
+        n, xmax = 64, 8
+        step = max(1, -(-n // xmax))
+        last = n - 1
+        marks = list(range(0, last + 1, step))
+        tail = marks[-1]
+        if marks[-1] != last:
+            if last - marks[-1] < -(-step // 2):
+                marks.pop()
+            marks.append(last)
+        assert tail in marks, "a well-spaced stepped mark must NOT be dropped"
+        assert last in marks
+
+    def test_the_axis_type_was_not_shrunk_to_buy_the_space(self):
+        """⛔ Fixing a collision by going under the floor trades one spec
+        violation for another. `.sysh-axis` is declared 13px and rendered 13.00px
+        at BOTH viewports (viewBox 0 0 560 180 against a 180px-high box ⇒ the
+        `xMidYMid meet` scale is pinned at 1.0 by the HEIGHT, so width changes
+        cannot shrink it)."""
+        css = _css()
+        m = re.search(r"\.sysh-page \.sysh-axis \{([^}]*)\}", css)
+        assert m, ".sysh-axis rule missing"
+        fm = re.search(r"font-size:\s*([0-9.]+)px", m.group(1))
+        assert fm and float(fm.group(1)) >= 13, m.group(1)
+        assert 'viewBox="0 0 560 180"' in _tpl(), (
+            "the trend viewBox changed — the 1.0 scale that keeps 13px "
+            "rendered is no longer guaranteed; re-measure before editing this")

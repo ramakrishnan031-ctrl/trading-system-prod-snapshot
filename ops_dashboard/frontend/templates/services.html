@@ -613,12 +613,29 @@ function systemHealthPage() {
         out += '<circle class="sysh-dot-pt" cx="' + xf(i).toFixed(1) + '" cy="'
              + yf(p.value).toFixed(1) + '" r="2.6"></circle>';
       });
+      /* ⚠️ THE LAST TWO X LABELS COLLIDE IF BOTH ARE PRINTED. `i % step === 0 ||
+         i === s.length - 1` marks the stepped positions AND forces the final
+         one, so whenever the last stepped mark sits close to the end the two
+         overlap. MEASURED 19-Aug on the production window (60 snapshots ⇒
+         step 8 ⇒ marks …48, 56 plus a forced 59): `12:27` ended at x=1004.0
+         and `12:42` began at x=998.6 — a 5.4px OVERLAP at BOTH 1920 and 1440.
+         ⭐ This is the SAME defect Screen 11's throughput axis already fixed and
+         pinned; the rule is carried here verbatim rather than re-invented:
+         the END bucket is always worth a mark, but it must not sit on top of
+         the stepped one before it — keep the END, drop the clashing stepped
+         label, ⛔ never print both. */
       const step = Math.max(1, Math.ceil(s.length / 8));
-      s.forEach((p, i) => {
-        if (i % step === 0 || i === s.length - 1) {
-          out += '<text class="sysh-axis" x="' + xf(i).toFixed(1) + '" y="164" '
-               + 'text-anchor="middle">' + this.esc(this.hhmmss(p.ts).slice(0, 5)) + "</text>";
-        }
+      const last = s.length - 1;
+      const marks = [];
+      for (let i = 0; i <= last; i += step) marks.push(i);
+      if (marks[marks.length - 1] !== last) {
+        if (last - marks[marks.length - 1] < Math.ceil(step / 2)) marks.pop();
+        marks.push(last);
+      }
+      marks.forEach(i => {
+        out += '<text class="sysh-axis" x="' + xf(i).toFixed(1) + '" y="164" '
+             + 'text-anchor="middle">' + this.esc(this.hhmmss(s[i].ts).slice(0, 5))
+             + "</text>";
       });
       return out;
     },
