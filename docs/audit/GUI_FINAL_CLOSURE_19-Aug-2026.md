@@ -17,7 +17,7 @@ word.** ⛔ **"22/22 closed" must NEVER be written without "technically".**
 
 | dimension | figure | meaning |
 |---|---|---|
-| **IMPLEMENTATION** | **22 / 22 technically complete** | code · tests · browser QA all done |
+| **IMPLEMENTATION** | **22 / 22 technically complete** | code · tests · browser QA all done — ⚠️ **S01 excepted: pre-auth, ⛔ never browser-tested** |
 | **FINAL CLOSURE** | **0 / 22 finally closed** | ⛔ visual approval has ⛔ **not** been granted |
 | **AUTHORIZED TECHNICAL WORK** | **0 remaining** | Queue C is empty |
 | **VISUAL APPROVAL** | **22 awaiting Rama** | see the correction in §2 |
