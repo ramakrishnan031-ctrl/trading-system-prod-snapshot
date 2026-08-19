@@ -4,6 +4,53 @@
 **PUSHED = NO · DEPLOYED = NO**. Production DB never opened; VM read-only throughout.
 Captures: `docs/audit/approval_19aug/` (9 PNGs, 1.7 MB).
 
+## ⛔ DECISIONS REQUIRED — D1–D5, INDEPENDENT, ONE CHOICE EACH
+⛔ **Nothing below is implemented. ⛔ None of D1–D5 will be actioned without explicit approval.**
+
+| # | decision | options (choose ONE) | until chosen |
+|---|---|---|---|
+| **D1** | **S03 placement of SL Hit / TGT Hit / ROI %** | **A** accept current main-table placement · **B** move to an existing surface (e.g. S20 Strategy Health) · **C** authorise a new detail surface | ⛔ **S03 is not changed** |
+| **D2** | **S14 @1440 (344px) and S17 @1920 (4px) / @1440 (83px) overflow** | **A** authorise investigation + minimal fix · **B** accept and record as a known pre-existing deviation · **C** other explicit instruction | ⛔ **S14/S17 are not changed** |
+| **D3** | **The other 63 sub-13px shared rules** | **A** raise all to 13px · **B** exempt/retain selected rules · **C** leave open as a separate closure item | ⛔ **none raised.** ⭐ **A is NOT inferred from the five-rule ruling** — Q2 is closed as a *five-rule* decision, ⛔ not a blanket typography rule |
+| **D4** | **Screen approval scope (21 vs 22)** | reconciled below — ⛔ needs acknowledgement, not a choice | see §D4 |
+| **D5** | **Visual approvals** | per the matrix in §E | ⛔ no screen is marked closed on passing tests alone |
+
+⛔ **ALSO PARKED, ⛔ NOT IMPLEMENTED:** S07 RR Damage % · rejection taxonomy · S03 D1/D2 ·
+S03 export · Gate E · layout-assurance Option A.
+⛔ **The GUI is NOT complete.**
+
+---
+
+## D4 · 21 vs 22 — RECONCILED AGAINST THE REGISTER, ⛔ NOT BY ASSUMPTION
+
+🔴 **AND IT CORRECTS THIS PACK'S OWN EARLIER CLAIM.** §A previously said *"ALL 22 SCREENS ARE
+RE-OPENED"*. **That is WRONG: the number is 21.**
+
+**MEASURED:** `login.html` is a **standalone document** — it begins `<!doctype html>` and does
+**NOT** extend `base.html` (only `base.html`, `components.html` and `login.html` do not). It
+contains **zero** occurrences of `.nv-group`, `.sb-label`, `.sb-poll`, `.sb-pill`, `.sb-ver` and
+`.nv-label`. ⇒ **Screen 01 Login is NOT touched by Q2.**
+
+| quantity | count | basis |
+|---|---|---|
+| **Total registered screens** | **22** | numbered artwork specs `01.`–`22.` in `D:\Projects	rading-system\gui` |
+| **Screens browser-tested** | **21** | S02–S22. ⛔ **S01 excluded because it is the PRE-AUTH screen** and the QA harness force-authenticates every request, so it cannot render its real unauthenticated state |
+| **Screens in Q2's blast radius** | **21** | every campaign screen that extends `base.html`. ⛔ **S01 is NOT in it** |
+| **Screens still requiring visual approval** | **22** | 21 re-opened by Q2 **＋ S01, which has never had a first approval** — ⭐ for its own reason, ⛔ not because of Q2 |
+
+⭐ **SO THE TWO NUMBERS WERE NEVER IN CONFLICT — they count different things**, and the closure
+pass's phrase *"all 21 **authenticated** screens"* was already precise. ⛔ What was imprecise was
+this pack calling Q2's radius 22.
+
+⚠️ **AND A THIRD NUMBER, SURFACED BY THE SAME CHECK: `base.html` is extended by 30 templates,
+⛔ not 21.** The other **9** — `alerts` · `capacity` · `capital` · `exposure` · `pnl` ·
+`reports` · `risk` · `statistics` · `vm` — are **legacy/pre-redesign routes outside the 01–22
+campaign**. They are **served by the app** and therefore **also carry the Q2 change**, but they
+are ⛔ **not** in the approval scope and were ⛔ **not** browser-tested. 📌 Recorded so the Q2
+radius is not later understated: **21 campaign screens + 9 non-campaign templates = 30.**
+
+---
+
 ---
 
 ## A · Q2 — SHARED CHROME AT 13px · `1a647f4498e04249cb7499267c1cf038e72d4003`
@@ -28,10 +75,13 @@ raising them now would start a second uncontrolled 22-screen approval cycle.
 ⚠️ **`.btn-logout` (12.48px) is the most visible survivor** — readable text, present on
 **every** screen's sub-13px list. It is listed, ⛔ not changed.
 
-### 🔴 SCREENS RE-OPENED BY Q2
-`.nv-group` · `.sb-label` · `.sb-poll` · `.sb-pill` · `.sb-ver` live in **`base.html`**, which
-every page extends ⇒ **ALL 22 SCREENS ARE RE-OPENED.** ⛔ Not hidden, ⛔ not minimised — it is
-the accepted cost of the ruling.
+### 🔴 SCREENS RE-OPENED BY Q2 — **21, ⛔ NOT 22** (corrected; see §D4)
+`.nv-group` · `.sb-label` · `.sb-poll` · `.sb-pill` · `.sb-ver` live in **`base.html`**.
+⇒ **21 campaign screens (S02–S22) are re-opened**, plus **9 non-campaign legacy templates**
+that also extend it. ⛔ **Screen 01 Login is NOT re-opened** — `login.html` is standalone, does
+not extend `base.html`, and uses none of the five classes (measured).
+⛔ Not hidden, ⛔ not minimised — the radius is the accepted cost of the ruling; ⭐ it is simply
+**one screen smaller than this pack first stated**.
 
 ---
 
@@ -115,7 +165,7 @@ the two runs cannot be compared. ⭐ This is exactly the gap `SEEDING.md` now cl
 
 | Screen | Current state | Action required | Reason |
 |---|---|---|---|
-| **S01 Login** | built, never approved | **FIRST APPROVAL** + re-verify | Q2 chrome |
+| **S01 Login** | built, never approved | **FIRST APPROVAL** | ⛔ **NOT Q2** — standalone template, untouched by the shared chrome. ⛔ Also never browser-tested (pre-auth) |
 | **S02 Dashboard** | approved 18-Aug | **RE-APPROVAL** | Q2 chrome |
 | **S03 Strategies** | ⚠️ **CHANGED TODAY** (Q3) | **RE-APPROVAL** + rule the **placement interpretation** (B-2) | Q3 + Q2 chrome |
 | **S04 Signals** | built, never approved | **FIRST APPROVAL** + re-verify | Q2 chrome |
@@ -138,8 +188,9 @@ the two runs cannot be compared. ⭐ This is exactly the gap `SEEDING.md` now cl
 | **S21 Scanner Attribution** | built | **APPROVAL** + re-verify | Q2 chrome |
 | **S22 Holdings** | built | **APPROVAL** + re-verify | Q2 chrome |
 
-⚠️ **EVERY ROW carries "Q2 chrome"** — that is the single decision's full blast radius, stated
-once per screen rather than summarised away.
+⚠️ **EVERY ROW EXCEPT S01 carries "Q2 chrome"** — 21 of 22. That is the decision's full blast
+radius, stated once per screen rather than summarised away. ⛔ **S01 is the one exception and it
+is marked as such**, ⭐ so the radius is neither overstated nor quietly rounded up.
 
 ### S09 / S12 FINAL SPOT-CHECK AFTER THE SHARED CSS CHANGE — ⛔ NO REGRESSION
 | | 1920×1080 | 1440×900 |
