@@ -799,3 +799,41 @@ def test_hc_centres_the_heading_only_and_never_the_data_cell(tpl: str) -> None:
         css = fh.read()
     assert ".pos-page .pos-tbl th.hc { text-align: center; }" in css
     assert ".pos-page .pos-tbl th.ctr, .pos-page .pos-tbl td.ctr" in css
+
+
+def test_grouped_bands_are_separated_by_a_rule_at_every_boundary(tpl: str) -> None:
+    """Rama, 20-Aug: the four grouped pairs must be visually separable.
+
+    Qty / Entry / SL / TGT sat flush against one another, so eight System|Broker
+    sub-headings read as one undifferentiated run and an operator could not see
+    where a band ended. A 1px rule now marks every BAND BOUNDARY.
+
+    The boundary is computed from the CURRENT column order, so a drag carries it
+    with the band. ⛔ Never nth-child — these columns are reorderable, and a
+    positional rule would leave the separator behind on the old index.
+    """
+    assert "sep: prev !== null && prev !== g" in tpl, \
+        "groups() no longer reports where a band starts"
+    assert "g.sep ? 'sep' : ''" in tpl, "the group row does not bind sep"
+
+    isep = re.search(r"isSep\(c\) \{.*?\n      \},", tpl, re.S).group(0)
+    assert "findIndex(x => x.key === c.key)" in isep, \
+        "isSep must match by key — identity lookup can fail in the nested row scope"
+    # strip comments first — the only legitimate mentions of nth-child in this
+    # file are the two comments that FORBID it
+    code = re.sub(r"/\*.*?\*/", "", tpl, flags=re.S)
+    assert "nth-child" not in code, "a positional rule breaks drag-reorder"
+
+    # the rule has to reach BOTH header rows and the body, or a band is only
+    # delimited at its top and stops being traceable down the rows
+    th = re.search(r"<th :class=\"\[c\.num[^\]]*\]\"", tpl, re.S).group(0)
+    td = re.search(r"<td :class=\"\[[^\]]*\]\"", tpl).group(0)
+    assert "isSep(c)" in th, "the sub-heading row is not separated"
+    assert "isSep(c)" in td, "the body is not separated — the band stops at the header"
+
+    css_path = os.path.join(_HERE, "..", "frontend", "static", "style.css")
+    with open(css_path, encoding="utf-8") as fh:
+        css = fh.read()
+    rule = re.search(r"\.pos-page \.pos-tbl th\.sep[^}]*\}", css).group(0)
+    assert "border-left: 1px solid var(--card-bd)" in rule, \
+        "the separator must reuse the group underline's own token — no new colour"

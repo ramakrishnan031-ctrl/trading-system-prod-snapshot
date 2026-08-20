@@ -159,12 +159,12 @@
                    This is what carries Qty / Entry / SL / TGT as System|Broker pairs. -->
               <tr class="ord-grp">
                 <template x-for="g in groups()" :key="g.id">
-                  <th :colspan="g.span" :class="g.label ? 'is-grp' : ''"><span x-text="g.label"></span></th>
+                  <th :colspan="g.span" :class="[g.label ? 'is-grp' : '', g.sep ? 'sep' : '']"><span x-text="g.label"></span></th>
                 </template>
               </tr>
               <tr>
                 <template x-for="c in cols" :key="c.key">
-                  <th :class="[c.num ? 'rt' : '', c.ctr ? 'ctr' : '', c.hc ? 'hc' : '',
+                  <th :class="[c.num ? 'rt' : '', c.ctr ? 'ctr' : '', c.hc ? 'hc' : '', isSep(c) ? 'sep' : '',
                                dragKey === c.key ? 'is-drag' : '',
                                overKey === c.key ? 'is-over' : '']"
                       draggable="true" role="button" tabindex="0"
@@ -186,7 +186,7 @@
                 <tr class="ord-row" :class="sel && sel.trade_id === r.trade_id ? 'is-sel' : ''"
                     @click="rowClick($event, r)">
                   <template x-for="c in cols" :key="c.key">
-                    <td :class="[c.num ? 'rt' : '', c.ctr ? 'ctr' : '']" x-html="cell(r, c)"></td>
+                    <td :class="[c.num ? 'rt' : '', c.ctr ? 'ctr' : '', isSep(c) ? 'sep' : '']" x-html="cell(r, c)"></td>
                   </template>
                 </tr>
               </template>
@@ -881,15 +881,32 @@ function positionsPage() {
       /* group header row: merge CONSECUTIVE columns sharing `group`. A drag that
          separates a pair simply un-merges it — the group never traps a column. */
       groups() {
-        const out = []; let i = 0, id = 0;
+        const out = []; let i = 0, id = 0, prev = null;
         while (i < this.cols.length) {
           const g = this.cols[i].group || "";
           let n = 1;
           while (g && i + n < this.cols.length && this.cols[i + n].group === g) n++;
-          out.push({ id: id++, label: g && n > 1 ? g : "", span: g && n > 1 ? n : 1 });
+          /* `sep` marks a BAND BOUNDARY -- where one group ends and the next thing
+             begins. It is what stops Qty|Entry|SL|TGT reading as one undifferentiated
+             run of System/Broker sub-headings. */
+          out.push({ id: id++, label: g && n > 1 ? g : "", span: g && n > 1 ? n : 1,
+                     sep: prev !== null && prev !== g });
+          prev = g;
           i += (g && n > 1) ? n : 1;
         }
         return out;
+      },
+
+      /* A column starts a new band when its `group` differs from its LEFT
+         neighbour's. Computed from the CURRENT `cols` order, so a drag carries the
+         separator with the band -- never nth-child. */
+      isSep(c) {
+        /* Keyed by `c.key`, ⛔ not indexOf — the body loop is nested inside the row
+           loop, where Alpine may hand out a different reactive proxy for the same
+           column object; an identity lookup would then return -1 and silently drop
+           the separator. A key comparison cannot fail that way. */
+        const i = this.cols.findIndex(x => x.key === c.key);
+        return i > 0 && (this.cols[i].group || "") !== (this.cols[i - 1].group || "");
       },
 
       cell(r, c) {

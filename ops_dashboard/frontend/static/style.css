@@ -1786,6 +1786,15 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
    DEFINITION, ⛔ never nth-child: these columns are drag-reorderable, so a
    positional selector would centre the wrong heading after a drag. */
 .pos-page .pos-tbl th.hc { text-align: center; }
+/* Rama, 20-Aug: the four grouped pairs (Qty / Entry / SL / TGT) sat flush
+   against each other, so eight System|Broker sub-headings read as one run and
+   an operator could not see where a band ended. A 1px rule at each BAND
+   BOUNDARY separates them. ⭐ Reuses the group underline's own token
+   (--card-bd) — ⛔ no new colour, ⛔ no new visual concept, ⛔ no extra width.
+   Driven by `sep` computed from the CURRENT column order, so a drag carries
+   the boundary with the band. */
+.pos-page .pos-tbl th.sep, .pos-page .pos-tbl td.sep,
+.pos-page .ord-grp th.sep { border-left: 1px solid var(--card-bd); }
 .pos-page .pos-tbl td.ctr { font-variant-numeric: tabular-nums; white-space: nowrap; }
 
 
