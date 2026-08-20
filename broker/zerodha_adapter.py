@@ -1414,6 +1414,26 @@ class ZerodhaAdapter:
             )
         return new_price, new_trigger
 
+    @property
+    def produces_broker_equivalent_margins(self) -> bool:
+        """Does get_margins() report REAL broker cash and REAL blocked margin?
+
+        Pure and stateless — a capability answer about this adapter's margin
+        data, deliberately NOT a "are we in paper mode?" question. Consumers
+        that reconcile against `net`/`used` ask THIS; they must not branch on
+        a mode label (order_reconciler RC15: paper behaviour is owned by the
+        adapter, not special-cased in the reconciler).
+
+        False in paper: the branch below returns `net = self._paper_capital`
+        (the paper ledger, which moves only with realised PnL) and `used = 0.0`
+        HARDCODED — margin blocking is not simulated at all. So a paper `net`
+        cannot be compared against any expectation that deducts deployed
+        capital, and a paper `used` cannot be reconciled against held margin.
+        Paper simulation of blocked margin is designed-and-owed work; until it
+        lands, both comparisons are unexercisable in paper by construction.
+        """
+        return not self._paper
+
     def get_margins(self) -> MarginInfo:
         """Return equity margin info from kite."""
         t0 = time.monotonic()

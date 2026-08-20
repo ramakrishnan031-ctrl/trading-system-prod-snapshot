@@ -27,10 +27,15 @@ RC5  — Six reconciliation checks per cycle:
 RC6  — 3-tier action policy: COSMETIC / RECOVERABLE / UNRECOVERABLE (G1).
 RC7  — G5b crash-recovery SL: for each OPEN/PARTIAL trade with no active SL
         order, fetch LTP via quote_fn and place a fresh SL (stop-limit) or MARKET exit.
-RC8  — G3 Level 3 capital drift: compare adapter.get_margins().net to
-        fund_manager.get_snapshot().total; if delta >
-        cfg.capital_drift_tolerance publish CapitalDriftDetected and send a
-        CRITICAL alert.
+RC8  — G3 Level 3 capital drift: compare adapter.get_margins().net to the
+        EXPECTED broker net (fund_manager.get_snapshot().total, less capital
+        held against open/reserved positions, less today's realised PnL the
+        broker has not credited yet); if delta > cfg.capital_drift_tolerance
+        publish CapitalDriftDetected and send a CRITICAL alert. A SECOND,
+        separate reconciliation compares held margin to margins.used and its
+        residual is reported, never absorbed into the drift delta. Both are
+        LIVE-only: they run when the adapter reports
+        produces_broker_equivalent_margins.
 RC9  — ReconciliationAction dataclass fields: check_name, tier, symbol,
         trade_id (nullable), description, action_taken, success.
 RC10 — Each non-COSMETIC action is persisted to reconciliation_log via
@@ -3565,8 +3570,65 @@ class OrderReconciler:
         self, cycle_auth_errors: list
     ) -> Optional[ReconciliationAction]:
         """
-        G3 Level 3: compare adapter.get_margins().net to
-        fund_manager.get_snapshot().total (RC8).
+        G3 Level 3 (RC8). TWO checks, deliberately NOT merged:
+
+          CHECK 1 (drift)  expected_broker_net  vs  margins.net
+          CHECK 2 (margin) system_held_capital  vs  margins.used
+
+        WHY CHECK 1 CHANGED (20-Aug-2026, measured live).
+        This compared `snapshot.total` directly against `margins.net`. Those are
+        DIFFERENT QUANTITIES, so an open book guaranteed a delta:
+
+          * `snapshot.total` is REAL CAPITAL — the account value. It is mutated
+            at exactly five sites (fund_manager INIT / SYNC / carry / +-PnL) and
+            by NO reserve or commit path, so it does not fall when a position is
+            opened. That is correct and must stay correct.
+          * `margins.net` is broker CASH, which DOES fall by the margin the
+            broker blocks, and does NOT include today's realised PnL (equity
+            settles T+1).
+
+        Measured 20-Aug: four CRITICAL alarms, deltas 1155.50 / 1101.63 /
+        1572.82 / 1311.86, every one of which decomposed EXACTLY (residual 0.00)
+        into broker-blocked margin + today's realised PnL. They were false
+        positives reporting normal deployment as capital loss.
+
+        The identity, from the same measurements:
+
+            margins.net == snapshot.total - held - daily_realized_pnl
+
+        where `held` is reserved+used across both buckets. FIX-190 had papered
+        over this by widening the in-session tolerance to 10% of `expected` —
+        its own comment says the band exists because "broker margin legitimately
+        drops by the deployed capital". That band is left untouched here: this
+        change removes the REASON for it rather than the band, and retiring the
+        band is a separate decision needing multi-day observation.
+
+        CARRY CANCELS, and is deliberately absent from CHECK 1. For a position
+        carried overnight the broker had ALREADY removed its margin from `net`
+        before today began; rehydrate names that as `*_carry` and lifts `_total`
+        by it (fund_manager FIX 1). So with carry C, broker net N, new margin M:
+        total = N + C, held = C + M, expected = (N+C) - (C+M) = N - M. Exact.
+        CHECK 2 DOES subtract carry, because a carried position contributes to
+        `held` but (being already settled) not to today's broker `used`.
+
+        KNOWN RESIDUALS — CHECK 1 is not expected to reach 0.00:
+          (a) broker MIS margin is per-instrument and marked to market, while
+              leverage_map.INTRADAY is a flat 5.0 (20-Aug: ~Rs 0.32 on one leg;
+              INFERRED, order_margins() was not called to prove it);
+          (b) the 5% RESERVE buffer overstates `held` between placement and
+              fill (20-Aug 11:07:14: Rs 21.64, cleared at COMMIT 19s later);
+          (c) after a MID-SESSION restart, initialize() sets _total from broker
+              cash and _intraday_carry is deliberately left 0.0 (fund_manager
+              FIX 1, "NOT MEASURED"), so an open intraday position leaves a
+              residual. Pre-existing structure, surfaced here, not created here.
+
+        DELTA SEMANTICS AND THE KILL LADDER: unchanged in effect. G3 publishes
+        with source_module="order_reconciler", which is NOT in drift_handler's
+        _ESCALATING_SOURCES {fund_manager, fund_manager_self_check,
+        fund_manager_bucket_overflow}; drift_handler DH1 logs it at INFO and
+        ignores it for escalation, and its docstring already anticipates that
+        reconciler delta semantics differ. So narrowing this delta cannot change
+        kill escalation in either direction.
 
         If |actual - expected| > cfg.capital_drift_tolerance:
           - Publish CapitalDriftDetected(expected, actual, delta)
@@ -3575,6 +3637,32 @@ class OrderReconciler:
         cycle_auth_errors is the shared mutable list used by _reconcile() to
         track per-cycle auth errors (RC12).
         """
+        # RC15 is preserved: the reconciler does NOT branch on a paper/live mode
+        # label. It asks the ADAPTER a capability question about its own margin
+        # data, and the adapter owns that answer. Absent the capability (older or
+        # third-party adapters, test doubles) the check RUNS — fail-safe, so this
+        # guard can never weaken or suppress the LIVE check.
+        #
+        # Paper reports net = paper capital and used = 0.0 hardcoded, so BOTH
+        # checks below are unexercisable there: CHECK 1 would compare an
+        # expectation that deducts deployed capital against a figure that never
+        # does (manufacturing false CRITICAL alerts), and CHECK 2 would reconcile
+        # held margin against a constant zero. Skipping is the honest reading —
+        # the input does not exist. Simulating paper margin is designed and owed.
+        if not getattr(self._adapter, "produces_broker_equivalent_margins", True):
+            # Reuses the existing 30-min drift throttle (no new state): its first
+            # call in a session always returns True, so this is greppable at
+            # least once per session and cannot flood.
+            if self._should_alert_capital_drift():
+                self._log.warning(
+                    "G3 CAPITAL-DRIFT + MARGIN RECONCILIATION SKIPPED — adapter "
+                    "does not produce broker-equivalent margins (PAPER): net is "
+                    "the paper capital and used is hardcoded 0.0, so neither "
+                    "CHECK 1 (expected broker net) nor CHECK 2 (held vs used) "
+                    "is exercisable. LIVE-only by construction."
+                )
+            return None
+
         try:
             margins = self._adapter.get_margins()
         except BrokerTimeoutError:
@@ -3587,13 +3675,48 @@ class OrderReconciler:
             return None
 
         snapshot = self._fm.get_snapshot()
-        expected = snapshot.total
+
+        # Capital the system is holding against open/reserved positions. Both
+        # buckets, reserved AND used — the quantity the FundManager already
+        # maintains and already exports; nothing is recomputed or re-derived
+        # here, so this cannot disagree with the ledger.
+        held = (
+            snapshot.intraday_reserved + snapshot.intraday_used
+            + snapshot.positional_reserved + snapshot.positional_used
+        )
+        # REAL CAPITAL — untouched, and deliberately named so it is not confused
+        # with the broker-net expectation below.
+        real_capital = snapshot.total
+
+        # CHECK 1: what broker cash SHOULD read, given real capital, what we are
+        # holding, and the realised PnL the broker has not credited yet.
+        expected = real_capital - held - snapshot.daily_realized_pnl
         actual = margins.net
         delta = abs(actual - expected)
 
+        # CHECK 2: margin reconciliation, kept SEPARATE so its residual stays
+        # visible and is never absorbed into CHECK 1. Carry is excluded: a
+        # carried position's margin left the broker's `used` when it settled,
+        # but it is still in `held`.
+        held_today = held - (snapshot.intraday_carry + snapshot.positional_carry)
+        margin_residual = held_today - margins.used
+        # Measured every cycle (forensics) and carried in CHECK 1's alert
+        # context below. No alert of its own yet, and the reason is a
+        # measurement gap rather than convenience: broker `used` for a SETTLED
+        # CNC holding is unmeasured (it plausibly drops out of utilised.debits
+        # while `held` retains it), so alerting here would fire falsely on the
+        # first carry day. Owed: measure a T+1 carry, then decide a threshold.
+        self._log.debug(
+            "G3 MARGIN_RECON: held=%.2f carry=%.2f held_today=%.2f "
+            "broker_used=%.2f residual=%.2f",
+            held,
+            snapshot.intraday_carry + snapshot.positional_carry,
+            held_today, margins.used, margin_residual,
+        )
+
         # FIX-189 (P1-B): suppress the overnight false positive. Outside the
         # trading session the Zerodha funds endpoint returns net=0.0 (pre-auth /
-        # post-settlement); against a real local total that reads as a
+        # post-settlement); against a real expected net that reads as a
         # catastrophic drift and fired a false CRITICAL "Capital Drift" alert at
         # 04:24 while the service was (wrongly) running overnight. Gate ONLY this
         # exact pattern — broker net is exactly 0.0, real capital is expected, and
@@ -3652,11 +3775,15 @@ class OrderReconciler:
 
         if should_alert:
             self._log.error(
-                "G3 CAPITAL_DRIFT: expected=%.2f actual=%.2f delta=%.2f "
-                "tolerance=%.2f (base=%.2f human_orders=%s)",
+                "G3 CAPITAL_DRIFT: expected_net=%.2f actual_net=%.2f delta=%.2f "
+                "tolerance=%.2f (base=%.2f human_orders=%s) "
+                "[real_capital=%.2f held=%.2f realised_pnl=%.2f "
+                "held_today=%.2f broker_used=%.2f margin_residual=%.2f]",
                 expected, actual, delta, effective_tolerance,
                 self._cfg.capital_drift_tolerance,
                 sorted(self._human_order_symbols) or "none",
+                real_capital, held, snapshot.daily_realized_pnl,
+                held_today, margins.used, margin_residual,
             )
 
             try:
@@ -3674,10 +3801,19 @@ class OrderReconciler:
                     severity="CRITICAL",
                     title=f"[{self._mode}] ⚠️ Capital Drift Detected",
                     body=(
-                        f"Broker: ₹{float(actual):,.2f} | "
-                        f"Local: ₹{float(expected):,.2f}\n"
+                        # `expected` is the EXPECTED BROKER NET, not local
+                        # capital. Labelling it "Local" was what made the old
+                        # alert read as a loss when nothing was lost.
+                        f"Broker net: ₹{float(actual):,.2f} | "
+                        f"Expected net: ₹{float(expected):,.2f}\n"
                         f"Delta: ₹{float(delta):,.2f} "
-                        f"(tolerance: ₹{float(effective_tolerance):,.2f})"
+                        f"(tolerance: ₹{float(effective_tolerance):,.2f})\n"
+                        f"Real capital: ₹{float(real_capital):,.2f} | "
+                        f"Held: ₹{float(held):,.2f} | "
+                        f"Realised P&L today: ₹{float(snapshot.daily_realized_pnl):,.2f}\n"
+                        f"Margin recon: held(today) ₹{float(held_today):,.2f} "
+                        f"vs broker used ₹{float(margins.used):,.2f} "
+                        f"→ residual ₹{float(margin_residual):,.2f}"
                     ),
                     source_module="order_reconciler",
                     context={
@@ -3687,6 +3823,13 @@ class OrderReconciler:
                         "tolerance": effective_tolerance,
                         "base_tolerance": self._cfg.capital_drift_tolerance,
                         "human_orders": sorted(self._human_order_symbols),
+                        # CHECK 2 travels with CHECK 1 — never absorbed by it.
+                        "real_capital": real_capital,
+                        "held": held,
+                        "daily_realized_pnl": snapshot.daily_realized_pnl,
+                        "held_today": held_today,
+                        "broker_used": margins.used,
+                        "margin_residual": margin_residual,
                     },
                 )
             except Exception as exc:

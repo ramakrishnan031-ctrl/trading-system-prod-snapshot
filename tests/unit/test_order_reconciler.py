@@ -159,6 +159,48 @@ def _insert_order(
         )
 
 
+def _snap(
+    total: float,
+    *,
+    intraday_avail: float = 0.0,
+    intraday_reserved: float = 0.0,
+    intraday_used: float = 0.0,
+    positional_avail: float = 0.0,
+    positional_reserved: float = 0.0,
+    positional_used: float = 0.0,
+    daily_realized_pnl: float = 0.0,
+    intraday_carry: float = 0.0,
+    positional_carry: float = 0.0,
+):
+    """A REAL CapitalSnapshot, deliberately not a MagicMock.
+
+    G3 reads several snapshot fields (reserved/used per bucket, the day's
+    realised PnL, carry). A MagicMock snapshot answers every unset field with
+    another MagicMock, and MagicMock arithmetic silently yields a MagicMock —
+    so `delta <= tolerance` stops being a real comparison and the check quietly
+    stops firing while the test still looks green. Constructing the real frozen
+    dataclass means any future field change fails LOUDLY here instead.
+
+    Defaults are all 0.0, so `expected == total` and every pre-existing caller
+    keeps exactly the behaviour it was written to assert.
+    """
+    from capital.fund_manager import CapitalSnapshot
+
+    return CapitalSnapshot(
+        total=total,
+        intraday_avail=intraday_avail,
+        intraday_reserved=intraday_reserved,
+        intraday_used=intraday_used,
+        positional_avail=positional_avail,
+        positional_reserved=positional_reserved,
+        positional_used=positional_used,
+        daily_realized_pnl=daily_realized_pnl,
+        ts="2026-08-20T12:00:00+05:30",
+        intraday_carry=intraday_carry,
+        positional_carry=positional_carry,
+    )
+
+
 def _make_reconciler(
     store: StateStore,
     adapter=None,
@@ -181,8 +223,7 @@ def _make_reconciler(
         adapter.get_margins.return_value = _MarginInfo(net=100_000.0, available=80_000.0, used=20_000.0)
 
     if fund_manager is None:
-        snap = MagicMock()
-        snap.total = 100_000.0
+        snap = _snap(total=100_000.0)
         fund_manager = MagicMock()
         fund_manager.get_snapshot.return_value = snap
 
@@ -288,7 +329,7 @@ def test_check1_manual_close(tmp_path: Path) -> None:
     adapter.get_margins.return_value = _MarginInfo(net=100_000.0, available=80_000.0, used=20_000.0)
 
     fm = MagicMock()
-    snap = MagicMock(); snap.total = 100_000.0
+    snap = _snap(total=100_000.0)
     fm.get_snapshot.return_value = snap
 
     rec = _make_reconciler(store, adapter=adapter, fund_manager=fm)
@@ -327,7 +368,7 @@ def test_check1_manual_close_releases_capital(tmp_path: Path) -> None:
     adapter.get_margins.return_value = _MarginInfo(net=100_000.0, available=80_000.0, used=20_000.0)
 
     fm = MagicMock()
-    snap = MagicMock(); snap.total = 100_000.0
+    snap = _snap(total=100_000.0)
     fm.get_snapshot.return_value = snap
 
     rec = _make_reconciler(store, adapter=adapter, fund_manager=fm)
@@ -687,7 +728,7 @@ def test_manual_close_publishes_position_closed(tmp_path: Path) -> None:
         net=100_000.0, available=80_000.0, used=20_000.0)
 
     fm = MagicMock()
-    snap = MagicMock(); snap.total = 100_000.0
+    snap = _snap(total=100_000.0)
     fm.get_snapshot.return_value = snap
     fm.release_used.return_value = _stub_release_result(pnl_delta=0.0)
 
@@ -720,7 +761,7 @@ def test_manual_close_position_closed_has_breakeven_exit_price(tmp_path: Path) -
         net=100_000.0, available=80_000.0, used=20_000.0)
 
     fm = MagicMock()
-    snap = MagicMock(); snap.total = 100_000.0
+    snap = _snap(total=100_000.0)
     fm.get_snapshot.return_value = snap
     fm.release_used.return_value = _stub_release_result(pnl_delta=0.0)
 
@@ -755,7 +796,7 @@ def test_manual_close_publish_failure_does_not_raise(tmp_path: Path) -> None:
         net=100_000.0, available=80_000.0, used=20_000.0)
 
     fm = MagicMock()
-    snap = MagicMock(); snap.total = 100_000.0
+    snap = _snap(total=100_000.0)
     fm.get_snapshot.return_value = snap
     fm.release_used.return_value = _stub_release_result(pnl_delta=0.0)
 
@@ -792,7 +833,7 @@ def test_manual_close_position_closed_source_module_is_reconciler(tmp_path: Path
         net=100_000.0, available=80_000.0, used=20_000.0)
 
     fm = MagicMock()
-    snap = MagicMock(); snap.total = 100_000.0
+    snap = _snap(total=100_000.0)
     fm.get_snapshot.return_value = snap
     fm.release_used.return_value = _stub_release_result(pnl_delta=0.0)
 
@@ -824,7 +865,7 @@ def test_manual_close_for_short_publishes_position_closed(tmp_path: Path) -> Non
         net=100_000.0, available=80_000.0, used=20_000.0)
 
     fm = MagicMock()
-    snap = MagicMock(); snap.total = 100_000.0
+    snap = _snap(total=100_000.0)
     fm.get_snapshot.return_value = snap
     fm.release_used.return_value = _stub_release_result(pnl_delta=0.0)
 
@@ -865,7 +906,7 @@ def test_manual_close_skips_publish_when_entry_price_missing(tmp_path: Path) -> 
         net=100_000.0, available=80_000.0, used=20_000.0)
 
     fm = MagicMock()
-    snap = MagicMock(); snap.total = 100_000.0
+    snap = _snap(total=100_000.0)
     fm.get_snapshot.return_value = snap
 
     bus = EventBus()
@@ -908,7 +949,7 @@ def test_check2_orphan_adoption(tmp_path: Path) -> None:
     bus.subscribe(CapitalDriftDetected, received.append)
 
     fm = MagicMock()
-    snap = MagicMock(); snap.total = 100_000.0
+    snap = _snap(total=100_000.0)
     fm.get_snapshot.return_value = snap
 
     rec = _make_reconciler(store, adapter=adapter, bus=bus, fund_manager=fm)
@@ -954,7 +995,7 @@ def test_check4_partial_close(tmp_path: Path) -> None:
     adapter.get_trades.return_value = []   # exit-price falls to LTP/entry proxy
 
     fm = MagicMock()
-    snap = MagicMock(); snap.total = 100_000.0
+    snap = _snap(total=100_000.0)
     fm.get_snapshot.return_value = snap
     # M-O2: CHECK4 now calls release_used for the closed portion; return a real result.
     fm.release_used.return_value = ReleaseResult(
@@ -1003,7 +1044,7 @@ def test_check5_position_grew(tmp_path: Path) -> None:
     bus.subscribe(CapitalDriftDetected, received.append)
 
     fm = MagicMock()
-    snap = MagicMock(); snap.total = 100_000.0
+    snap = _snap(total=100_000.0)
     fm.get_snapshot.return_value = snap
 
     rec = _make_reconciler(store, adapter=adapter, bus=bus, fund_manager=fm)
@@ -1037,7 +1078,7 @@ def test_check6_orphan_order_detected(tmp_path: Path) -> None:
     adapter.get_margins.return_value = _MarginInfo(net=100_000.0, available=80_000.0, used=20_000.0)
 
     fm = MagicMock()
-    snap = MagicMock(); snap.total = 100_000.0
+    snap = _snap(total=100_000.0)
     fm.get_snapshot.return_value = snap
 
     # Broker open orders doesn't include broker_ord_abc
@@ -1068,7 +1109,7 @@ def test_check6_skipped_when_no_broker_orders_fn(tmp_path: Path) -> None:
     adapter.get_margins.return_value = _MarginInfo(net=100_000.0, available=80_000.0, used=20_000.0)
 
     fm = MagicMock()
-    snap = MagicMock(); snap.total = 100_000.0
+    snap = _snap(total=100_000.0)
     fm.get_snapshot.return_value = snap
 
     rec = _make_reconciler(store, adapter=adapter, fund_manager=fm,
@@ -1103,7 +1144,7 @@ def test_g5b_long_ltp_above_sl_places_slm(tmp_path: Path) -> None:
     adapter.place_order.return_value = placed
 
     fm = MagicMock()
-    snap = MagicMock(); snap.total = 100_000.0
+    snap = _snap(total=100_000.0)
     fm.get_snapshot.return_value = snap
 
     quote_fn = lambda syms: {"RELIANCE": _Quote("RELIANCE", last_price=2480.0)}
@@ -1150,7 +1191,7 @@ def test_g5b_long_ltp_below_sl_places_market(tmp_path: Path) -> None:
     adapter.place_order.return_value = placed
 
     fm = MagicMock()
-    snap = MagicMock(); snap.total = 100_000.0
+    snap = _snap(total=100_000.0)
     fm.get_snapshot.return_value = snap
 
     # LTP is below sl_initial
@@ -1187,7 +1228,7 @@ def test_g5b_short_ltp_below_sl_places_slm(tmp_path: Path) -> None:
     adapter.place_order.return_value = placed
 
     fm = MagicMock()
-    snap = MagicMock(); snap.total = 100_000.0
+    snap = _snap(total=100_000.0)
     fm.get_snapshot.return_value = snap
 
     # LTP is below sl_initial (favorable for short)
@@ -1226,7 +1267,7 @@ def test_g5b_short_ltp_above_sl_places_market(tmp_path: Path) -> None:
     adapter.place_order.return_value = placed
 
     fm = MagicMock()
-    snap = MagicMock(); snap.total = 100_000.0
+    snap = _snap(total=100_000.0)
     fm.get_snapshot.return_value = snap
 
     # LTP is above sl_initial (SL already breached for short)
@@ -1260,7 +1301,7 @@ def test_g5b_place_order_timeout_returns_failure_action(tmp_path: Path) -> None:
     adapter.place_order.side_effect = BrokerTimeoutError("timeout")
 
     fm = MagicMock()
-    snap = MagicMock(); snap.total = 100_000.0
+    snap = _snap(total=100_000.0)
     fm.get_snapshot.return_value = snap
 
     quote_fn = lambda syms: {"RELIANCE": _Quote("RELIANCE", last_price=2480.0)}
@@ -1291,7 +1332,7 @@ def test_g5b_skipped_when_sl_order_exists(tmp_path: Path) -> None:
     adapter.get_margins.return_value = _MarginInfo(net=100_000.0, available=80_000.0, used=20_000.0)
 
     fm = MagicMock()
-    snap = MagicMock(); snap.total = 100_000.0
+    snap = _snap(total=100_000.0)
     fm.get_snapshot.return_value = snap
 
     rec = _make_reconciler(store, adapter=adapter, fund_manager=fm)
@@ -1318,7 +1359,7 @@ def test_g3_capital_drift_exceeds_tolerance(tmp_path: Path) -> None:
     adapter.get_margins.return_value = _MarginInfo(net=90_000.0, available=70_000.0, used=20_000.0)
 
     fm = MagicMock()
-    snap = MagicMock(); snap.total = 100_000.0  # local says 100k; broker says 90k
+    snap = _snap(total=100_000.0)  # local says 100k; broker says 90k
     fm.get_snapshot.return_value = snap
 
     bus = EventBus()
@@ -1361,7 +1402,7 @@ def test_g3_capital_drift_within_tolerance(tmp_path: Path) -> None:
     adapter.get_margins.return_value = _MarginInfo(net=99_980.0, available=79_980.0, used=20_000.0)
 
     fm = MagicMock()
-    snap = MagicMock(); snap.total = 100_000.0  # delta = 20, tolerance = 50
+    snap = _snap(total=100_000.0)  # delta = 20, tolerance = 50
     fm.get_snapshot.return_value = snap
 
     bus = EventBus()
@@ -1400,7 +1441,7 @@ def test_fix182_human_order_suppresses_g3_drift_within_allowance(tmp_path: Path)
     adapter.get_margins.return_value = _MarginInfo(net=99_700.0, available=79_700.0, used=20_300.0)
 
     fm = MagicMock()
-    snap = MagicMock(); snap.total = 100_000.0
+    snap = _snap(total=100_000.0)
     fm.get_snapshot.return_value = snap
 
     bus = EventBus()
@@ -1432,7 +1473,7 @@ def test_fix182_g3_still_fires_beyond_human_allowance(tmp_path: Path) -> None:
     adapter.get_margins.return_value = _MarginInfo(net=90_000.0, available=70_000.0, used=30_000.0)
 
     fm = MagicMock()
-    snap = MagicMock(); snap.total = 100_000.0
+    snap = _snap(total=100_000.0)
     fm.get_snapshot.return_value = snap
 
     bus = EventBus()
@@ -1464,7 +1505,7 @@ def test_g3_get_margins_timeout_skips_check(tmp_path: Path) -> None:
     adapter.get_margins.side_effect = BrokerTimeoutError("margins timeout")
 
     fm = MagicMock()
-    snap = MagicMock(); snap.total = 100_000.0
+    snap = _snap(total=100_000.0)
     fm.get_snapshot.return_value = snap
 
     rec = _make_reconciler(store, adapter=adapter, fund_manager=fm)
@@ -1491,7 +1532,7 @@ def test_rc11_get_positions_timeout_skips_checks_1_to_5(tmp_path: Path) -> None:
     adapter.get_margins.return_value = _MarginInfo(net=100_000.0, available=80_000.0, used=20_000.0)
 
     fm = MagicMock()
-    snap = MagicMock(); snap.total = 100_000.0
+    snap = _snap(total=100_000.0)
     fm.get_snapshot.return_value = snap
 
     rec = _make_reconciler(store, adapter=adapter, fund_manager=fm)
@@ -1515,7 +1556,7 @@ def test_rc12_three_consecutive_auth_errors_trigger_soft_kill(tmp_path: Path) ->
     adapter.get_margins.side_effect = BrokerAuthError("auth fail")
 
     fm = MagicMock()
-    snap = MagicMock(); snap.total = 100_000.0
+    snap = _snap(total=100_000.0)
     fm.get_snapshot.return_value = snap
 
     kill_switch = MagicMock()
@@ -1553,7 +1594,7 @@ def test_rc12_counter_resets_on_success(tmp_path: Path) -> None:
     adapter.get_margins.return_value = _MarginInfo(net=100_000.0, available=80_000.0, used=20_000.0)
 
     fm = MagicMock()
-    snap = MagicMock(); snap.total = 100_000.0
+    snap = _snap(total=100_000.0)
     fm.get_snapshot.return_value = snap
 
     kill_switch = MagicMock()
@@ -1588,7 +1629,7 @@ def test_rc10_non_cosmetic_actions_persisted(tmp_path: Path) -> None:
     adapter.get_margins.return_value = _MarginInfo(net=100_000.0, available=80_000.0, used=20_000.0)
 
     fm = MagicMock()
-    snap = MagicMock(); snap.total = 100_000.0
+    snap = _snap(total=100_000.0)
     fm.get_snapshot.return_value = snap
 
     rec = _make_reconciler(store, adapter=adapter, fund_manager=fm)
@@ -1620,7 +1661,7 @@ def test_rc10_cosmetic_actions_not_persisted(tmp_path: Path) -> None:
     adapter.get_margins.return_value = _MarginInfo(net=100_000.0, available=80_000.0, used=20_000.0)
 
     fm = MagicMock()
-    snap = MagicMock(); snap.total = 100_000.0
+    snap = _snap(total=100_000.0)
     fm.get_snapshot.return_value = snap
 
     rec = _make_reconciler(store, adapter=adapter, fund_manager=fm)
@@ -1646,7 +1687,7 @@ def test_rc13_concurrent_cycle_returns_empty(tmp_path: Path) -> None:
     adapter.get_margins.return_value = _MarginInfo(net=100_000.0, available=80_000.0, used=20_000.0)
 
     fm = MagicMock()
-    snap = MagicMock(); snap.total = 100_000.0
+    snap = _snap(total=100_000.0)
     fm.get_snapshot.return_value = snap
 
     rec = _make_reconciler(store, adapter=adapter, fund_manager=fm)
@@ -1678,7 +1719,7 @@ def test_rc14_startup_reconciliation(tmp_path: Path) -> None:
     adapter.get_margins.return_value = _MarginInfo(net=100_000.0, available=80_000.0, used=20_000.0)
 
     fm = MagicMock()
-    snap = MagicMock(); snap.total = 100_000.0
+    snap = _snap(total=100_000.0)
     fm.get_snapshot.return_value = snap
 
     rec = _make_reconciler(store, adapter=adapter, fund_manager=fm,
@@ -1710,7 +1751,7 @@ def test_manual_close_idempotent(tmp_path: Path) -> None:
     adapter.get_margins.return_value = _MarginInfo(net=100_000.0, available=80_000.0, used=20_000.0)
 
     fm = MagicMock()
-    snap = MagicMock(); snap.total = 100_000.0
+    snap = _snap(total=100_000.0)
     fm.get_snapshot.return_value = snap
 
     rec = _make_reconciler(store, adapter=adapter, fund_manager=fm)
@@ -1748,7 +1789,7 @@ def test_check1_skips_release_when_trade_already_closed(tmp_path: Path) -> None:
         net=100_000.0, available=80_000.0, used=20_000.0)
 
     fm = MagicMock()
-    snap = MagicMock(); snap.total = 100_000.0
+    snap = _snap(total=100_000.0)
     fm.get_snapshot.return_value = snap
 
     # Simulate order_placer closing the trade before reconciler acts
@@ -1790,7 +1831,7 @@ def test_check1_releases_when_trade_genuinely_open(tmp_path: Path) -> None:
         net=100_000.0, available=80_000.0, used=20_000.0)
 
     fm = MagicMock()
-    snap = MagicMock(); snap.total = 100_000.0
+    snap = _snap(total=100_000.0)
     fm.get_snapshot.return_value = snap
 
     rec = _make_reconciler(store, adapter=adapter, fund_manager=fm)
@@ -1822,7 +1863,7 @@ def test_reconcile_empty_db_returns_empty(tmp_path: Path) -> None:
     adapter.get_margins.return_value = _MarginInfo(net=100_000.0, available=80_000.0, used=20_000.0)
 
     fm = MagicMock()
-    snap = MagicMock(); snap.total = 100_000.0
+    snap = _snap(total=100_000.0)
     fm.get_snapshot.return_value = snap
 
     rec = _make_reconciler(store, adapter=adapter, fund_manager=fm)
@@ -1883,7 +1924,7 @@ def test_bl3_check7_no_drift_when_fm_matches_ledger(tmp_path: Path) -> None:
     store = _make_store(tmp_path)
 
     fm = MagicMock()
-    snap = MagicMock(); snap.total = 100_000.0
+    snap = _snap(total=100_000.0)
     fm.get_snapshot.return_value = snap
     fm.get_live_reservations.return_value = {
         "rid_ok": _FakeReservation(
@@ -1917,7 +1958,7 @@ def test_bl3_check7_single_rid_drift_publishes_and_emits_action(
     store = _make_store(tmp_path)
 
     fm = MagicMock()
-    snap = MagicMock(); snap.total = 100_000.0
+    snap = _snap(total=100_000.0)
     fm.get_snapshot.return_value = snap
     fm.get_live_reservations.return_value = {
         "rid_drift": _FakeReservation(
@@ -1964,7 +2005,7 @@ def test_bl3_check7_multiple_drifts_per_reservation_reporting(
     store = _make_store(tmp_path)
 
     fm = MagicMock()
-    snap = MagicMock(); snap.total = 100_000.0
+    snap = _snap(total=100_000.0)
     fm.get_snapshot.return_value = snap
     fm.get_live_reservations.return_value = {
         "rid_a": _FakeReservation("rid_a", "RELIANCE", 1_000.0),
@@ -2009,7 +2050,7 @@ def test_bl3_check7_sub_tolerance_drift_ignored(tmp_path: Path) -> None:
     store = _make_store(tmp_path)
 
     fm = MagicMock()
-    snap = MagicMock(); snap.total = 100_000.0
+    snap = _snap(total=100_000.0)
     fm.get_snapshot.return_value = snap
     fm.get_live_reservations.return_value = {
         "rid_tiny": _FakeReservation("rid_tiny", "RELIANCE", 1_000.50),
@@ -2793,7 +2834,7 @@ def test_task11_capital_drift_fixed_30min_interval(tmp_path: Path, caplog) -> No
     adapter.get_margins.return_value = _MarginInfo(net=90_000.0, available=70_000.0, used=20_000.0)
 
     fm = MagicMock()
-    snap = MagicMock(); snap.total = 100_000.0
+    snap = _snap(total=100_000.0)
     fm.get_snapshot.return_value = snap
 
     bus = EventBus()
@@ -2836,7 +2877,7 @@ def test_task11_capital_drift_resets_after_resolved(tmp_path: Path) -> None:
     adapter.get_margins.return_value = _MarginInfo(net=90_000.0, available=70_000.0, used=20_000.0)
 
     fm = MagicMock()
-    snap = MagicMock(); snap.total = 100_000.0
+    snap = _snap(total=100_000.0)
     fm.get_snapshot.return_value = snap
 
     bus = EventBus()
@@ -2888,7 +2929,7 @@ def test_itemb_drift_logs_once_per_episode_not_per_cycle(tmp_path: Path) -> None
     adapter.get_positions.return_value = []
     adapter.get_margins.return_value = _MarginInfo(net=90_000.0, available=70_000.0, used=20_000.0)
 
-    fm = MagicMock(); snap = MagicMock(); snap.total = 100_000.0
+    fm = MagicMock(); snap = _snap(total=100_000.0)
     fm.get_snapshot.return_value = snap
 
     bus = EventBus()
@@ -2919,7 +2960,7 @@ def test_itemb_two_episodes_two_rows(tmp_path: Path) -> None:
     ok = _MarginInfo(net=100_000.0, available=80_000.0, used=20_000.0)
     adapter.get_margins.return_value = drift
 
-    fm = MagicMock(); snap = MagicMock(); snap.total = 100_000.0
+    fm = MagicMock(); snap = _snap(total=100_000.0)
     fm.get_snapshot.return_value = snap
 
     bus = EventBus()
@@ -2974,7 +3015,7 @@ def test_fixb_orphan_auto_close_after_3_cycles(tmp_path: Path) -> None:
     adapter.get_open_orders.return_value = []
 
     fm = MagicMock()
-    snap = MagicMock(); snap.total = 100_000.0
+    snap = _snap(total=100_000.0)
     fm.get_snapshot.return_value = snap
 
     rec = _make_reconciler(store, adapter=adapter, fund_manager=fm, broker_orders_fn=adapter.get_open_orders)
@@ -3038,7 +3079,7 @@ def test_fixb_orphan_counter_reset_when_order_found(tmp_path: Path) -> None:
     adapter.get_margins.return_value = _MarginInfo(net=100_000.0, available=80_000.0, used=20_000.0)
 
     fm = MagicMock()
-    snap = MagicMock(); snap.total = 100_000.0
+    snap = _snap(total=100_000.0)
     fm.get_snapshot.return_value = snap
 
     rec = _make_reconciler(store, adapter=adapter, fund_manager=fm, broker_orders_fn=adapter.get_open_orders)
@@ -3108,7 +3149,7 @@ def test_task4_stuck_exiting_flat_finalizes_closed_manual(tmp_path: Path) -> Non
     adapter = MagicMock()
     adapter.get_positions.return_value = []   # broker flat (flatten succeeded)
     adapter.get_margins.return_value = _MarginInfo(net=100_000.0, available=80_000.0, used=20_000.0)
-    fm = MagicMock(); snap = MagicMock(); snap.total = 100_000.0
+    fm = MagicMock(); snap = _snap(total=100_000.0)
     fm.get_snapshot.return_value = snap
 
     rec = _make_reconciler(store, adapter=adapter, fund_manager=fm)
@@ -3136,7 +3177,7 @@ def test_task4_fresh_exiting_not_resolved(tmp_path: Path) -> None:
     adapter = MagicMock()
     adapter.get_positions.return_value = []   # flat, but trade is fresh
     adapter.get_margins.return_value = _MarginInfo(net=100_000.0, available=80_000.0, used=20_000.0)
-    fm = MagicMock(); snap = MagicMock(); snap.total = 100_000.0
+    fm = MagicMock(); snap = _snap(total=100_000.0)
     fm.get_snapshot.return_value = snap
 
     rec = _make_reconciler(store, adapter=adapter, fund_manager=fm)
@@ -3164,7 +3205,7 @@ def test_task4_stuck_exiting_with_position_reverts_to_open(tmp_path: Path) -> No
     adapter = MagicMock()
     adapter.get_positions.return_value = [_Position("RELIANCE", qty=10, avg_price=2500.0)]
     adapter.get_margins.return_value = _MarginInfo(net=100_000.0, available=80_000.0, used=20_000.0)
-    fm = MagicMock(); snap = MagicMock(); snap.total = 100_000.0
+    fm = MagicMock(); snap = _snap(total=100_000.0)
     fm.get_snapshot.return_value = snap
     notifier = MagicMock(); notifier.send.return_value = MagicMock(success=True)
 
@@ -3322,7 +3363,7 @@ def test_fix189_g3_drift_skipped_when_broker_net_zero_offhours(tmp_path: Path) -
     adapter.get_margins.return_value = _MarginInfo(net=0.0, available=0.0, used=0.0)
 
     fm = MagicMock()
-    snap = MagicMock(); snap.total = 10_000.0  # real local capital expected
+    snap = _snap(total=10_000.0)  # real local capital expected
     fm.get_snapshot.return_value = snap
 
     bus = EventBus()
@@ -3357,7 +3398,7 @@ def test_fix189_g3_drift_still_alerts_in_session_when_net_zero(tmp_path: Path) -
     adapter.get_margins.return_value = _MarginInfo(net=0.0, available=0.0, used=0.0)
 
     fm = MagicMock()
-    snap = MagicMock(); snap.total = 10_000.0
+    snap = _snap(total=10_000.0)
     fm.get_snapshot.return_value = snap
 
     bus = EventBus()
@@ -3381,3 +3422,281 @@ def test_fix189_g3_drift_still_alerts_in_session_when_net_zero(tmp_path: Path) -
     notifier.send.assert_called_once()
     assert notifier.send.call_args.kwargs["severity"] == "CRITICAL"
     store.close()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# G3 CAPITAL-DRIFT COMPARATOR (20-Aug-2026)
+#
+# The check used to compare `snapshot.total` (REAL CAPITAL — account value,
+# which correctly does NOT fall when a position opens) against `margins.net`
+# (broker CASH — which DOES fall by blocked margin and excludes today's
+# realised PnL until T+1 settlement). Unlike quantities, so an open book
+# guaranteed a delta. It fired four false CRITICALs on 20-Aug-2026.
+#
+# CHECK 1 now compares the EXPECTED broker net:
+#     expected = total - held - daily_realized_pnl
+# CHECK 2 reconciles held margin against margins.used separately, and its
+# residual is reported rather than absorbed into CHECK 1.
+#
+# CASE numbering follows the authorising instruction's section E.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _drift_actions(actions):
+    return [a for a in actions if a.check_name == "CAPITAL_DRIFT"]
+
+
+def _drift_rig(tmp_path, *, snap, net, used, tolerance=50.0, live=True):
+    """One rig for every CASE below — no per-test bespoke wiring."""
+    store = _make_store(tmp_path)
+    adapter = MagicMock()
+    adapter.get_positions.return_value = []
+    adapter.produces_broker_equivalent_margins = live
+    adapter.get_margins.return_value = _MarginInfo(
+        net=net, available=net, used=used
+    )
+    fm = MagicMock()
+    fm.get_snapshot.return_value = snap
+    bus = EventBus()
+    received: list = []
+    bus.subscribe(CapitalDriftDetected, received.append)
+    notifier = MagicMock()
+    notifier.send.return_value = MagicMock(success=True)
+    rec = _make_reconciler(
+        store, adapter=adapter, fund_manager=fm, bus=bus,
+        notifier=notifier, capital_drift_tolerance=tolerance,
+    )
+    return store, rec, received, notifier
+
+
+def test_g3_case1_flat_book_no_drift(tmp_path: Path) -> None:
+    """CASE 1 — flat book: real capital == broker net, nothing held, no alert."""
+    store, rec, received, notifier = _drift_rig(
+        tmp_path, snap=_snap(total=10_609.10), net=10_609.10, used=0.0,
+    )
+    assert _drift_actions(rec.reconcile_once()) == []
+    assert received == []
+    store.close()
+
+
+def test_g3_case2_one_open_position_no_false_alert(tmp_path: Path) -> None:
+    """CASE 2 — one open position: REAL CAPITAL UNCHANGED, held > 0, broker net
+    falls by the blocked margin. The old comparator alerted here; this must not.
+    """
+    snap = _snap(total=10_609.10, positional_used=688.55)
+    store, rec, received, notifier = _drift_rig(
+        tmp_path, snap=snap, net=10_609.10 - 688.55, used=688.55,
+    )
+    # The property that matters: real capital did NOT fall.
+    assert snap.total == 10_609.10
+    assert _drift_actions(rec.reconcile_once()) == []
+    assert received == []
+    notifier.send.assert_not_called()
+    store.close()
+
+
+def test_g3_case3_sequential_positions_expected_follows_held(tmp_path: Path) -> None:
+    """CASE 3 — held rises position by position; expected net follows it every
+    step and the comparison stays meaningful (never alerts on deployment alone).
+    """
+    held = 0.0
+    for idx, margin in enumerate((105.06, 688.55, 521.96)):
+        held += margin
+        snap = _snap(
+            total=10_609.10,
+            intraday_used=min(held, 105.06),
+            positional_used=max(0.0, held - 105.06),
+        )
+        store, rec, received, _ = _drift_rig(
+            tmp_path / f"step{idx}", snap=snap,
+            net=10_609.10 - held, used=held,
+        )
+        assert _drift_actions(rec.reconcile_once()) == [], f"held={held}"
+        assert received == []
+        store.close()
+
+
+def test_g3_case4_realised_pnl_not_double_counted(tmp_path: Path) -> None:
+    """CASE 4 — the third term. Real capital MOVES by realised PnL while broker
+    net does NOT (equity settles T+1). Subtracting it once must reconcile; a
+    double-count or a missing count would both show up as a delta here.
+    """
+    pnl = -4.03
+    held = 105.06 + 1_210.51
+    snap = _snap(
+        total=10_609.10 + pnl,           # _total absorbed the PnL (fund_manager)
+        intraday_used=105.06, positional_used=1_210.51,
+        daily_realized_pnl=pnl,          # ...and the day-scoped accumulator saw it
+    )
+    store, rec, received, _ = _drift_rig(
+        tmp_path, snap=snap,
+        net=10_609.10 - held,            # broker: opening less blocked, NO PnL
+        used=held,
+    )
+    assert _drift_actions(rec.reconcile_once()) == []
+    assert received == []
+    store.close()
+
+
+def test_g3_case5_genuine_unexplained_difference_still_alerts(tmp_path: Path) -> None:
+    """CASE 5 — THE FIX MUST NOT BLIND THE CHECK. Real money missing, with every
+    explained term already accounted for, still beyond tolerance -> ALERT.
+    """
+    held = 1_315.57
+    snap = _snap(total=10_609.10, intraday_used=105.06, positional_used=1_210.51)
+    store, rec, received, notifier = _drift_rig(
+        tmp_path, snap=snap,
+        net=10_609.10 - held - 5_000.00,   # 5k unexplained shortfall
+        used=held,
+    )
+    drift = _drift_actions(rec.reconcile_once())
+    assert len(drift) == 1
+    assert drift[0].tier == "UNRECOVERABLE"
+    assert len(received) == 1
+    assert abs(received[0].delta - 5_000.00) < 0.01
+    notifier.send.assert_called_once()
+    assert notifier.send.call_args.kwargs["severity"] == "CRITICAL"
+    store.close()
+
+
+def test_g3_case6_margin_residual_reported_not_absorbed(tmp_path: Path) -> None:
+    """CASE 6 — CHECK 2 stays visible. A small held-vs-broker-used difference
+    must be reported in its own right, NOT folded into the drift delta.
+    """
+    held = 1_315.57
+    snap = _snap(total=10_609.10, intraday_used=105.06, positional_used=1_210.51)
+    store, rec, received, notifier = _drift_rig(
+        tmp_path, snap=snap,
+        net=10_609.10 - held - 5_000.00,   # force the alert so context is emitted
+        used=held + 0.32,                  # broker blocked marginally more
+    )
+    rec.reconcile_once()
+    ctx = notifier.send.call_args.kwargs["context"]
+    assert abs(ctx["margin_residual"] - (-0.32)) < 0.001
+    assert abs(ctx["held"] - held) < 0.001
+    assert abs(ctx["broker_used"] - (held + 0.32)) < 0.001
+    # ...and it did NOT leak into CHECK 1's delta.
+    assert abs(ctx["delta"] - 5_000.00) < 0.01
+    assert abs(ctx["real_capital"] - 10_609.10) < 0.001
+    store.close()
+
+
+def test_g3_carry_cancels_for_a_carried_position(tmp_path: Path) -> None:
+    """Day-boundary / T+1: a CARRIED position's margin left broker `net` before
+    today began; rehydrate names it as carry and lifts _total by it. CHECK 1
+    must therefore need no carry term, while CHECK 2 must subtract it (broker
+    `used` no longer holds a settled position).
+    """
+    carry = 688.55           # carried CNC, already out of broker net
+    new_margin = 521.96      # opened today
+    snap = _snap(
+        total=10_609.10 + carry,                 # account value, not cash
+        positional_used=carry + new_margin,
+        positional_carry=carry,
+    )
+    store, rec, received, _ = _drift_rig(
+        tmp_path, snap=snap,
+        net=10_609.10 - new_margin,              # broker: only today's block
+        used=new_margin,                         # settled carry absent from used
+    )
+    assert _drift_actions(rec.reconcile_once()) == []
+    assert received == []
+    store.close()
+
+
+def test_g3_skip_taken_when_adapter_margins_not_broker_equivalent(
+    tmp_path: Path, caplog
+) -> None:
+    """D1 / Option 2 — the skip is TAKEN when the adapter reports its margins are
+    not broker-equivalent (paper), and it is DECLARED, not silent.
+    """
+    import logging
+    # Numbers that WOULD alert loudly if the check ran.
+    snap = _snap(total=10_609.10, positional_used=1_210.51)
+    store, rec, received, notifier = _drift_rig(
+        tmp_path, snap=snap, net=10_609.10, used=0.0, live=False,
+    )
+    with caplog.at_level(logging.WARNING):
+        assert _drift_actions(rec.reconcile_once()) == []
+    assert received == [], "no drift event may be published when skipped"
+    notifier.send.assert_not_called()
+    joined = " ".join(r.getMessage() for r in caplog.records)
+    assert "CAPITAL-DRIFT + MARGIN RECONCILIATION SKIPPED" in joined
+    assert "PAPER" in joined
+    store.close()
+
+
+def test_g3_skip_not_taken_in_live(tmp_path: Path) -> None:
+    """D1 / Option 2 — the guard is paper-only and can never weaken LIVE. Same
+    numbers as the skip test, adapter reporting broker-equivalent margins.
+    """
+    snap = _snap(total=10_609.10, positional_used=1_210.51)
+    store, rec, received, notifier = _drift_rig(
+        tmp_path, snap=snap, net=10_609.10, used=0.0, live=True,
+    )
+    drift = _drift_actions(rec.reconcile_once())
+    assert len(drift) == 1, "LIVE must still evaluate the comparison"
+    assert len(received) == 1
+    store.close()
+
+
+def test_g3_missing_capability_attribute_runs_the_check(tmp_path: Path) -> None:
+    """Fail-safe: an adapter without the capability attribute (older / third
+    party / test double) must RUN the check, never silently skip it.
+    """
+    store = _make_store(tmp_path)
+    adapter = MagicMock(spec=["get_positions", "get_margins"])
+    adapter.get_positions.return_value = []
+    adapter.get_margins.return_value = _MarginInfo(
+        net=1_000.0, available=1_000.0, used=0.0
+    )
+    fm = MagicMock()
+    fm.get_snapshot.return_value = _snap(total=10_609.10)
+    bus = EventBus()
+    received: list = []
+    bus.subscribe(CapitalDriftDetected, received.append)
+    notifier = MagicMock()
+    notifier.send.return_value = MagicMock(success=True)
+    rec = _make_reconciler(
+        store, adapter=adapter, fund_manager=fm, bus=bus,
+        notifier=notifier, capital_drift_tolerance=50.0,
+    )
+    assert len(_drift_actions(rec.reconcile_once())) == 1
+    assert len(received) == 1
+    store.close()
+
+
+def test_g3_replays_the_four_measured_alarms_of_20aug2026(tmp_path: Path) -> None:
+    """REGRESSION FIXTURE — recorded production evidence, not invented numbers.
+
+    These are the four CRITICAL capital-drift alarms of 20-Aug-2026 with their
+    logged operands, and `held` recomputed from fm_ledger at each alarm's own
+    timestamp. Under the OLD comparator every one exceeded tolerance; under the
+    NEW one every delta collapses into the residual band and none alerts.
+
+    Deliberately NOT asserting 0.00: two residuals are real and named — the
+    broker's per-instrument MIS margin against a flat leverage_map 5.0, and the
+    5% RESERVE buffer between placement and fill (the 11:07:14 row).
+    """
+    alarms = [
+        # (tag,       total,     held,     realised, broker_net, old_delta)
+        ("101022", 10_609.10, 1_162.21,     0.00,  9_453.60, 1_155.50),
+        ("101224", 10_604.05, 1_105.27,    -5.05,  9_502.42, 1_101.63),
+        ("110714", 10_620.15, 1_583.41,    11.05,  9_047.33, 1_572.82),
+        ("113735", 10_605.07, 1_315.57,    -4.03,  9_293.21, 1_311.86),
+    ]
+    for tag, total, held, realised, net, old_delta in alarms:
+        snap = _snap(
+            total=total, positional_used=held, daily_realized_pnl=realised,
+        )
+        store, rec, received, _ = _drift_rig(
+            tmp_path / tag, snap=snap, net=net, used=held, tolerance=50.0,
+        )
+        assert _drift_actions(rec.reconcile_once()) == [], (
+            f"{tag}: must no longer alert (old delta was {old_delta})"
+        )
+        assert received == []
+        # ...and the improvement is real, not a tolerance widening:
+        new_delta = abs(net - (total - held - realised))
+        assert new_delta < 50.0
+        assert new_delta < old_delta / 10.0
+        store.close()
