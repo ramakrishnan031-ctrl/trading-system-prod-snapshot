@@ -140,7 +140,8 @@
               </tr>
               <tr>
                 <template x-for="c in cols" :key="c.key">
-                  <th :class="[c.num ? 'rt' : '', dragKey === c.key ? 'is-drag' : '',
+                  <th :class="[c.num ? 'rt' : '', c.hc ? 'hc' : '',
+                               dragKey === c.key ? 'is-drag' : '',
                                overKey === c.key ? 'is-over' : '']"
                       draggable="true" role="button" tabindex="0"
                       :title="c.label + ' — click to sort, drag to reorder'"
@@ -368,24 +369,28 @@ function ordersPage() {
       /* APPROVED ORDER — 12-Aug revision. Qty is a group of two;
          Entry/SL/TGT are SYSTEM prices, single columns. */
       DEFAULT_COLS: [
+        /* `hc` = heading centred in its own cell (Rama, 20-Aug): the fourteen
+           columns from Trade Type onward, matching Screen-04. It rides on the
+           column DEFINITION, not on a position, so a drag carries the centring
+           with its column. ⛔ Trading Date / Time / Strategy / Symbol stay LEFT. */
         { key: "date",        label: "Trading Date",    kind: "text" },
         { key: "time",        label: "Time",            kind: "text" },
         { key: "strategy",    label: "Strategy",        kind: "text" },
         { key: "symbol",      label: "Symbol",          kind: "sym"  },
-        { key: "trade_type",  label: "Trade Type",      kind: "type" },
-        { key: "direction",   label: "Direction",       kind: "dir"  },
-        { key: "system_score",    label: "System Score",    kind: "num", num: true },
-        { key: "score_threshold", label: "Score Threshold", kind: "num", num: true },
-        { key: "order_id",    label: "Broker Order ID", kind: "mono" },
-        { key: "status_label",label: "Status",          kind: "status" },
-        { key: "qty_requested", label: "System", group: "Qty", kind: "num", num: true },
-        { key: "qty_filled",    label: "Filled", group: "Qty", kind: "num", num: true },
-        { key: "entry_target_price", label: "Entry ₹", kind: "rs", num: true },
-        { key: "sl_initial",         label: "SL ₹",    kind: "rs", num: true },
-        { key: "tgt_initial",        label: "TGT ₹",   kind: "rs", num: true },
-        { key: "fill_pct",    label: "Fill %",      kind: "pct", num: true },
-        { key: "order_value", label: "Order Value", kind: "rs",  num: true },
-        { key: "actions",     label: "Actions",     kind: "act" },
+        { key: "trade_type",  label: "Trade Type",      kind: "type", hc: true },
+        { key: "direction",   label: "Direction",       kind: "dir",  hc: true },
+        { key: "system_score",    label: "System Score",    kind: "num", num: true, hc: true },
+        { key: "score_threshold", label: "Score Threshold", kind: "num", num: true, hc: true },
+        { key: "order_id",    label: "Broker Order ID", kind: "mono", hc: true },
+        { key: "status_label",label: "Status",          kind: "status", hc: true },
+        { key: "qty_requested", label: "System", group: "Qty", kind: "num", num: true, hc: true },
+        { key: "qty_filled",    label: "Filled", group: "Qty", kind: "num", num: true, hc: true },
+        { key: "entry_target_price", label: "Entry ₹", kind: "rs", num: true, hc: true },
+        { key: "sl_initial",         label: "SL ₹",    kind: "rs", num: true, hc: true },
+        { key: "tgt_initial",        label: "TGT ₹",   kind: "rs", num: true, hc: true },
+        { key: "fill_pct",    label: "Fill %",      kind: "pct", num: true, hc: true },
+        { key: "order_value", label: "Order Value", kind: "rs",  num: true, hc: true },
+        { key: "actions",     label: "Actions",     kind: "act", hc: true },
       ],
       cols: [], dragKey: "", overKey: "", _dragEndAt: 0,
       COLS_KEY: "screen05.orders.colOrder.v1",
@@ -411,6 +416,16 @@ function ordersPage() {
         return n >= 1e7 ? "₹" + (n / 1e7).toFixed(2) + " Cr" : this.money(n);
       },
       rs(v) { return (v === null || v === undefined || v === "") ? "₹—" : this.money(v); },
+      /* Rama, 20-Aug: ordinary TABLE DATA CELLS carry no currency symbol — 1175.00,
+         not ₹1175.00. ⛔ This is NOT a global de-currencying: `rs()` above is left
+         untouched, so the Order Details rail keeps ₹, and the KPI deck, the summary
+         panels and the "Entry ₹ / SL ₹ / TGT ₹" HEADINGS keep it too — exactly where
+         the approved design puts it. Reuses money() and strips only the symbol, so
+         the number formatting cannot drift away from the rest of the screen. */
+      rsCell(v) {
+        return (v === null || v === undefined || v === "")
+          ? "—" : String(this.money(v)).replace("₹", "");
+      },
       dirLabel(d) { const s = String(d || "").toUpperCase();
         return s === "LONG" ? "Long" : s === "SHORT" ? "Short" : "—"; },
       clock(ts) { return ts ? String(ts).slice(11, 19) : "—"; },
@@ -462,7 +477,7 @@ function ordersPage() {
       cell(r, c) {
         const v = r[c.key];
         if (c.kind === "act") return '<span class="ord-eye" title="Open details">◉</span>';
-        if (c.kind === "rs")  return this.rs(v);
+        if (c.kind === "rs")  return this.rsCell(v);
         if (c.kind === "pct") return (v === null || v === undefined) ? "—" : v + "%";
         if (c.kind === "dir") {
           const s = String(v || "").toUpperCase();

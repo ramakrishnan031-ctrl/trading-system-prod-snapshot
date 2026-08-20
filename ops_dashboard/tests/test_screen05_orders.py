@@ -150,3 +150,68 @@ def test_total_orders_and_value_are_filled_only(monkeypatch) -> None:
     assert k["filled"] == 2
     assert k["filled_pct"] == 40.0                # 2/5 — base is ALL orders
     assert k["cancelled"] == 1
+
+
+# ── 4 · Rama, 20-Aug: centred headings + no currency in ordinary data cells ──
+# Visual decisions, so no API test can see them regress. Pinned against the
+# template/CSS themselves, which is the only surface that carries them.
+_HC_EXPECTED = {
+    "trade_type", "direction", "system_score", "score_threshold", "order_id",
+    "status_label", "qty_requested", "qty_filled", "entry_target_price",
+    "sl_initial", "tgt_initial", "fill_pct", "order_value", "actions",
+}
+_HC_LEFT = {"date", "time", "strategy", "symbol"}
+
+
+def test_exactly_the_fourteen_ruled_headings_are_centred(tpl: str) -> None:
+    """`hc` marks Trade Type -> Actions and NOTHING else.
+
+    It rides on the column DEFINITION, never on a position: these columns are
+    drag-reorderable, so an nth-child rule would centre the wrong heading after
+    a drag.
+    """
+    block = tpl.split("DEFAULT_COLS: [", 1)[1].split("],", 1)[0]
+    got = {m.group(1) for m in
+           re.finditer(r'\{\s*key:\s*"([a-z_]+)"[^}]*\bhc:\s*true', block)}
+    assert got == _HC_EXPECTED, "centred set drifted: %s" % (got ^ _HC_EXPECTED)
+    for key in _HC_LEFT:
+        row = re.search(r'\{\s*key:\s*"%s".*?\}' % key, block, re.S).group(0)
+        assert "hc:" not in row, "%s must stay left-aligned" % key
+    assert "c.hc ? 'hc' : ''" in tpl, "the hc class is not bound onto the <th>"
+
+
+def test_ordinary_data_cells_carry_no_currency_symbol(tpl: str) -> None:
+    """Table cells render 1175.00, not Rs.1175.00 — and ONLY the table cells.
+
+    ⛔ This must not become a global de-currencying: `rs()` still carries the
+    symbol so the Order Details rail keeps it, and the KPI deck, the summary
+    panels and the "Entry / SL / TGT" HEADINGS keep it too.
+    """
+    rupee = "₹"
+    assert "return this.rsCell(v);" in tpl, "the rs cell branch does not use rsCell"
+    cellfn = tpl.split("rsCell(v) {", 1)[1].split("},", 1)[0]
+    assert 'replace("%s", "")' % rupee in cellfn, "rsCell does not strip the symbol"
+    # the rail formatter is untouched, so summary contexts keep the symbol
+    rsfn = re.search(r"\n\s+rs\(v\) \{[^\n]*\n", tpl).group(0)
+    assert rupee in rsfn, "rs() lost its currency symbol — the rail would lose it too"
+    # the three price HEADINGS keep it
+    block = tpl.split("DEFAULT_COLS: [", 1)[1].split("],", 1)[0]
+    assert block.count('label: "Entry %s"' % rupee) == 1
+    assert block.count('label: "SL %s"' % rupee) == 1
+    assert block.count('label: "TGT %s"' % rupee) == 1
+
+
+def test_no_row_hiding_was_added_for_unattributed_orders(tpl: str) -> None:
+    """⛔ MEASURED: production has ZERO unattributable ENTRY orders.
+
+    All-time on the VM (read-only): 542 ENTRY orders, 0 without a trade row,
+    0 without a strategy, 0 without a symbol; the inner JOIN returns 542,
+    identical to the LEFT JOIN. The fully-"—" rows seen during QA came from
+    `conftest._build_db`'s synthetic `ord_e_*` fixture, NOT from the product.
+    So no exclusion belongs in the template: it could never fire in production
+    and could only ever hide a legitimate row.
+    """
+    for pat in ("orphan", "unattributed", "unattrib"):
+        assert pat not in tpl.lower(), (
+            "a row-exclusion path was added for a condition production cannot "
+            "produce; see the measurement in this test's docstring")

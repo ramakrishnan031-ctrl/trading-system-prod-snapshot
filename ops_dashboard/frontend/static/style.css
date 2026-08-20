@@ -1414,6 +1414,13 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
   border-bottom: 1px solid var(--border); white-space: normal; cursor: pointer;
   user-select: none; position: relative; }
 .ord-page .st-tbl th.rt, .ord-page .st-tbl td.rt { text-align: right; }
+/* Rama, 20-Aug: the fourteen headings from TRADE TYPE onward are centred in their
+   own cells, matching the approved Screen-04 treatment. Driven by `c.hc` on the
+   column DEFINITION, NOT by nth-child — these columns are drag-reorderable, so a
+   positional selector would centre the wrong heading after a drag. Declared after
+   `th.rt` so it wins for the numeric columns too, and it targets `th` ONLY: the
+   established body-data alignment is deliberately left alone. */
+.ord-page .st-tbl th.hc { text-align: center; }
 .ord-page .st-tbl td { padding: 0 5px; height: 28px; border-bottom: 1px solid var(--card-bd);
   color: var(--text); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .ord-page .ord-row { cursor: pointer; }
