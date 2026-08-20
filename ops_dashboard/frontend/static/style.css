@@ -1780,6 +1780,12 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 /* R:R is a ratio, not a quantity — centred, and narrow because "1.5:1" is all
    it ever needs. ⛔ No column was removed to make room for it. */
 .pos-page .pos-tbl th.ctr, .pos-page .pos-tbl td.ctr { text-align: center; }
+/* Carried forward from the ruled Screen-04 / Screen-05 treatment: the headings
+   from Trade Type onward are centred. ⛔ `th` ONLY — unlike `.ctr` above, which
+   deliberately moves the data cell too. Driven by `c.hc` on the column
+   DEFINITION, ⛔ never nth-child: these columns are drag-reorderable, so a
+   positional selector would centre the wrong heading after a drag. */
+.pos-page .pos-tbl th.hc { text-align: center; }
 .pos-page .pos-tbl td.ctr { font-variant-numeric: tabular-nums; white-space: nowrap; }
 
 

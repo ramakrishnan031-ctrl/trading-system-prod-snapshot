@@ -164,7 +164,8 @@
               </tr>
               <tr>
                 <template x-for="c in cols" :key="c.key">
-                  <th :class="[c.num ? 'rt' : '', c.ctr ? 'ctr' : '', dragKey === c.key ? 'is-drag' : '',
+                  <th :class="[c.num ? 'rt' : '', c.ctr ? 'ctr' : '', c.hc ? 'hc' : '',
+                               dragKey === c.key ? 'is-drag' : '',
                                overKey === c.key ? 'is-over' : '']"
                       draggable="true" role="button" tabindex="0"
                       :title="c.label + ' — click to sort, drag to reorder'"
@@ -630,39 +631,45 @@ function positionsPage() {
          with no attribution column (see the top-of-file note). Qty / Entry /
          SL / TGT are GROUPED PAIRS, so System and Broker sit under one merged
          heading and can still be dragged apart. */
+      /* `hc` = heading centred in its own cell, carried forward from the ruled
+         Screen-04 / Screen-05 treatment: every column from Trade Type onward.
+         ⛔ It is NOT `ctr` — `ctr` centres the th AND the td (style.css:1782), and the
+         carried design rule is to PRESERVE the established body/data alignment, so
+         `hc` targets `th` ONLY. It rides on the column DEFINITION, ⛔ never
+         nth-child, because these columns are drag-reorderable. */
       DEFAULT_COLS: [
         { key: "date",         label: "Trading Date", kind: "text" },
         { key: "time",         label: "Time",         kind: "text" },
         { key: "strategy",     label: "Strategy",     kind: "text" },
         { key: "symbol",       label: "Symbol",       kind: "sym"  },
-        { key: "trade_type",   label: "Trade Type",   kind: "type" },
-        { key: "direction",    label: "Direction",    kind: "dir"  },
-        { key: "system_score",    label: "System Score",    kind: "num", num: true },
-        { key: "score_threshold", label: "Score Threshold", kind: "num", num: true },
-        { key: "position_status", label: "Status",    kind: "status" },
-        { key: "qty_system",   label: "System",   group: "Qty", kind: "num", num: true },
-        { key: "qty_position", label: "Position", group: "Qty", kind: "num", num: true },
-        { key: "entry_target_price", label: "System", group: "Entry ₹", kind: "rs", num: true },
-        { key: "entry_actual_price", label: "Filled", group: "Entry ₹", kind: "rs", num: true },
-        { key: "sl_initial",   label: "System", group: "SL ₹",  kind: "rs", num: true },
-        { key: "sl_broker",    label: "Broker", group: "SL ₹",  kind: "rs", num: true },
-        { key: "tgt_initial",  label: "System", group: "TGT ₹", kind: "rs", num: true },
-        { key: "tgt_broker",   label: "Broker", group: "TGT ₹", kind: "rs", num: true },
+        { key: "trade_type",   label: "Trade Type",   kind: "type", hc: true },
+        { key: "direction",    label: "Direction",    kind: "dir" , hc: true },
+        { key: "system_score",    label: "System Score",    kind: "num", num: true, hc: true },
+        { key: "score_threshold", label: "Score Threshold", kind: "num", num: true, hc: true },
+        { key: "position_status", label: "Status",    kind: "status", hc: true },
+        { key: "qty_system",   label: "System",   group: "Qty", kind: "num", num: true, hc: true },
+        { key: "qty_position", label: "Position", group: "Qty", kind: "num", num: true, hc: true },
+        { key: "entry_target_price", label: "System", group: "Entry ₹", kind: "rs", num: true, hc: true },
+        { key: "entry_actual_price", label: "Filled", group: "Entry ₹", kind: "rs", num: true, hc: true },
+        { key: "sl_initial",   label: "System", group: "SL ₹",  kind: "rs", num: true, hc: true },
+        { key: "sl_broker",    label: "Broker", group: "SL ₹",  kind: "rs", num: true, hc: true },
+        { key: "tgt_initial",  label: "System", group: "TGT ₹", kind: "rs", num: true, hc: true },
+        { key: "tgt_broker",   label: "Broker", group: "TGT ₹", kind: "rs", num: true, hc: true },
         /* STRATEGY-CONFIGURED R:R, from each strategy's own
            config/strategies/<name>.yaml `tgt_risk_reward`. ⛔ NOT derived from
            SL/TGT prices, ⛔ not a global, ⛔ no default — a strategy without the
            field renders '—'. The ratio implied by this trade's actual levels is
            a DIFFERENT number and stays in the detail rail beside this one. */
-        { key: "rr_configured", label: "R:R",         kind: "rr", ctr: true },
-        { key: "sl_points",    label: "SL Points ₹",  kind: "rs", num: true },
-        { key: "tgt_points",   label: "TGT Points ₹", kind: "rs", num: true },
-        { key: "ltp",          label: "LTP ₹",        kind: "ltp", num: true },
-        { key: "unrealised",   label: "Unrealised ₹", kind: "unreal", num: true },
+        { key: "rr_configured", label: "R:R",         kind: "rr", ctr: true, hc: true },
+        { key: "sl_points",    label: "SL Points ₹",  kind: "rs", num: true, hc: true },
+        { key: "tgt_points",   label: "TGT Points ₹", kind: "rs", num: true, hc: true },
+        { key: "ltp",          label: "LTP ₹",        kind: "ltp", num: true, hc: true },
+        { key: "unrealised",   label: "Unrealised ₹", kind: "unreal", num: true, hc: true },
         /* ⛔ ACTION IS ALWAYS LAST — ⛔ never between the grouped price/risk
            columns. R:R is deliberately NOT a table column: it lives in the
            detail rail's Risk / RR tab, where it is shown against the ratio
            implied by the levels. ⛔ The information is moved, ⛔ not dropped. */
-        { key: "actions",      label: "Action",       kind: "act" },
+        { key: "actions",      label: "Action",       kind: "act", hc: true },
       ],
       cols: [], dragKey: "", overKey: "", _dragEndAt: 0,
       /* ⚠️ VERSION BUMPED with the column set. A saved v1 order would restore

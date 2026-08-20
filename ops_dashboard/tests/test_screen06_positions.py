@@ -754,3 +754,48 @@ def test_rr_backend_path_is_not_duplicated() -> None:
     with open(os.path.join(root, "backend", "api", "trading.py"),
               encoding="utf-8") as fh:
         assert "config_reader.get_strategies(cfg)" in fh.read()
+
+
+# ── 7 · Rama's ruled heading treatment, carried forward from S04/S05 ─────────
+_HC_EXPECTED = {
+    "trade_type", "direction", "system_score", "score_threshold", "position_status",
+    "qty_system", "qty_position", "entry_target_price", "entry_actual_price",
+    "sl_initial", "sl_broker", "tgt_initial", "tgt_broker", "rr_configured",
+    "sl_points", "tgt_points", "ltp", "unrealised", "actions",
+}
+_HC_LEFT = {"date", "time", "strategy", "symbol"}
+
+
+def test_headings_from_trade_type_onward_are_centred(tpl: str) -> None:
+    """`hc` marks Trade Type -> Action and NOTHING else.
+
+    It rides on the column DEFINITION, never on a position: these columns are
+    drag-reorderable, so an nth-child rule would centre the wrong heading after
+    a drag.
+    """
+    block = tpl.split("DEFAULT_COLS: [", 1)[1].split("\n      ],", 1)[0]
+    got = {m.group(1) for m in
+           re.finditer(r'\{ key: "([a-z_]+)",[^\n]*\bhc: true', block)}
+    assert got == _HC_EXPECTED, "centred set drifted: %s" % (got ^ _HC_EXPECTED)
+    for key in _HC_LEFT:
+        row = re.search(r'\{ key: "%s",[^\n]*' % key, block).group(0)
+        assert "hc: true" not in row, "%s must stay left-aligned" % key
+    assert "c.hc ? 'hc' : ''" in tpl, "the hc class is not bound onto the <th>"
+
+
+def test_hc_centres_the_heading_only_and_never_the_data_cell(tpl: str) -> None:
+    """⛔ `hc` must NOT reach the <td>.
+
+    `ctr` deliberately centres BOTH th and td (style.css). The carried design
+    rule is to PRESERVE the established body/data alignment, so the heading
+    treatment had to be a separate flag rather than a reuse of `ctr`. This test
+    is what stops a later edit from "simplifying" the two into one.
+    """
+    td = re.search(r"<td :class=\"\[[^\]]*\]\"", tpl).group(0)
+    assert "c.hc" not in td, "hc leaked onto the data cell — body alignment would move"
+    assert "c.ctr" in td, "ctr must still reach the data cell"
+    css_path = os.path.join(_HERE, "..", "frontend", "static", "style.css")
+    with open(css_path, encoding="utf-8") as fh:
+        css = fh.read()
+    assert ".pos-page .pos-tbl th.hc { text-align: center; }" in css
+    assert ".pos-page .pos-tbl th.ctr, .pos-page .pos-tbl td.ctr" in css
