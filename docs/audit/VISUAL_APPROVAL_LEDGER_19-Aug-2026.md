@@ -226,3 +226,104 @@ S04's rebuild rule so a stale order ⛔ cannot hide a new column nor resurrect `
 `.flt-k`'s neighbour) and **5 added**: all-16 coverage, the card-floor measurement (⭐ **goes RED if
 a longer family name is configured** — re-measure, ⛔ do not bump the constant),
 drag-carries-data-and-sort, and the stale-saved-order guard. ⛔ No test weakened or deleted.
+
+---
+
+## S04 — SIGNALS · APPROVED 20-Aug-2026 16:2x IST
+
+**Approval basis:** browser mode — **http://127.0.0.1:8599/signals**, viewports
+**1896 × 988** and **1416 × 808**, both re-measured after the correction.
+
+**Rama's words:** *“Screen approved”* (after one required correction).
+
+**Unit:** `3e9c311` on `d111c69`. ⛔ **PUSHED = NO · DEPLOYED = NO.**
+
+### ⚠️ THIS SCREEN WAS REVIEWED TWICE — the first pass was LOST, ⛔ not skipped
+An earlier session completed S04 and was closed accidentally. **Nothing survived** — no
+commit, no stash, no file modified that day, no report — verified before redoing rather
+than assumed. ⇒ this was a genuine re-do from a clean S03 baseline, ⛔ not a duplicate.
+
+### CORRECTION — CLIPPED HEADINGS, AND THE TEN THAT ARE NOW CENTRED
+🔑 **THE MECHANISM, ⛔ not the symptom:** `.sig-page .st-tbl th.rt { max-width: 62px }`.
+**A single word cannot wrap**, so any heading whose longest WORD exceeded the cell
+**overflowed into its neighbour** — which is why the row read *“THRESHOLDSTATUS”*.
+**MEASURED before:** `SCORE THRESHOLD` content **91px in a 69px cell** and
+`TRADE DURATION` **82/69** at 1896w; at 1416w also `REQUIRED SCORE` **69/62**.
+⭐ **The fix is TWO halves and both are load-bearing:** dropping the cap lets the longest
+word size the column (restoring the intended two-line wrap), and `min-width: 74px` is the
+floor that stops the squeeze returning — **measured to BIND at 1416w** on SYSTEM /
+REJECT / REQUIRED SCORE at exactly 74px, and to bind on **nothing** at 1896w.
+
+⭐ **CENTRING IS STRUCTURAL, ⛔ NOT POSITIONAL.** The ten headings Trade Type → Trade
+Duration carry `hc: true` on the column **DEFINITION**. ⛔ An `nth-child` rule would have
+centred the **wrong** heading after a drag, because these columns are drag-reorderable;
+`initCols()` rebuilds from the `DEFAULT_COLS` objects, so the flag rides with its column
+through any saved order. `Trading Date / Time / Strategy / Symbol` stay LEFT, as ruled.
+
+### MEASURED, BEFORE → AFTER (both viewports)
+| | before | after |
+|---|---|---|
+| headers clipped | 2 at 1896w, 3 at 1416w | **NONE** |
+| header overlap | none | **NONE** |
+| page horizontal overflow | 0px | **0px** |
+| `.tbl-scroll` internal | 13px @1896 · 260px @1416 | **0px** @1896 · 338px @1416 |
+| headers / rows / font | 14 / 201 / 13px | **14 / 201 / 13px** |
+
+⚠️ **SIDE EFFECT STATED, ⛔ NOT BURIED:** the numeric columns widened, so text columns gave
+up width — **`Reject Reason` 134 → 118px**, ellipsizing a little sooner. The full value
+stays on the row `title` (`signals.html:154`) and in the Signal Details rail — the existing
+documented treatment for that column.
+
+### TESTS
+**20 passed** (18 + 2). ⭐⭐ **BOTH NEW GUARDS PROVEN ABLE TO GO RED BY PLANTING, ⛔ not
+assumed:** dropping `hc` from ONE column ⇒ the centring test RED (clipping test stays
+green); restoring the `62px` cap ⇒ the clipping test RED (centring test stays green).
+**Each failed under exactly the mutation it guards and no other**; both files restored
+**byte-identical**. They pin VISUAL decisions **no API test can see regress**.
+
+### ACCEPTED DEVIATIONS — exact wording, carried forward
+1. **Header chrome order follows the global `base.html` rule, ⛔ not the PNG.**
+2. **Scanner is absent** from filter, column and detail row (Rama, 11-Aug — Strategy and
+   Scanner carry the same data). The **separate Scanner Attribution screen link stays**, as
+   the TXT specifies. `/api/signals` still returns `scanner`; only the surfacing was removed.
+3. **“Signal Score” is RETIRED**; the column is **“Score Threshold”** (Rama, 13-Aug, binding).
+   Measured: `Signal Score` appears **0 times** in the served page.
+4. **Rows per page 50/100/200/500**, default 200 (TXT wins over the PNG's “50 100 200 200”).
+
+### 🔴 TWO ITEMS APPROVED **WITH** — HELD, ⛔ NOT RESOLVED BY THIS APPROVAL
+**Q1 — four columns are near-empty by construction, and that is PRODUCTION, ⛔ not the
+fixture.** Measured read-only against today's **real 6,340 signals**: `Trade Type` **15**
+populated (**99.76% render “—”**) · `Direction` **17** (99.73%) · `Trade Result` **9**
+(99.86%) · `Trade Duration` **9** (99.86%). ⭐ Also **`System Score` only 74.9%** (the 1,590
+circuit-breaker rejections never reach the screener) and **`Score Threshold` 63.1%**.
+🔑 **CAUSE: `signals` carries NO `direction` and NO `product` column** — both live on
+`trades`/`orders`, which exist only once a signal becomes a trade. **The artwork shows them
+POPULATED on rejected rows, i.e. it depicts data the system does not persist at signal time.**
+⛔ **NOT resolved by this approval** — the choice is to accept “—” as honest, or to authorise
+an explicitly-labelled derivation from the strategy name. **Rama's ruling still owed.**
+
+**Q2 — the 500-row recency cap can hide every traded signal.** ⭐ **MEASURED, and only
+visible because the fixture carried production's RATIO and VOLUME:** the cap edge fell at
+`10:06:36` while both traded signals arrived `10:04:20`, so **ZERO traded rows were visible**
+while the KPI deck simultaneously read `ORDER FILLED 2 / SL HIT 1 / TRADE CLOSED 1`.
+⛔ **NOT resolved by this approval.** ⚠️ A balanced fixture would have hidden this entirely.
+
+### 🚨 INCIDENT DURING THIS REVIEW — RESOLVED, CAUSE ⛔ NOT ESTABLISHED
+**34 tracked PNGs vanished from the GUI worktree mid-session** — `docs/audit/approval_19aug/`
+(10) + `docs/audit/approval_final_19aug/` (24), **including the S03 approval evidence**. The
+worktree was verifiably CLEAN at 15:31; the deletions were present by 15:58.
+✅ **All 34 restored from `HEAD` and re-verified intact after the commit (10 + 24).**
+⛔ **Cause stated as UNEXPLAINED rather than guessed:** `conftest.py` contains no
+`rmtree`/`unlink`/`os.remove`, and the QA harness writes only into `tempfile.mkdtemp()`.
+⚠️ **An external cleanup/sync process touching `D:\Projects` is the prime suspect and could
+repeat this.**
+
+### QA HARNESS — SCRATCHPAD ONLY, ⛔ NEVER PROMOTED INTO THE REPO
+`SEEDING.md` records that the original `serve_verify.py` was never in the repo and was lost;
+it was **rebuilt** to that file's own recipe — the repo's OWN conftest builders into a
+`tempfile.mkdtemp()`, armed by the app's purpose-built local-dev auto-login
+(`local_dev.auto_login` + `OPS_DASHBOARD_LOCAL_DEV=1` + loopback bind + loopback client).
+⛔ **The production DB was never opened; every VM read was `mode=ro`.**
+⭐ **SEEDED TO THE MEASURED PRODUCTION RATIO, ⛔ not to “some rows”:** 6,340 signals today,
+17 traded (**0.27%**); screener 4,750 rows of which **751 carry no `eligible_score`**. The
+fixture deliberately **exceeds the 500-row cap** — which is the only reason `Q2` surfaced.
