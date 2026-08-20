@@ -16,9 +16,9 @@ PNG, ⛔ not source HTML, ⛔ not a description.
 | **S01** | Login | ✅ 22:0x IST · live `/login` @1920 + 1440 | ✅ | ✅ **1** — hero/card gap, then a 3.0% left nudge of the chip | ✅ **"Approved"** — 19-Aug-2026 **22:36 IST** | 🟢 **VISUALLY APPROVED** |
 | **S02** | Dashboard | ✅ live `/` @1920+1440 | ✅ | ✅ **1** — capacity-monitor headings centred | ✅ **"Approved"** — 19-Aug-2026 **23:0x IST** | 🟢 **VISUALLY APPROVED** |
 | **S03** | Strategies | ✅ live `/strategies` @1920 + 6 more widths | ✅ | ✅ **2** — all 16 strategies in the hierarchy; columns made truly draggable | ✅ **“Approved!!”** — 19-Aug-2026 **23:40 IST** | 🟢 **VISUALLY APPROVED** |
-| **S04** | Signals | ⏳ | — | — | — | ⏳ PENDING |
-| **S05** | Orders | ⏳ | — | — | — | ⏳ PENDING |
-| **S06** | Positions | ⏳ | — | — | — | ⏳ PENDING |
+| **S04** | Signals | ✅ live `/signals` @1896×988 + 1416×808 | ✅ | ✅ **1** — ten ruled headings centred; the ones a width cap clipped un-clipped (`3e9c311`) | ✅ **"Screen approved"** — 20-Aug-2026 **16:2x IST** | 🟢 **VISUALLY APPROVED** · 🔴 **Q1·Q2 OWED** |
+| **S05** | Orders | ✅ live `/orders` @1896×988 + 1416×808 | ✅ | ✅ **1** — fourteen ruled headings centred; ₹ dropped from data cells (`1b61586`) | ✅ **"Screen approved"** — 20-Aug-2026 **22:4x IST** | 🟢 **VISUALLY APPROVED** · 🔴 **Q3·Q4 OWED** |
+| **S06** | Positions | ✅ live `/positions` @1896×988 + 1416×808 | ✅ | ✅ **2** — nineteen headings centred heading-only (`5142dfd`); the four grouped bands separated (`b47e148`, **post-approval, ⛔ not yet seen by Rama**) | ✅ **"Screen approved"** — 20-Aug-2026 **23:3x IST**, *"but one minor change"* | 🟢 **VISUALLY APPROVED** · ⏳ **re-render awaiting sight** |
 | **S07** | Trade Explorer | ⏳ | — | — | — | ⏳ PENDING |
 | **S08** | Capital & Risk | ⏳ | — | — | — | ⏳ PENDING |
 | **S09** | P&L Analytics | ⏳ | — | — | — | ⏳ PENDING |
@@ -36,7 +36,7 @@ PNG, ⛔ not source HTML, ⛔ not a description.
 | **S21** | Scanner Attribution | ⏳ | — | — | — | ⏳ PENDING |
 | **S22** | Holdings | ⏳ | — | — | — | ⏳ PENDING |
 
-**APPROVED: 3 of 22.**  ⏸️ **Paused 19-Aug 23:40 IST — resume at S04 Signals.**
+**APPROVED: 6 of 22.**  ▶️ **Resume at S07 Trade Explorer** — ⛔ only after Rama has seen the corrected S06 render.
 
 ---
 
@@ -427,3 +427,82 @@ invented.** **Rama's ruling still owed.**
 backend. ⛔ **The button was NOT hidden and the export was NOT claimed to work.** On S04
 the export is flag-gated OFF; here it is visible. **A functional defect, not a visual
 deviation. Rama's ruling still owed.**
+
+
+---
+
+## S06 — POSITIONS · APPROVED 20-Aug-2026 23:3x IST
+
+**Rama, verbatim:** *"Screen approved, but one minor change - refer positions.png in
+'Downloads', some very mionr correction to improve viewability of Grouped colums
+[Note sample image, not binding as it is]"*
+
+⚠️ **The approval is his word and it stands. The correction it names was made AFTER it
+(`b47e148`) and Rama has ⛔ NOT yet seen the re-render** — the screen is
+`VISUALLY APPROVED`, ⛔ not "approved as it now stands".
+
+### CORRECTION 1 — nineteen headings centred, heading-only (`5142dfd`)
+`hc: true` on the nineteen columns from `Trade Type` onward. ⭐ **A separate flag was
+introduced rather than reusing `ctr`, because `ctr` centres the `<th>` **and** the
+`<td>`** — reusing it would have moved the established body/data alignment. `hc` reaches
+the heading only. **Measured: centred body cells = `[]` before and after.**
+
+### CORRECTION 2 — the four grouped bands separated (`b47e148`)
+**The defect, measured, ⛔ not inferred.** The bands were exactly adjacent with **zero**
+separation:
+
+| band | left | right |
+|---|---|---|
+| `QTY` (System \| Position) | 1028 | **1159** |
+| `ENTRY ₹` (System \| Filled) | **1159** | **1272** |
+| `SL ₹` (System \| Broker) | **1272** | **1392** |
+| `TGT ₹` (System \| Broker) | **1392** | 1512 |
+
+Each band ended on the exact pixel the next began ⇒ **eight `System`/`Broker`
+sub-headings read as one undifferentiated run** and an operator could not see where a
+band ended. That is the complaint, reproduced as a number.
+
+**The fix.** A 1px rule at every band **boundary** — on the group row, the sub-heading
+row and the body, so a band stays traceable down the rows.
+- ⭐ **Reuses the group underline's own token `var(--card-bd)`** — ⛔ no new colour, ⛔ no
+  new visual concept, ⛔ no extra width. **The sample's coloured boxes were an
+  annotation**, and Rama marked it *"not binding as it is"*.
+- ⭐ **`sep` is computed from the CURRENT column order** — `groups()` for the merged row,
+  `isSep()` keyed by `c.key` for the rest — **so a drag carries the separator with the
+  band.** ⛔ Never `nth-child`: these columns are reorderable and a positional rule would
+  strand the separator on the old index.
+
+### ⛔ ONE THING THAT LOOKED LIKE A DEFECT AND IS NOT
+Rama's capture shows `TGT ₹` values as `060.88` / `022.06` — an apparently lost leading
+digit. **Measured: data-cell clipping = 0, both before and after the change**, at both
+viewports; the live render shows `1060.88`, `1022.06`, `1175.00` in full. **The missing
+`1` is his annotation box overlapping the digit.** ⛔ Nothing was "fixed" here — there
+was nothing wrong.
+
+### MEASURED AFTER THE CHANGE
+| check | 1896×988 | 1416×808 |
+|---|---|---|
+| page overflow-x | **0** | **0** |
+| headers clipped | **0** | **0** |
+| data cells clipped | **0** | **0** |
+| separators per body row | **5** | **5** |
+| centred **body** cells | **[]** | **[]** |
+
+5 separators = the four band edges plus the close after `TGT ₹`, landing on
+`3` \| `1175.00` \| `1145.62` \| `1216.12` \| `—`.
+
+### TESTS
+**81 S06 green; 114 across S04+S05+S06.** ⭐⭐ **The new guard is PROVEN ABLE TO GO RED,
+⛔ not assumed** — five plants: drop `sep` from `groups()` · unbind the group row ·
+revert `isSep` to `indexOf` · drop the body separator · swap the token for a literal
+colour. **All five turn it RED**; both files restored **md5-verified**
+(`positions.html` 55,262 B, `style.css` 386,411 B).
+
+### 🔴 CARRIED — ⛔ NOT RESOLVED BY THIS APPROVAL
+**`Q1`·`Q2`** (S04) and **`Q3`·`Q4`** (S05) remain **OWED from Rama**. ⛔ Approving S06
+does not touch them.
+
+### STATUS
+🟢 **VISUALLY APPROVED** (Rama's word) · **BUILT** locally · ⛔ **NOT PUSHED**, ⛔ **NOT
+DEPLOYED**, ⛔ **NOT VERIFIED LIVE** — the GUI branch `feat/screen10-slippage-analytics`
+stays local.
