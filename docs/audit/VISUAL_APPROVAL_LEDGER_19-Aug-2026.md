@@ -327,3 +327,103 @@ it was **rebuilt** to that file's own recipe — the repo's OWN conftest builder
 ⭐ **SEEDED TO THE MEASURED PRODUCTION RATIO, ⛔ not to “some rows”:** 6,340 signals today,
 17 traded (**0.27%**); screener 4,750 rows of which **751 carry no `eligible_score`**. The
 fixture deliberately **exceeds the 500-row cap** — which is the only reason `Q2` surfaced.
+
+---
+
+## S05 — ORDERS · APPROVED 20-Aug-2026 22:4x IST
+
+**Approval basis:** browser mode — **http://127.0.0.1:8599/orders**, viewports
+**1896 × 988** and **1416 × 808**, both re-measured after the corrections.
+
+**Rama's words:** *“Screen approved”* (after one round of required corrections).
+
+**Unit:** `1b61586` on `6270d28`. ⛔ **PUSHED = NO · DEPLOYED = NO.**
+
+### ⚠️ THIS SCREEN HAS NO WRITTEN SPEC — RECORDED, ⛔ NOT GLOSSED
+There is **no `05_orders_asset_spec.md`**; S01–S04 each have one. Judgement fell back
+to the approved artwork + TXT plus the binding cross-screen rulings. ⇒ 🔑 **that is
+exactly why `Q3` below is a RULING for Rama and not a call this session could make.**
+
+### CORRECTION ① — THE FOURTEEN RULED HEADINGS ARE CENTRED
+Trade Type → Actions, matching the approved Screen-04 treatment. ⭐ **Driven by an
+`hc` flag on the column DEFINITION, ⛔ never `nth-child`** — these columns are
+drag-reorderable, so a positional selector would centre the **wrong** heading after a
+drag; `initCols()` rebuilds from the `DEFAULT_COLS` objects so the flag rides with its
+column through any saved order. The CSS targets **`th` only**, so the established
+body-data alignment is deliberately untouched. `Trading Date / Time / Strategy /
+Symbol` stay LEFT.
+
+### CORRECTION ② — CURRENCY OUT OF ORDINARY DATA CELLS
+Cells read **`1175.00`**, ⛔ not `₹1175.00`. ⭐⭐ **⛔ THIS IS NOT A GLOBAL
+DE-CURRENCYING, and the distinction is the whole point:** a NEW **cell-only**
+`rsCell()` strips the symbol while **`rs()` is left exactly as it was** — so the Order
+Details rail keeps ₹, and so do the KPI deck, the summary panels and the
+**`Entry ₹ / SL ₹ / TGT ₹` HEADINGS**, which is where the approved design puts it.
+`rsCell()` reuses `money()` and removes only the symbol, so cell number formatting
+**cannot drift** from the rest of the screen.
+**MEASURED after: ₹ in the table body = 0 · ₹ in the headings = 6.**
+
+### 🛑 ITEM ③ — THE “MEANINGLESS ROWS”: INVESTIGATED FIRST, ⛔ NO CODE CHANGE MADE
+🔑 **They are not production data.** The fully-“—” rows are `ord_e_*` records seeded by
+the repo's OWN **`conftest._build_db` (line 291)** — a **QA FIXTURE ARTEFACT**. The QA
+harness creates **0** of them.
+
+⭐⭐ **MEASURED READ-ONLY ON THE VM, ALL-TIME: 542 ENTRY orders · 0 without a trade row
+· 0 without a strategy · 0 without a symbol · 0 orders without a `trade_id`. The INNER
+`JOIN` returns 542, IDENTICAL to the `LEFT JOIN`** ⇒ every production order attributes
+cleanly. Today: 15 ENTRY, the same zeros.
+
+⇒ 🔑 **The SAFE RULE's precondition — *“genuinely unattributable”* — is FALSE in
+production.** An exclusion path would be a branch that **can never fire** (the `V5`
+tautological class) whose only possible effect is **hiding a legitimate row** if the
+data shape ever changed. ⛔ Nothing was hidden, filtered or fabricated. **The FIXTURE
+was corrected instead (scratchpad only), and a test now pins that no such exclusion is
+introduced later.**
+
+### MEASURED, BOTH VIEWPORTS
+| | result |
+|---|---|
+| heading centring | 14 centred, 4 left — as ruled |
+| ₹ in table body / headings | **0** / **6** |
+| header clipping · overlap | **NONE** |
+| page horizontal overflow | **0px** |
+| typography | 13px throughout |
+| charts | 23 SVG — both donuts render |
+| rows with no strategy/symbol | **0** |
+
+### TESTS
+**13 passed** (10 + 3 new). ⭐⭐ **ALL THREE NEW GUARDS PROVEN ABLE TO GO RED BY
+PLANTING, ⛔ not assumed:** dropping `hc` from one column · reverting the cell branch to
+the currency formatter · introducing an orphan-row path — **each turns exactly its own
+guard RED and leaves the other two green**; template restored **byte-identical**
+(`67e7027b…`). ✅ **Screen-04's 20 tests re-run GREEN** — the shared `hc` mechanism is
+unaffected.
+
+### ACCEPTED DEVIATIONS — exact wording, carried forward
+1. **`System Score` / `Score Threshold` are KEPT** though absent from artwork and TXT —
+   they post-date both, introduced by the binding 13-Aug L8 ruling (`73f3166`, “one
+   meaning for System Score — restored across Screens 04/05/06”) and pinned by the S05
+   tests. ⛔ Not removed as visual cleanup.
+2. **No second `Order ID` column was created.** The TXT lists both *Order ID* and
+   *Broker Order ID*, but the `orders` table has **one** id column and its production
+   values are Zerodha's 15-digit broker identifiers (e.g. `260820170714485`). The
+   artwork shows only *Broker Order ID*. ⛔ An empty second column would have been
+   invented data.
+3. **Order Details stacks below the table at ≤1400px**, right-rail at 1920 — responsive
+   behaviour, not a layout defect.
+
+### 🔴 TWO ITEMS APPROVED **WITH** — ⛔ NOT RESOLVED BY THIS APPROVAL
+**`Q3` — the screen contradicts itself on fills.** `orders.qty_filled` = **0 on all
+1,092 orders ever**, `avg_fill_price` NULL on all 1,092, while `qty_requested` > 0 on
+all 1,092 (**the control — the read works, so the zeros are real**). The KPI deck counts
+“Filled” from **`status`** (`db_reader.py:2380`) while the table divides **`qty_filled`**
+(`:2353`) ⇒ **a row reading `Status FILLED` shows `Qty Filled 0` and `Fill % 0%`**, and
+**`PARTIAL FILLS` can NEVER be non-zero** (it needs `0 < filled < requested`). The
+artwork shows a 100% / 60% / 0% mix. ⛔ **No fill was derived from status; nothing was
+invented.** **Rama's ruling still owed.**
+
+**`Q4` — Export XLSX is a visible button that 404s.** `exportXlsx()` navigates to
+`/api/export/orders`, which returns **404 live**; the route is absent from the entire
+backend. ⛔ **The button was NOT hidden and the export was NOT claimed to work.** On S04
+the export is flag-gated OFF; here it is visible. **A functional defect, not a visual
+deviation. Rama's ruling still owed.**
