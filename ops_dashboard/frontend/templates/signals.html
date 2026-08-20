@@ -130,7 +130,8 @@
           <table class="st-tbl sig-tbl">
             <thead><tr>
               <template x-for="(c, ci) in cols" :key="c.key">
-                <th :class="[c.num ? 'rt' : '', dragKey === c.key ? 'is-drag' : '',
+                <th :class="[c.num ? 'rt' : '', c.hc ? 'hc' : '',
+                             dragKey === c.key ? 'is-drag' : '',
                              overKey === c.key ? 'is-over' : '']"
                     draggable="true" role="button" tabindex="0"
                     :title="c.label + ' — click to sort, drag to reorder'"
@@ -325,21 +326,24 @@ function signalsPage() {
          its filter and its detail row were all removed from Screen-04.
          `kind` drives BOTH the cell renderer and the drag-reorder, so a column
          and its data are one unit. */
+      /* `hc` = heading centred in its own cell (Rama, 20-Aug): the ten columns
+         from Trade Type onward. It rides on the column DEFINITION, not on a
+         position, so a drag-reorder carries the centring with the column. */
       DEFAULT_COLS: [
         { key: "date",             label: "Trading Date",   kind: "num" },
         { key: "time",             label: "Time",           kind: "num" },
         { key: "strategy",         label: "Strategy",       kind: "text" },
         { key: "symbol",           label: "Symbol",         kind: "sym" },
-        { key: "trade_type",       label: "Trade Type",     kind: "type" },
-        { key: "direction",        label: "Direction",      kind: "dir" },
-        { key: "system_score",     label: "System Score",    kind: "num", num: true },
-        { key: "score_threshold",  label: "Score Threshold", kind: "num", num: true },
-        { key: "status_label",     label: "Status",         kind: "status" },
-        { key: "rejection_reason", label: "Reject Reason",  kind: "why" },
-        { key: "reject_score",     label: "Reject Score",   kind: "num", num: true },
-        { key: "required_score",   label: "Required Score", kind: "num", num: true },
-        { key: "trade_result",     label: "Trade Result",   kind: "result" },
-        { key: "trade_duration_sec", label: "Trade Duration", kind: "dur", num: true },
+        { key: "trade_type",       label: "Trade Type",     kind: "type",   hc: true },
+        { key: "direction",        label: "Direction",      kind: "dir",    hc: true },
+        { key: "system_score",     label: "System Score",    kind: "num", num: true, hc: true },
+        { key: "score_threshold",  label: "Score Threshold", kind: "num", num: true, hc: true },
+        { key: "status_label",     label: "Status",         kind: "status", hc: true },
+        { key: "rejection_reason", label: "Reject Reason",  kind: "why",    hc: true },
+        { key: "reject_score",     label: "Reject Score",   kind: "num", num: true, hc: true },
+        { key: "required_score",   label: "Required Score", kind: "num", num: true, hc: true },
+        { key: "trade_result",     label: "Trade Result",   kind: "result", hc: true },
+        { key: "trade_duration_sec", label: "Trade Duration", kind: "dur", num: true, hc: true },
       ],
       cols: [],
       dragKey: "", overKey: "", _dragEndAt: 0,

@@ -1162,8 +1162,23 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
   text-transform: uppercase; letter-spacing: .02em; color: var(--dim); line-height: 1.25;
   border-bottom: 1px solid var(--border); white-space: normal; cursor: pointer;
   user-select: none; vertical-align: bottom; }
-.sig-page .st-tbl th.rt { max-width: 62px; }
+/* 20-Aug: `max-width: 62px` CLIPPED the headers whose longest WORD is wider than
+   the cell — "SCORE THRESHOLD", "TRADE DURATION", "REQUIRED SCORE". A single word
+   cannot wrap, so it overflowed and ran into the next heading (measured: content
+   91px vs cell 69px at 1896w, and 62px at 1416w).
+   The fix is TWO halves, and both are load-bearing:
+     - dropping `max-width` lets the longest WORD size the column, which is what
+       restores the intended two-line wrap instead of an overflow;
+     - `min-width` is the floor that stops the squeeze coming back at narrower
+       viewports. MEASURED: at 1416w it binds on SYSTEM SCORE / REJECT SCORE /
+       REQUIRED SCORE (all exactly 74px); at 1896w nothing binds. */
+.sig-page .st-tbl th.rt { min-width: 74px; }
 .sig-page .st-tbl th.rt { text-align: right; }
+/* Rama, 20-Aug: the ten headings from TRADE TYPE onward are centred in their own
+   cells. Driven by `c.hc` on the column definition, NOT by nth-child — the columns
+   are drag-reorderable, so a positional selector would centre the wrong heading
+   after a drag. Declared after `th.rt` so it wins for the numeric columns too. */
+.sig-page .st-tbl th.hc { text-align: center; }
 .sig-page .st-tbl th:hover { color: var(--muted); }
 .sig-page .st-arw { margin-left: 3px; color: var(--blue); }
 /* Drag-to-reorder affordances. The grip only appears on hover so the header
