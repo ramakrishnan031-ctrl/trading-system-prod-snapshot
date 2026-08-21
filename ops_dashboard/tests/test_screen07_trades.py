@@ -449,7 +449,11 @@ def test_scanner_has_no_column(tpl: str) -> None:
     cols = _default_cols(tpl)
     assert "scanner" not in cols
     assert "strategy" in cols               # ⛔ and the surviving one is still there
-    assert len(cols) == 27
+    # 27 -> 25: the SL and TGT `Broker` sub-columns were removed (Rama,
+    # 21-Aug-2026). ⛔ The count is not the point of this test — the two
+    # assertions above are. It is kept only so a column cannot be added back
+    # silently, and it is edited only when the SET genuinely changes.
+    assert len(cols) == 25
 
 
 def test_scanner_appears_nowhere_in_the_live_template(tpl: str) -> None:
@@ -519,7 +523,11 @@ def test_money_columns_stay_right_aligned(tpl: str) -> None:
     everything: real amounts must still be right-aligned for their decimals to
     line up."""
     for key in ("net_pnl", "gross_pnl", "charges", "roi_pct", "r_multiple",
-                "entry_target_price", "sl_broker", "slippage_rs"):
+                "entry_target_price", "slippage_rs",
+                # `sl_broker` was removed (Rama, 21-Aug-2026). ⛔ It is not simply
+                # dropped from this list — that would leave the SL/TGT band
+                # untested. The four surviving money columns take its place.
+                "sl_initial", "sl_filled", "tgt_initial", "tgt_filled"):
         line = _col_entry(tpl, key)
         assert "num: true" in line, key
         assert "ctr: true" not in line, key

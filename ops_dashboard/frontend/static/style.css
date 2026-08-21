@@ -1897,7 +1897,16 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
    the gap they need is on the left), and the narrow-viewport fallback below
    ~1550px is .ord-scroll — exactly the fallback Screen-06 accepted. ⛔ Nothing
    was hidden, abbreviated or shrunk to buy the width. */
-.tex-page .tex-tbl th, .tex-page .tex-tbl td { padding: 6px 1px; }
+.tex-page .tex-tbl th, .tex-page .tex-tbl td { padding: 6px 3px; }
+/* 1px -> 3px (Rama, 21-Aug-2026). ⛔ 3px is NOT a new value — it is exactly
+   `.pos-page .pos-tbl`'s approved gutter, reused rather than invented.
+   ⚠️ THE 1px ABOVE WAS DELIBERATE, not an oversight: it was a width budget
+   computed when this table carried 28 columns. Removing the SL and TGT
+   Broker sub-columns returned that width, so the budget the 1px bought no
+   longer needs buying. ⭐ MEASURED at production string widths: the 1px
+   gutter left 9 adjacent column pairs at <=1px clearance at 1920 and 11 at
+   1440, while approved Screens 05 and 06 — carrying the SAME wide strings —
+   had ZERO. `open_high_breakdown_short` ran straight into `ZENSARTECH`. */
 /* 4px, ⛔ not 5: with Scanner gone the table came to 1460 against the 1448 a
    1680 viewport offers — twelve pixels. Taking them from 24 numeric gutters
    (1px each) costs nothing legible; taking them from the Strategy cap would

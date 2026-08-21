@@ -28,9 +28,17 @@
      ⛔ ROI is NOT computed on the leveraged notional; ⛔ R-multiple is NEVER
      printed in an R:R column. All three are separate columns.
 
-  ⭐ SYSTEM · BROKER · FILLED — the words are load-bearing:
-       System = what the system decided        Broker = what stands at the broker
+  ⭐ SYSTEM · FILLED — the words are load-bearing:
+       System = what the system decided
        Filled = a price that ACTUALLY EXECUTED
+  ⚠️ RULING (Rama, 21-Aug-2026): SL and TGT carry TWO sub-columns only,
+     System + Filled. The BROKER sub-column (what stands at the broker) is
+     REMOVED from this screen. ⚠️ It was NOT a duplicate of Filled — a resting
+     trigger and an executed price are different facts, and the fixture shows
+     all three differing on one SL_HIT row (990.00 / 989.50 / 991.00). The
+     standing broker value is simply no longer surfaced HERE; Screen-06
+     Positions still carries it, and db_reader.position_broker_exits is
+     unchanged. ⛔ Nothing is inferred from the standing broker value.
   ⛔⛔ A FILLED SL/TGT IS SHOWN ONLY WHEN THE TRADE'S OWN exit_reason NAMES THAT
      LEG (SL_HIT → SL Filled, TGT_HIT → TGT Filled), because that is the only
      case in which the executed price is known. orders.avg_fill_price is NULL on
@@ -48,7 +56,7 @@
 
   <div class="pg-title">
     <h1>Trade Explorer</h1>
-    <span class="pg-sub">One trade, one story — outcome, execution quality, risk and return</span>
+    <span class="pg-sub">One trade. One complete story.</span>
   </div>
 
   <!-- ═══ KPI DECK (6) ═══ -->
@@ -657,7 +665,7 @@ function explorerPage() {
 
       /* APPROVED ORDER: the Screen-04/05/06 common head — Trading Date, Time,
          Strategy, Symbol, Trade Type, Direction, System Score, Score Threshold.
-         Qty / Entry / SL / TGT / P&L are GROUPED, so System · Broker · Filled sit
+         Qty / Entry / SL / TGT / P&L are GROUPED, so their sub-columns sit
          under one merged heading and can still be dragged apart.
 
          ⛔ SCANNER IS ABSENT BY MEASUREMENT (Rama, 14-Aug-2026), which is the
@@ -691,11 +699,9 @@ function explorerPage() {
         { key: "entry_target_price", label: "System", group: "Entry ₹", kind: "rs", num: true },
         { key: "entry_actual_price", label: "Filled", group: "Entry ₹", kind: "rs", num: true },
         { key: "sl_initial",      label: "System", group: "SL ₹",  kind: "rs", num: true },
-        { key: "sl_broker",       label: "Broker", group: "SL ₹",  kind: "rs", num: true },
         /* ⛔ Populated ONLY on an SL_HIT row — see the top-of-file note. */
         { key: "sl_filled",       label: "Filled", group: "SL ₹",  kind: "rs", num: true },
         { key: "tgt_initial",     label: "System", group: "TGT ₹", kind: "rs", num: true },
-        { key: "tgt_broker",      label: "Broker", group: "TGT ₹", kind: "rs", num: true },
         { key: "tgt_filled",      label: "Filled", group: "TGT ₹", kind: "rs", num: true },
         { key: "slippage_rs",     label: "Slippage ₹",      kind: "slip", num: true },
         /* PLANNED ratio — ⛔ never the achieved one. */
@@ -710,9 +716,12 @@ function explorerPage() {
       ],
       cols: [], dragKey: "", overKey: "", _dragEndAt: 0,
       /* v1 -> v2: the column SET changed (Scanner removed) and six columns became
-         centred. Bumping retires a stale saved order rather than relying on the
-         merge in initCols happening to reconcile a set it was not written for. */
-      COLS_KEY: "screen07.trades.colOrder.v2",
+         centred. v2 -> v3: the SET changed again — the SL and TGT Broker
+         sub-columns were removed (Rama, 21-Aug-2026). Bumping retires a stale
+         saved order rather than relying on the merge in initCols happening to
+         reconcile a set it was not written for; without it a v2 order held in
+         localStorage still names two columns that no longer exist. */
+      COLS_KEY: "screen07.trades.colOrder.v3",
 
       /* ⭐ EVERY filter goes to the SERVER. The KPI deck, the four summary
          panels, the result chip counts and the table are then all computed from
