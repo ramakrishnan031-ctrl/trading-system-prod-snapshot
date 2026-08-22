@@ -211,8 +211,18 @@ risk:                         # RE13 — portfolio-level pre-trade gate limits
   # Working as intended; no conflict.
   max_open_positions: 5       # [PERMANENT-ish] portfolio-wide cap on concurrent open positions (>= 1)
   max_daily_trades: 10        # hard cap on entries per day (>= 1)
-  max_open_delivery_positions: 3  # SLICE2.5-PHASE-3 (A): separate cap on concurrent open DELIVERY (CNC) positions; inert while force_intraday_only=true
-  max_daily_delivery_trades: 5    # SLICE2.5-PHASE-3 (A): separate cap on DELIVERY (CNC) entries per day; inert while force_intraday_only=true
+  # NI-3 (22-Aug-2026): both lines below used to carry a clause saying they did nothing
+  # while force_intraday_only was true. See the commit diff for its exact wording -- it is
+  # NOT repeated here, because a stale claim quoted in place still reads as current.
+  # THE FACT TODAY: force_intraday_only is FALSE (:89), delivery_enabled is TRUE (:102),
+  # trade_type is BOTH (:96), and delivery has traded. Both caps are read on every
+  # delivery (CNC) entry and they reject it. The old clause was a true conditional with a
+  # false antecedent, which reads as "ignore me" -- the same hazard the delivery sizing
+  # comments carried until fix item 1.
+  # Deliberately TIGHTER than the intraday twins above (5 / 10): these are the delivery
+  # book's own caps, NOT copies of the global ones.
+  max_open_delivery_positions: 3  # SLICE2.5-PHASE-3 (A): cap on concurrent open DELIVERY (CNC) positions. ENFORCED.
+  max_daily_delivery_trades: 5    # SLICE2.5-PHASE-3 (A): cap on DELIVERY (CNC) entries per day. ENFORCED.
   # 27-Jul-2026: one COMPLETED trade per symbol+DIRECTION per trading day.
   # false (DEFAULT) = OFF, byte-identical to the pre-27-Jul path. true = a second
   # entry on the same symbol in the same direction is rejected for the rest of the

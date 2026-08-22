@@ -549,9 +549,15 @@ class RiskConfig(BaseModel):
     max_daily_trades: int            # RE13: hard cap on trades per day (>= 1)
     # SLICE2.5-PHASE-3 (A): SEPARATE delivery-scoped count caps, parallel to the
     # intraday/global caps. Enforced ONLY for a delivery (CNC) entry
-    # (sizing_result.bucket=="positional"); an intraday entry is unaffected. Inert
-    # while force_intraday_only coerces every strategy to INTRADAY (no CNC entries
-    # exist then). Defaults make them optional in YAML.
+    # (sizing_result.bucket=="positional"); an intraday entry is unaffected.
+    # NI-3 (22-Aug-2026): a clause here used to say these caps did nothing while
+    # force_intraday_only coerced every strategy to INTRADAY. ⛔ THAT IS NOT THE STATE --
+    # force_intraday_only is FALSE, delivery_enabled TRUE, trade_type BOTH, and delivery
+    # has traded. Not repeated verbatim: a stale claim quoted in place still reads as
+    # current; the wording is in the commit diff. This was the FOURTH copy of that same
+    # false-antecedent claim on these two keys -- the card named three (the two YAML
+    # lines and the two risk_engine sites) and a sweep found this one too.
+    # Defaults make them optional in YAML.
     max_open_delivery_positions: int = 3   # hard cap on concurrent open DELIVERY positions (>= 1)
     max_daily_delivery_trades: int = 5     # hard cap on DELIVERY entries per day (>= 1)
     # 27-Jul-2026: one COMPLETED trade per symbol+DIRECTION per trading day.

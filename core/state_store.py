@@ -806,8 +806,12 @@ class StateStore:
     # order's product is 'CNC' (the actual product written at placement; precedent
     # = the MIS/CO ENTRY-join at get_intraday_entry_orders / get_all_open_trades).
     # COUNT(DISTINCT trade_id) so a multi-leg ENTRY (SCALE) counts the trade once.
-    # Inert while force_intraday_only=true: no CNC entry orders are ever written
-    # then, so both methods return 0.
+    # NI-3 (22-Aug-2026): a clause here used to say both methods always returned 0
+    # because force_intraday_only coerced every strategy to INTRADAY. ⛔ THAT IS NOT
+    # THE STATE. Not repeated verbatim (a stale claim quoted in place still reads as
+    # current); the wording is in the commit diff. force_intraday_only is FALSE,
+    # delivery_enabled TRUE, trade_type BOTH, and CNC ENTRY orders exist -- so both
+    # counts CAN be non-zero and the risk_engine caps they feed DO reject entries.
 
     def count_open_delivery_positions(self) -> int:
         """Count concurrent open DELIVERY (CNC) positions: trades in OPEN/PARTIAL/

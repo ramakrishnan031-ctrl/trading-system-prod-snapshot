@@ -1,11 +1,16 @@
 """
 tests/unit/test_phase3_delivery_caps_conditional_capital.py — SLICE2.5-PHASE-3.
 
-Two LOCKED-but-INERT features (delivery_enabled stays false; flag default false):
+Two features, ONE of which is now LIVE:
   A) SEPARATE delivery (CNC) count caps — risk_engine OPEN_POSITIONS / DAILY_TRADES
      branch on sizing_result.bucket=="positional", product-keyed counts.
+     ⛔ NI-3 (22-Aug-2026): this header used to describe (A) as dormant because
+     delivery_enabled was false. IT IS TRUE NOW (force_intraday_only false,
+     trade_type BOTH, delivery has traded), so (A) is ENFORCED on live entries.
+     The tests below are unchanged — only this description was wrong.
   B) CONDITIONAL capital allocation — resolve_bucket_allocation() drives the
      effective intraday/positional split; FundManager itself is unchanged.
+     Still default-OFF (conditional_allocation_enabled: false).
 
 Parity: risk_engine / fund_manager / state_store are shared, so these apply
 identically in paper + live. Coverage: dormancy (flag off), inertness (coerced ->

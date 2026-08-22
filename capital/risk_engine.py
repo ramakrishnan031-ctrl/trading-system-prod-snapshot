@@ -531,9 +531,15 @@ class RiskEngine:
         # cap, while intraday does NOT count toward the delivery cap. This keeps the
         # LIVE intraday cap byte-for-byte unchanged (zero regression on the money
         # path); at current capital, capital binds long before these counts, so the
-        # coupling is academic. Inert while coerced (bucket is never positional then,
-        # and open_delivery_count==0). Revisit full count-independence only if
-        # delivery scales and it matters.
+        # coupling is academic. Revisit full count-independence only if delivery
+        # scales and it matters.
+        # NI-3 (22-Aug-2026): a clause here used to say this branch did nothing while
+        # every strategy was coerced to INTRADAY. ⛔ THAT IS NOT THE STATE. See the
+        # commit diff for its wording; it is not repeated, because a stale claim quoted
+        # in place still reads as current. force_intraday_only is FALSE,
+        # delivery_enabled TRUE, trade_type BOTH, and delivery has traded -- bucket DOES
+        # become "positional" and open_delivery_count CAN be non-zero. This branch is
+        # LIVE and rejects real delivery entries.
         if sizing_result.bucket == "positional":
             if open_delivery_count >= self._max_open_delivery:
                 return reject(
@@ -617,7 +623,11 @@ class RiskEngine:
         # SLICE2.5-PHASE-3 (A): a DELIVERY (CNC) entry is capped by its OWN daily
         # delivery count (today's ENTRY product=='CNC'); an INTRADAY entry keeps the
         # existing reservation-aware global daily cap (else, UNCHANGED — same A5
-        # asymmetry as OPEN_POSITIONS). Inert while coerced (daily_delivery_count==0).
+        # asymmetry as OPEN_POSITIONS).
+        # NI-3 (22-Aug-2026): a clause here used to say this branch did nothing while
+        # every strategy was coerced to INTRADAY. ⛔ THAT IS NOT THE STATE --
+        # force_intraday_only is FALSE and delivery has traded, so daily_delivery_count
+        # CAN be non-zero and this cap rejects real delivery entries.
         if sizing_result.bucket == "positional":
             if daily_delivery_count >= self._max_daily_delivery:
                 return reject(
