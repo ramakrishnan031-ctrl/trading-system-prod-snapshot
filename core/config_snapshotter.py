@@ -111,6 +111,25 @@ def _resolve_config_dict(app_config) -> dict:
     every nested sub-config to JSON-native types — or a plain dict (tests). The
     FULL config is captured; W0 never pre-filters (the Config sheet decides later
     what to show).
+
+    NI-6 (22-Aug-2026) — THE FIRST POST-DEPLOY DAY WILL RECORD A NEW ``config_hash``,
+    AND THAT IS CORRECT. ⛔ Do not "fix" it. ⛔ Do not read it as drift. Two
+    independent reasons, both MEASURED rather than reasoned:
+
+      1. fix item 1 (``d00e574``) made five delivery-scoped keys explicit, so the
+         dumped config gains five fields. A real config change, correctly recorded.
+
+      2. THE ONE THAT WILL CATCH SOMEONE OUT: ``AppConfig`` carries ``file_hashes``
+         — the sha256 of each config file's RAW BYTES (``config_loader`` CL4) — and
+         that dict is INSIDE what gets hashed here. So a COMMENT-ONLY edit to
+         ``system_config.yaml`` moves ``config_hash`` even though every VALUE is
+         unchanged. Measured on this tree: NI-3 edited only comments; the canonical
+         JSON stayed 16,206 bytes and every value was identical, while
+         ``config_hash`` went ``4bed2598…`` → ``1b163ca4…``.
+
+    ⇒ A ``config_hash`` change is evidence that a config FILE changed. It is ⛔ NOT
+      evidence that a config VALUE changed. To answer "did a value move?", diff
+      ``config_json`` — ⛔ never the hash.
     """
     if hasattr(app_config, "model_dump"):
         return app_config.model_dump(mode="json")
