@@ -388,6 +388,30 @@ def _group_b_single_source(raw_system: Optional[dict],
     return out
 
 
+# NI-2 (22-Aug-2026). The sizer clamps the tiered quantity to twice the pre-multiplier
+# quantity — `tiered_qty = max(1, min(tiered_qty, raw_qty * 2))` in
+# capital/position_sizer.py — so no configured multiplier can push notional past 2×
+# whatever the min(risk, capital, concentration) constraint allowed. Held here as a
+# named constant rather than a bare 2 so the source of the number is stated.
+# ⚠️ M3: it mirrors a literal in another file; if that clamp ever changes, this changes.
+_SIZER_TIERED_QTY_HARD_CAP = 2.0
+
+
+def _max_effective_multiplier(ps: Any) -> float:
+    """The largest multiplier routine sizing can apply on top of the qty constraints.
+
+    tier_mult × perf_weight, where perf_weight is bounded above by
+    position_sizing.max_multiplier — the whole product then clamped by the sizer's own
+    hard 2× ceiling. Derived from the config rather than hard-coded, so raising a tier
+    weight or max_multiplier moves this check with it instead of leaving it stale.
+    """
+    tiers = getattr(ps, "tier_multipliers", None)
+    weights = [float(getattr(tiers, name, 0.0) or 0.0) for name in ("HIGH", "MEDIUM", "LOW")]
+    tier_ceiling = max([w for w in weights if w > 0.0], default=1.0)
+    perf_ceiling = float(getattr(ps, "max_multiplier", 1.0) or 1.0)
+    return min(tier_ceiling * perf_ceiling, _SIZER_TIERED_QTY_HARD_CAP)
+
+
 def _group_c_capital_relative(sc: Any) -> List[AuditFinding]:
     """Capital-relative sanity. The bug-guard cap MUST be looser than the routine
     concentration cap, else it would bind on normal trades. pct values must sit in
@@ -406,18 +430,39 @@ def _group_c_capital_relative(sc: Any) -> List[AuditFinding]:
             "(a daily loss limit above ~10% of capital is likely a config error).",
             metrics={"daily_loss_limit_pct": dll}))
 
-    # C2 — the ladder: concentration ≤ position-value cap. The catastrophic-loss cap
-    # is a BACKSTOP; if it is ≤ the routine concentration cap it would fire before
-    # concentration ever binds (wrong — it must be the looser, outer rail).
+    # C2 — the ladder: the catastrophic-loss cap must stay LOOSER than the ROUTINE
+    # ceiling on notional. The cap is a BACKSTOP; if it is <= what routine sizing can
+    # produce it fires on ordinary trades instead of on an anomaly.
+    #
+    # NI-2 (22-Aug-2026): comparing max_position_value_pct against max_concentration_pct
+    # DIRECTLY was wrong, because concentration is not the routine ceiling. The
+    # tier/perf multiplier is applied AFTER the concentration constraint —
+    # capital/position_sizer.py computes tiered_qty = floor(raw_qty * effective_mult)
+    # and then caps it at raw_qty * 2 — so the routine ceiling is
+    #     max_concentration_pct  ×  the largest multiplier sizing can produce.
+    # Worked example the old check passed and should not have: conc 0.25 / posv 0.40
+    # satisfies 0.40 > 0.25, while 0.25 × 2.0 = 0.50 > 0.40, i.e. the backstop binds on
+    # ROUTINE sizing — the exact condition C2 exists to prevent.
+    #
+    # ⛔ This evaluates the multiplier; it does NOT change the multiplier's policy.
+    # perf_weight is still unwired (main.py constructs SignalProcessor with no
+    # perf_weights, so .get(name, 1.0) always returns 1.0), which is why the effective
+    # ceiling is 1.0 in practice today. That is a separate fact and stays untouched:
+    # this check must be right for the config as WRITTEN, not for today's accident.
     conc = ps.max_concentration_pct
     posv = ps.max_position_value_pct
-    if posv <= conc:
+    mult_ceiling = _max_effective_multiplier(ps)
+    effective_conc = conc * mult_ceiling
+    if posv <= effective_conc:
         out.append(AuditFinding(
             "C", "C2_position_cap_not_looser", Severity.WARN,
-            f"max_position_value_pct ({posv:.0%}) must be LOOSER than "
-            f"max_concentration_pct ({conc:.0%}); as set the catastrophic-loss "
-            "backstop would bind before routine concentration sizing.",
-            metrics={"max_position_value_pct": posv, "max_concentration_pct": conc}))
+            f"max_position_value_pct ({posv:.0%}) must be LOOSER than the EFFECTIVE "
+            f"routine ceiling max_concentration_pct × max effective multiplier "
+            f"({conc:.0%} × {mult_ceiling:g} = {effective_conc:.0%}); as set the "
+            "catastrophic-loss backstop would bind before routine concentration sizing.",
+            metrics={"max_position_value_pct": posv, "max_concentration_pct": conc,
+                     "max_effective_multiplier": mult_ceiling,
+                     "effective_concentration_ceiling": effective_conc}))
 
     # C3 — risk per trade a sane fraction.
     rpt = ps.risk_per_trade_pct

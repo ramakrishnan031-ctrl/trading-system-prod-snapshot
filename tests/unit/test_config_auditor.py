@@ -292,6 +292,60 @@ class TestGroupCCapitalRelative:
         r = audit(s, groups="C")
         assert any(f.code == "C2_position_cap_not_looser" for f in r.warns)
 
+    # ── NI-2 (22-Aug-2026): C2 must evaluate the EFFECTIVE ceiling ───────────
+    # The multiplier is applied AFTER the concentration constraint, so comparing
+    # posv against conc directly can pass a config in which the catastrophic-loss
+    # backstop binds on routine sizing. Every test below uses multiplier != 1.
+
+    def test_c2_ni2_fires_once_the_multiplier_is_evaluated(self, base_system):
+        """The config the OLD check passed and should not have.
+
+        conc 0.25 / posv 0.40 satisfies posv > conc, so the pre-NI-2 comparison was
+        SILENT. The effective routine ceiling is 0.25 x 2.0 = 0.50 > 0.40, i.e. the
+        backstop would bind on routine sizing.
+        """
+        s = _mut(base_system,
+                 position_sizing__max_concentration_pct=0.25,
+                 position_sizing__max_position_value_pct=0.40,
+                 position_sizing__max_multiplier=2.0)
+        ps = s.position_sizing
+        # premise, asserted rather than assumed: the OLD check is silent on this input
+        assert ps.max_position_value_pct > ps.max_concentration_pct
+        assert ps.max_multiplier != 1.0
+
+        r = audit(s, groups="C")
+        hits = [f for f in r.warns if f.code == "C2_position_cap_not_looser"]
+        assert hits, "C2 must fire once the multiplier is part of the ceiling"
+        assert hits[0].metrics["max_effective_multiplier"] == pytest.approx(2.0)
+        assert hits[0].metrics["effective_concentration_ceiling"] == pytest.approx(0.50)
+        assert "0.50" in f"{hits[0].metrics['effective_concentration_ceiling']:.2f}"
+
+    def test_c2_ceiling_is_derived_from_config_not_hardcoded(self, base_system):
+        """Same conc/posv, max_multiplier 1.0 -> the effective ceiling IS concentration.
+
+        Proves the multiplier term is live rather than a constant 2 baked in: with a
+        multiplier that genuinely cannot double, C2 reduces exactly to its pre-NI-2
+        behaviour and stays silent on 0.25/0.40.
+        """
+        s = _mut(base_system,
+                 position_sizing__max_concentration_pct=0.25,
+                 position_sizing__max_position_value_pct=0.40,
+                 position_sizing__max_multiplier=1.0)
+        r = audit(s, groups="C")
+        assert not [f for f in r.warns if f.code == "C2_position_cap_not_looser"]
+
+    def test_c2_is_silent_on_the_shipped_config(self, base_system):
+        """Behaviour-neutrality on the config that actually ships.
+
+        0.10 x 2.0 = 0.20 effective ceiling vs a 0.40 backstop -> a 2x margin, so the
+        change adds NO finding to the live config. If concentration is ever raised past
+        0.20 this goes red, which is the point.
+        """
+        ps = base_system.position_sizing
+        r = audit(base_system, groups="C")
+        assert not [f for f in r.warns if f.code == "C2_position_cap_not_looser"]
+        assert ps.max_concentration_pct * ps.max_multiplier < ps.max_position_value_pct
+
     def test_daily_loss_pct_out_of_range_warns(self, base_system):
         s = _mut(base_system, risk__daily_loss_limit_pct=0.50)
         r = audit(s, groups="C")
