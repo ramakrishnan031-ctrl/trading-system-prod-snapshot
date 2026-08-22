@@ -78,9 +78,12 @@ class SizingResult:
         risk_amount:     Actual rupees at risk = qty * sl_distance.
         bucket:          "intraday" | "positional" (PS7).
         constraint:      What bound the qty:
-                           "RISK"          -- risk_per_trade_pct was the tightest limit
+                           "RISK"          -- the effective risk-per-trade pct was tightest
                            "CAPITAL"       -- available bucket capital was tightest
-                           "CONCENTRATION" -- max_concentration_pct was tightest
+                           "CONCENTRATION" -- the effective concentration pct was tightest
+                                              ("effective" = the DELIVERY key for a
+                                              positional entry, the global key for an
+                                              intraday one; they are never mixed)
                            "BELOW_MIN"     -- tier/lot_size rounding made qty < minimum
                            "ZERO_MULTIPLIER" -- M-C6: tier_mult × perf_weight <= 0, i.e.
                                               sizing said "trade nothing" -> skip (NOT
@@ -115,6 +118,11 @@ class PositionSizer:
             leverage_map={"INTRADAY": 5.0, "DELIVERY": 1.0, ...},
             risk_per_trade_pct=0.01,
             max_concentration_pct=0.10,
+            # Required to size a DELIVERY (positional) entry. Omit them and a
+            # positional entry raises — it will NOT borrow the intraday values.
+            delivery_risk_per_trade_pct=0.01,
+            delivery_max_concentration_pct=0.10,
+            delivery_max_position_value_pct=0.40,
         )
         result = sizer.calculate("RELIANCE", "BUY", 2500.0, 2450.0, "INTRADAY")
         if result.success:
@@ -140,11 +148,17 @@ class PositionSizer:
         broker_adapter=None,  # FIX-072: optional adapter for live margin fetch
         enabled: bool = True,                   # Diary #4: ON = score-tier × perf sizing (default)
         flat_value_rs: Optional[float] = None,  # Diary #4: flat Rs/order; required when enabled=False
-        # V3 03.06 — DELIVERY-scoped sizing scaffold (INERT; default None → the global
-        # risk/max-position-value are used, byte-identical). Applied ONLY to a positional
-        # (delivery) bucket, which never occurs live while force_intraday_only coerces
-        # every entry to INTRADAY. Reuses this sizer (no parallel/delivery sizer).
+        # DELIVERY-scoped sizing limits (22-Aug-2026, fix item 1). Applied ONLY to a
+        # positional (delivery) bucket; the intraday bucket never reads them.
+        # ⛔ These do NOT fall back to the global values. They default to None only so
+        # that an intraday-only caller (every direct construction in the test suite)
+        # need not supply delivery config it will never use; the moment a POSITIONAL
+        # entry is sized, a None here is a hard ValueError naming the key — never a
+        # silent substitution of the intraday number. In production this class is
+        # constructed at exactly one site (main.py) from config that now REQUIRES all
+        # three keys, so None is unreachable there.
         delivery_risk_per_trade_pct: Optional[float] = None,
+        delivery_max_concentration_pct: Optional[float] = None,
         delivery_max_position_value_pct: Optional[float] = None,
     ) -> None:
         self._fm = fund_manager
@@ -171,14 +185,44 @@ class PositionSizer:
         self._fx_verdict = _effect_handle("position_sizer")
         self._fx_risk_bind = _effect_handle("sizer.risk_bind")
         self._fx_live_margin = _effect_handle("sizer.live_margin")
-        # V3 03.06 delivery scaffold (INERT; see ctor note).
+        # DELIVERY-scoped limits (see ctor note). Never merged with the global ones.
         self._delivery_risk_per_trade_pct = delivery_risk_per_trade_pct
+        self._delivery_max_concentration_pct = delivery_max_concentration_pct
         self._delivery_max_position_value_pct = delivery_max_position_value_pct
         if not enabled and (flat_value_rs is None or flat_value_rs <= 0):
             raise ValueError(
                 f"PositionSizer: enabled=False (flat sizing) requires flat_value_rs > 0, "
                 f"got {flat_value_rs!r}"
             )
+
+    def _require_delivery(self, value: Optional[float], key: str) -> float:
+        """Return a delivery-scoped limit, or REFUSE — never inherit the intraday one.
+
+        22-Aug-2026 (fix item 1). The whole point of this helper is that it has no
+        `else` returning a global value. Rama's standard, verbatim: *"No Silent
+        Fallbacks: missing params cause immediate rejection with logged reason."*
+        The key is named in the message so the failure is diagnosable from the log
+        alone. In production `config/system_config.yaml` makes all three keys REQUIRED,
+        so reaching this raise means a component was wired outside the config path.
+        """
+        if value is None:
+            if self._log is not None:
+                # ⛔ NOT `extra={"msg": ...}` — "msg" is a reserved LogRecord attribute
+                # and logging raises KeyError on the collision, i.e. the diagnostic
+                # would destroy the very failure it is describing.
+                self._log.critical(
+                    "position_sizer.delivery_limit_missing",
+                    extra={"key": f"position_sizing.{key}",
+                           "detail": ("delivery sizing limit is not configured; refusing "
+                                      "to size a positional (CNC) entry on the intraday "
+                                      "value")},
+                )
+            raise ValueError(
+                f"PositionSizer: position_sizing.{key} is not configured; a delivery "
+                f"(positional) entry cannot be sized. This value does NOT fall back to "
+                f"the intraday (global) setting."
+            )
+        return value
 
     def calculate(self, *args, **kwargs) -> "SizingResult":
         """effect-telemetry (frozen A2.1): the ONE lexical point for "a sizing
@@ -204,8 +248,11 @@ class PositionSizer:
         """
         Compute position size using risk-based formula (PS2).
 
-        Formula (all quantities floor()-truncated to integers):
-            risk_per_trade_rs      = total_capital * risk_per_trade_pct
+        Formula (all quantities floor()-truncated to integers). `eff_*` means the
+        DELIVERY key when bucket == "positional" and the GLOBAL key when it is
+        "intraday" — the two books never share a number and an absent delivery key
+        raises rather than borrowing the intraday one:
+            risk_per_trade_rs      = total_capital * eff_risk_pct
             sl_distance            = abs(entry_price - sl_price)
             qty_by_risk            = floor(risk_per_trade_rs / sl_distance)
 
@@ -213,7 +260,7 @@ class PositionSizer:
             margin_per_share       = effective_entry_price / leverage
             qty_by_capital         = floor(avail_bucket / margin_per_share)
 
-            qty_by_concentration   = floor((total_capital * max_conc_pct) / entry_price)
+            qty_by_concentration   = floor((total_capital * eff_conc_pct) / entry_price)
 
             raw_qty                = min(qty_by_risk, qty_by_capital, qty_by_concentration)
             tiered_qty             = floor(raw_qty * tier_multiplier)
@@ -293,20 +340,30 @@ class PositionSizer:
         total_capital = snap.total
         avail = snap.intraday_avail if bucket == "intraday" else snap.positional_avail
 
-        # V3 03.06 delivery scaffold (INERT): a positional (delivery) entry MAY use
-        # delivery-specific risk / max-position-value; default None → the global values
-        # (byte-identical). bucket is never "positional" live while force_intraday_only
-        # coerces every entry to INTRADAY, so live sizing is unchanged.
-        eff_risk_pct = (
-            self._delivery_risk_per_trade_pct
-            if (bucket == "positional" and self._delivery_risk_per_trade_pct is not None)
-            else self._risk_per_trade_pct
-        )
-        eff_max_position_value_pct = (
-            self._delivery_max_position_value_pct
-            if (bucket == "positional" and self._delivery_max_position_value_pct is not None)
-            else self._max_position_value_pct
-        )
+        # ── Per-book risk limits (22-Aug-2026, fix item 1) ────────────────────────
+        # A positional (delivery / CNC) entry is sized on the DELIVERY limits; an
+        # intraday (MIS/CO/BO) entry is sized on the GLOBAL ones. The two books do not
+        # share a number and neither can move the other.
+        #
+        # ⛔ WHAT WAS HERE BEFORE, AND WHY IT IS GONE: the previous expression read
+        #       delivery_X if (bucket == "positional" and delivery_X is not None)
+        #       else global_X
+        # so an unset delivery key SILENTLY INHERITED the intraday value. The comment
+        # justifying that called these keys unread because it called the V3 delivery
+        # path dormant — FALSE on both counts. Delivery is live and has traded, and
+        # this branch sized three real CNC entries on the INTRADAY risk budget.
+        # A missing delivery limit is now a hard error, never a substitution.
+        if bucket == "positional":
+            eff_risk_pct = self._require_delivery(
+                self._delivery_risk_per_trade_pct, "delivery_risk_per_trade_pct")
+            eff_conc_pct = self._require_delivery(
+                self._delivery_max_concentration_pct, "delivery_max_concentration_pct")
+            eff_max_position_value_pct = self._require_delivery(
+                self._delivery_max_position_value_pct, "delivery_max_position_value_pct")
+        else:
+            eff_risk_pct = self._risk_per_trade_pct
+            eff_conc_pct = self._max_concentration_pct
+            eff_max_position_value_pct = self._max_position_value_pct
 
         # ── PS2: Three candidate quantities ───────────────────────────────────
         # FIX-072: Try live margin from broker API first, fallback to static on error
@@ -421,7 +478,7 @@ class PositionSizer:
         )
 
         qty_by_concentration = int(math.floor(
-            (total_capital * self._max_concentration_pct) / entry_price
+            (total_capital * eff_conc_pct) / entry_price
         ))
 
         # Binding constraint: CAPITAL wins on tie (most conservative), then RISK
@@ -576,11 +633,18 @@ class PositionSizer:
 
         # ── FIX-144 / BUILD 1 (#2): Position value cap (catastrophic-loss / bug-guard) ──
         # Capital-relative hard cap on qty*price regardless of how it was computed.
-        # cap = max_position_value_pct × current capital (total_capital, fetched
+        # cap = eff_max_position_value_pct × current capital (total_capital, fetched
         # above). REJECT (not clamp) — this fires on an ANOMALY, not routine
-        # sizing (which is governed by concentration 10% + risk 1%). Catches:
+        # sizing (which is governed by concentration + risk). Catches:
         # - Bugs in earlier constraints
         # - High-priced stocks where even small qty is large exposure
+        #
+        # 22-Aug-2026 (fix item 1): the log field and the reason string below used to
+        # report `self._max_position_value_pct` — the GLOBAL — while the line above
+        # ENFORCED `eff_max_position_value_pct`. They were identical only because the
+        # delivery override was null, and populating it is precisely what separates
+        # them. Both now report the value that was actually enforced; a rejection that
+        # states a percentage nobody applied is a trap, not a diagnostic.
         position_value = final_qty * entry_price
         max_position_value = eff_max_position_value_pct * total_capital
         if position_value > max_position_value:
@@ -593,7 +657,8 @@ class PositionSizer:
                         "entry_price": entry_price,
                         "position_value": position_value,
                         "max_position_value": max_position_value,
-                        "max_position_value_pct": self._max_position_value_pct,
+                        "max_position_value_pct": eff_max_position_value_pct,
+                        "bucket": bucket,
                         "capital": total_capital,
                     },
                 )
@@ -606,7 +671,7 @@ class PositionSizer:
                 constraint="POSITION_VALUE_CAP",
                 reason=(
                     f"position_value={position_value:.2f} > max={max_position_value:.2f} "
-                    f"({self._max_position_value_pct:.0%} of capital {total_capital:.2f}) "
+                    f"({eff_max_position_value_pct:.0%} of capital {total_capital:.2f}) "
                     f"for {symbol} (qty={final_qty}, price={entry_price}); "
                     f"rejecting to prevent catastrophic loss"
                 ),

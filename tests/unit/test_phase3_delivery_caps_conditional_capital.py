@@ -49,6 +49,12 @@ def _engine(store, fm, *, max_open=100, max_daily=100,
         sector_lookup_fn=lambda _s: "IT", logger=log, kill_switch=None,
         max_open_delivery_positions=max_open_delivery,
         max_daily_delivery_trades=max_daily_delivery,
+        # 22-Aug-2026 (fix item 1): these tests drive DELIVERY (positional) entries
+        # through the gate, so the delivery limits must be supplied — the engine no
+        # longer borrows the global ones. Set equal to the globals above so every
+        # assertion in this file keeps its exact arithmetic.
+        delivery_max_sector_exposure_pct=0.40,
+        delivery_daily_loss_limit_pct=0.99,
     )
 
 

@@ -191,6 +191,13 @@ def _make_engine(
         kill_switch=kill_switch,
         daily_loss_include_unrealized=daily_loss_include_unrealized,
         sector_cap_mode=sector_cap_mode,
+        # 22-Aug-2026 (fix item 1): FIXTURE CONVENIENCE ONLY — mirror the intraday
+        # limits so every pre-existing assertion in this file keeps its exact
+        # arithmetic, including the one delivery-bucket CAPITAL test. ⛔ The mirroring
+        # belongs to this helper, not to production: production requires both keys in
+        # config and the engine refuses to borrow the intraday value.
+        delivery_max_sector_exposure_pct=max_sector_pct,
+        delivery_daily_loss_limit_pct=daily_loss_pct,
     )
 
 

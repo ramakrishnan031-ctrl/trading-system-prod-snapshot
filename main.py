@@ -2515,8 +2515,11 @@ def _main_locked(args, config_dir: Path) -> int:
         max_position_value_pct=ps_cfg.max_position_value_pct,  # FIX-144 / BUILD 1 (#2)
         enabled=ps_cfg.enabled,                # Diary #4: tier-multiplier ON/OFF switch
         flat_value_rs=ps_cfg.flat_value_rs,    # Diary #4: flat Rs/order when OFF
-        # V3 03.06 delivery scaffold (INERT; None → global values, byte-identical).
+        # DELIVERY-scoped sizing limits (22-Aug-2026, fix item 1). Required by the
+        # schema, so these are never None here; a delivery entry is sized on these and
+        # on nothing else — it does not inherit the intraday numbers above.
         delivery_risk_per_trade_pct=ps_cfg.delivery_risk_per_trade_pct,
+        delivery_max_concentration_pct=ps_cfg.delivery_max_concentration_pct,
         delivery_max_position_value_pct=ps_cfg.delivery_max_position_value_pct,
     )
     # Diary #4: surface the active sizing mode at startup (one info-level line).
@@ -2573,6 +2576,11 @@ def _main_locked(args, config_dir: Path) -> int:
         # force_intraday_only=true — no CNC entries reach the positional branch).
         max_open_delivery_positions=risk_cfg.max_open_delivery_positions,
         max_daily_delivery_trades=risk_cfg.max_daily_delivery_trades,
+        # DELIVERY-scoped gate limits (22-Aug-2026, fix item 1). Required by the schema,
+        # so these are never None here. A delivery entry is gated on these; an intraday
+        # entry on the global ones above. Neither book can move the other's limit.
+        delivery_max_sector_exposure_pct=risk_cfg.delivery_max_sector_exposure_pct,
+        delivery_daily_loss_limit_pct=risk_cfg.delivery_daily_loss_limit_pct,
     )
 
     live_feed = LiveFeedManager(

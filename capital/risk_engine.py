@@ -38,6 +38,14 @@ Locked Design Decisions:
             + same state -> same ApprovalResult.
     RE17 -- NOT in scope: capital reservation, order placement, position
             monitoring, unrealized P&L tracking.
+    RE18 -- (22-Aug-2026, fix item 1) DAILY_LOSS and SECTOR_EXPOSURE are PER BOOK.
+            A delivery (CNC) entry is gated on delivery_daily_loss_limit_pct /
+            delivery_max_sector_exposure_pct; an intraday entry on the global pair.
+            An unset delivery limit RAISES; it is never replaced by the global one.
+            Scope note: the delivery daily-loss limit governs this PRE-TRADE gate
+            only — fund_manager's post-close portfolio circuit breaker stays global,
+            because one account-wide realized P&L exists and there is no per-book
+            attribution to split it with. CONSECUTIVE_LOSSES stays shared by design.
 
 What This Module Does NOT Do:
     - Does not reserve or release capital (fund_manager does that)
@@ -121,6 +129,10 @@ class RiskEngine:
             max_sector_exposure_pct=0.40,
             max_consecutive_losses=4,
             daily_loss_limit_pct=0.03,
+            # Required to gate a DELIVERY (positional) entry. Omit them and such an
+            # entry raises — it will NOT borrow the global limits above.
+            delivery_max_sector_exposure_pct=0.40,
+            delivery_daily_loss_limit_pct=0.03,
             sector_lookup_fn=lambda s: instrument_cache.sector(s),   # BUG A (16-Jul): the real InstrumentCache method is .sector
             logger=get_logger(__name__),
             kill_switch=ks,          # optional; None disables KILL_SWITCH check
@@ -160,6 +172,16 @@ class RiskEngine:
         # reads scalars off this engine; enforcement lives in the gate layer beside
         # the H-7 per-strategy cap so the rejection is recorded the same way.
         one_trade_per_symbol_direction_per_day: bool = False,
+        # DELIVERY-scoped gate limits (22-Aug-2026, fix item 1). Read ONLY for a
+        # delivery entry (sizing_result.bucket == "positional"); an intraday entry
+        # reads ONLY the global values above.
+        # ⛔ These do NOT fall back to the global limits. They default to None only so
+        # an intraday-only caller need not supply delivery config it will never use;
+        # the moment a POSITIONAL entry reaches the gate, a None here is a hard
+        # ValueError naming the key. In production this engine is constructed at one
+        # site (main.py) from config that now REQUIRES both keys.
+        delivery_max_sector_exposure_pct: Optional[float] = None,
+        delivery_daily_loss_limit_pct: Optional[float] = None,
     ) -> None:
         self._fm = fund_manager
         self._store = state_store
@@ -168,6 +190,8 @@ class RiskEngine:
         self._max_sector_pct = max_sector_exposure_pct
         self._max_consec = max_consecutive_losses
         self._daily_loss_pct = daily_loss_limit_pct
+        self._delivery_max_sector_pct = delivery_max_sector_exposure_pct
+        self._delivery_daily_loss_pct = delivery_daily_loss_limit_pct
         self._daily_loss_include_unrealized = daily_loss_include_unrealized
         self._sector_cap_mode = sector_cap_mode if sector_cap_mode in ("observe", "enforce") else "observe"
         self._one_trade_per_symbol_direction = bool(one_trade_per_symbol_direction_per_day)
@@ -188,6 +212,28 @@ class RiskEngine:
                 "RiskEngine: kill_switch=None; KILL_SWITCH check will be skipped. "
                 "Ensure kill_switch is injected before live trading."
             )
+
+    def _require_delivery(self, value: Optional[float], key: str) -> float:
+        """Return a delivery-scoped gate limit, or REFUSE — never inherit the global.
+
+        22-Aug-2026 (fix item 1). Deliberately has no `else` branch returning the
+        intraday value: *"No Silent Fallbacks: missing params cause immediate rejection
+        with logged reason."* The key is named in the log and in the exception, so the
+        failure is diagnosable from the log alone. In production `config/
+        system_config.yaml` makes both keys REQUIRED, so reaching this raise means a
+        component was wired outside the config path.
+        """
+        if value is None:
+            self._log.critical(
+                "risk_engine.delivery_limit_missing key=risk.%s — refusing to gate a "
+                "delivery (CNC) entry on the intraday limit", key,
+            )
+            raise ValueError(
+                f"RiskEngine: risk.{key} is not configured; a delivery (positional) "
+                f"entry cannot be gated. This value does NOT fall back to the intraday "
+                f"(global) setting."
+            )
+        return value
 
     # ─────────────────────────────────────────────────────────────────────────
     # Public API
@@ -267,6 +313,20 @@ class RiskEngine:
         daily_delivery_count = (
             self._store.count_daily_delivery_trades(today) if is_delivery_entry else 0)
 
+        # Per-book gate limits (22-Aug-2026, fix item 1). Resolved ONCE here so every
+        # limit this call enforces is fixed before the first check runs (RE11/RE16),
+        # the same discipline the snapshot and the date reads already follow.
+        # A delivery entry is gated on the DELIVERY limits; an intraday entry on the
+        # GLOBAL ones. An unset delivery limit raises — it never borrows the global.
+        if is_delivery_entry:
+            eff_daily_loss_pct = self._require_delivery(
+                self._delivery_daily_loss_pct, "delivery_daily_loss_limit_pct")
+            eff_max_sector_pct = self._require_delivery(
+                self._delivery_max_sector_pct, "delivery_max_sector_exposure_pct")
+        else:
+            eff_daily_loss_pct = self._daily_loss_pct
+            eff_max_sector_pct = self._max_sector_pct
+
         # Consecutive loss streak (RE10)
         # FIX-183: scope the streak to TODAY. A cross-day streak was a deadlock —
         # it blocks entries, but breaking it needs a winning trade, which the
@@ -323,6 +383,8 @@ class RiskEngine:
             symbol, side, active_direction,
             open_delivery_count, daily_delivery_count,   # PHASE-3 (A)
             sector=sector,                               # F1 (16-Jul): observe-mode log
+            eff_daily_loss_pct=eff_daily_loss_pct,       # fix item 1: per-book limits
+            eff_max_sector_pct=eff_max_sector_pct,
         )
 
         # ── Log every call at INFO (RE12) ─────────────────────────────────────
@@ -410,6 +472,13 @@ class RiskEngine:
         open_delivery_count: int = 0,      # PHASE-3 (A): delivery-scoped open count
         daily_delivery_count: int = 0,     # PHASE-3 (A): delivery-scoped today count
         sector: str = "UNKNOWN",           # F1 (16-Jul): resolved sector, for the observe-mode log
+        # 22-Aug-2026 (fix item 1): the per-book limits, resolved ONCE in _approve
+        # (RE11/RE16) and passed in. Keyword-only and REQUIRED — deliberately not
+        # defaulted to the global values, because a default here would quietly
+        # reinstate the inheritance this build exists to remove.
+        *,
+        eff_daily_loss_pct: float,
+        eff_max_sector_pct: float,
     ) -> ApprovalResult:
         """Execute checks in RE5 + FIX-018 + FIX-019 order; return the first failure or approval."""
 
@@ -590,7 +659,7 @@ class RiskEngine:
         # If the MTM is stale/unavailable (quote outage / just-restarted), fall back to
         # realized-only + WARN — never block-all, never fabricate, never silent.
         checks_run.append("DAILY_LOSS")
-        limit = self._daily_loss_pct * snap.total
+        limit = eff_daily_loss_pct * snap.total
         daily_pnl = snap.daily_realized_pnl
         unrealized_mtm, mtm_fresh = self._fm.get_unrealized_mtm_status()
 
@@ -635,7 +704,7 @@ class RiskEngine:
         checks_run.append("SECTOR_EXPOSURE")
         if snap.total > 0:
             projected = effective_sector_margin + sizing_result.margin_required
-            if projected > self._max_sector_pct * snap.total:
+            if projected > eff_max_sector_pct * snap.total:
                 # effect-telemetry (frozen A2.3, gamma): the sector cap bound
                 # a decision — would-reject AND enforce both counted at this
                 # one branch (IA-P3-05: structurally eventless soak today).
@@ -649,7 +718,7 @@ class RiskEngine:
                         f"Sector exposure would exceed limit: "
                         f"projected={projected:.2f} "
                         f"({projected / snap.total * 100:.1f}%), "
-                        f"max={self._max_sector_pct * 100:.1f}%",
+                        f"max={eff_max_sector_pct * 100:.1f}%",
                     )
                 self._log.warning(
                     "risk_engine.sector_cap_would_reject mode=observe verdict=WOULD_REJECT "
@@ -658,7 +727,7 @@ class RiskEngine:
                     symbol, sector,
                     snapshot.get("sector_exposure_pct", 0.0) * 100.0,
                     projected / snap.total * 100.0,
-                    self._max_sector_pct * 100.0,
+                    eff_max_sector_pct * 100.0,
                     projected, snap.total,
                 )
 

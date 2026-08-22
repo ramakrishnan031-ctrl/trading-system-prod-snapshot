@@ -182,13 +182,22 @@ position_sizing:              # PS9
   dynamic_by_winrate: true    # FIX-133 Item 21: PerformanceAllocator weights applied to sizing
   min_multiplier: 0.5         # floor: worst-performing strategy gets at least 50% qty
   max_multiplier: 2.0         # cap: best-performing strategy gets at most 200% qty
-  # V3 03.06 — DELIVERY-scoped sizing scaffold (INERT). null → the global
-  # risk_per_trade_pct / max_position_value_pct above are used (byte-identical).
-  # Delivery is double-locked OFF + force_intraday_only coerces every entry to
-  # INTRADAY, so the positional (delivery) bucket is never sized live. The V3
-  # delivery path sets these when delivery is activated (a later step).
-  delivery_risk_per_trade_pct: null      # e.g. 0.005 for a tighter delivery risk when activated
-  delivery_max_position_value_pct: null  # e.g. 0.20 for a tighter delivery position cap when activated
+  # DELIVERY-scoped sizing limits -- EXPLICIT AND REQUIRED (22-Aug-2026, fix item 1).
+  # NOT a scaffold and NOT inert: the delivery (CNC) path IS live and HAS traded.
+  # CONTRACT: each key is REQUIRED and must be a number. A missing or null value is
+  # REJECTED at config load -- the boot logs the key name at CRITICAL and exits 5.
+  # There is NO inheritance from the intraday keys above: a positional (delivery)
+  # entry reads ONLY these, an intraday entry reads ONLY the global ones, so changing
+  # one book's number cannot move the other book's limit.
+  # The values below are TODAY'S EFFECTIVE VALUES -- the same numbers delivery was
+  # already inheriting -- so this change is behaviour-neutral by construction.
+  delivery_risk_per_trade_pct: 0.01       # = global risk_per_trade_pct today
+  delivery_max_concentration_pct: 0.10    # = global max_concentration_pct today
+  # MEASURED UNREACHABLE, recorded rather than hidden: this cap is a fraction of TOTAL
+  # capital (40%) while the whole positional bucket is 30% of TOTAL, and concentration
+  # binds at 10% first -- so it cannot bind on a delivery entry while the 70/30 split
+  # holds. It is set because the no-fallback contract admits no absent key.
+  delivery_max_position_value_pct: 0.40   # = global max_position_value_pct today
 
 risk:                         # RE13 — portfolio-level pre-trade gate limits
   # BUILD 1 (#3, 24-Jun): these base caps are now the SOLE authority in BOTH
@@ -222,9 +231,21 @@ risk:                         # RE13 — portfolio-level pre-trade gate limits
   # rule rather than a tuned time window (15/20/30/40 min all give the identical
   # answer on this data). See docs/audit/senco_double_entry_27jul2026.md
   one_trade_per_symbol_direction_per_day: true
+  # -- DELIVERY-scoped pre-trade gate limits (22-Aug-2026, fix item 1) -------------
+  # Same contract as the position_sizing delivery keys: REQUIRED, non-null, and NO
+  # inheritance from the global twin. A delivery (CNC) entry reads ONLY the delivery
+  # key; an intraday entry reads ONLY the global one. Enforced on bucket=='positional',
+  # the same 1:1 proxy the delivery COUNT caps above already use. Values below are
+  # today's effective values, so this is behaviour-neutral.
+  # SCOPE, stated so it is never over-read: delivery_daily_loss_limit_pct scopes the
+  # PRE-TRADE gate ONLY. The post-close portfolio circuit breaker in fund_manager stays
+  # GLOBAL -- one account-wide realized P&L exists and there is no per-book attribution
+  # to split it with. CONSECUTIVE_LOSSES likewise stays deliberately shared (no twin).
   max_sector_exposure_pct: 0.40  # max 40% of total capital in one sector (> 0, <= 1)
+  delivery_max_sector_exposure_pct: 0.40  # delivery twin; = the global above today
   max_consecutive_losses: 4      # halt after N consecutive losses (both modes)
   daily_loss_limit_pct: 0.03  # BUILD 1 (#1): SOLE daily-loss authority (3% of capital), PERMANENT
+  delivery_daily_loss_limit_pct: 0.03  # delivery twin, PRE-TRADE gate only; = global today
   # F1 (16-Jul): sector concentration cap (gate-8) mode. observe (DEFAULT) = gate-8 LOGS a
   # would-reject (WOULD_REJECT) but does NOT reject → deploy is behaviour-neutral (trades.sector
   # now fills; the 40% cap only logs). Flip to `enforce` ONLY after an observe soak (>=1 session)

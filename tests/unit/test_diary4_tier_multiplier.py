@@ -62,12 +62,7 @@ def test_on_mode_score_based_sizing_unchanged():
 
 def test_schema_default_enabled_is_true():
     """Regression guard: schema default must be ON (never drift to OFF)."""
-    cfg = PositionSizingConfig(
-        risk_per_trade_pct=0.01, max_concentration_pct=0.10, min_qty_threshold=1,
-        lot_skew_rejection_threshold=0.25, min_tick_size=0.05, max_single_order_qty=10000,
-        max_position_value_pct=0.40,
-        tier_multipliers=PositionSizingTierConfig(HIGH=1.0, MEDIUM=0.7, LOW=0.5),
-    )
+    cfg = PositionSizingConfig(**_ps_kwargs())
     assert cfg.enabled is True
     assert cfg.flat_value_rs is None
 
@@ -166,6 +161,12 @@ def _ps_kwargs(**over):
         lot_skew_rejection_threshold=0.25, min_tick_size=0.05, max_single_order_qty=10000,
         max_position_value_pct=0.40,
         tier_multipliers=PositionSizingTierConfig(HIGH=1.0, MEDIUM=0.7, LOW=0.5),
+        # 22-Aug-2026 (fix item 1): the three delivery keys are REQUIRED by the schema.
+        # This file is about the Diary #4 tier switch, so they are supplied at their
+        # shipped values purely to make the model constructible.
+        delivery_risk_per_trade_pct=0.01,
+        delivery_max_concentration_pct=0.10,
+        delivery_max_position_value_pct=0.40,
     )
     base.update(over)
     return base

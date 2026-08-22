@@ -315,19 +315,38 @@ class PositionSizingConfig(BaseModel):
     max_multiplier: float = 2.0                # FIX-133 Item 21: cap for perf weight
     enabled: bool = True                       # Diary #4: ON = score-tier × perf sizing (default)
     flat_value_rs: Optional[float] = None      # Diary #4: flat Rs/order; required (>0) when enabled=False
-    # V3 03.06 — DELIVERY-scoped sizing scaffold (INERT: delivery is double-locked OFF
-    # + force_intraday_only coerces every strategy to INTRADAY → the positional bucket
-    # is never taken live → these are never read). Default None → the sizer uses the
-    # global risk_per_trade_pct / max_position_value_pct (byte-identical). The V3
-    # delivery path will set these when delivery is activated (a much later step).
-    delivery_risk_per_trade_pct: Optional[float] = None
-    delivery_max_position_value_pct: Optional[float] = None
+    # ---- DELIVERY-scoped sizing limits: REQUIRED, and there is NO inheritance ----
+    # 22-Aug-2026 (fix item 1). These replace a scaffold whose comment asserted that the
+    # V3 delivery path was dormant and that these keys therefore went unread.
+    # BOTH CLAIMS WERE FALSE. Delivery is live and has traded (three recorded CNC round
+    # trips), and the sizer read these on EVERY positional entry — silently inheriting
+    # the INTRADAY numbers whenever they were null. That inheritance is what this build
+    # removes; the stale comment is what hid it for weeks.
+    #
+    # Declared Optional[float] with NO DEFAULT on purpose, so both failure modes are
+    # loud and both name the key:
+    #   * no default  → a MISSING key fails as "Field required" at loc=<the key>;
+    #   * Optional[]  → an explicit `null` reaches the validator below, which rejects it
+    #                   with a message saying WHY, still at loc=<the key>.
+    # Either way load_all raises ConfigSchemaError, main._config_error_detail renders
+    # "<key>: <reason>", and the boot logs it at CRITICAL and returns 5. No code path
+    # turns an absent delivery value into the global one.
+    delivery_risk_per_trade_pct: Optional[float]
+    delivery_max_concentration_pct: Optional[float]
+    delivery_max_position_value_pct: Optional[float]
 
-    @field_validator("delivery_risk_per_trade_pct", "delivery_max_position_value_pct")
+    @field_validator("delivery_risk_per_trade_pct",
+                     "delivery_max_concentration_pct",
+                     "delivery_max_position_value_pct")
     @classmethod
-    def _validate_delivery_pct(cls, v: Optional[float]) -> Optional[float]:
-        if v is not None and not (0 < v <= 1):
-            raise ValueError("delivery sizing pct, when set, must be in (0, 1]")
+    def _validate_delivery_pct(cls, v: Optional[float]) -> float:
+        if v is None:
+            raise ValueError(
+                "delivery sizing pct must be set explicitly to a number in (0, 1]; "
+                "it does NOT fall back to the global (intraday) value"
+            )
+        if not (0 < v <= 1):
+            raise ValueError("delivery sizing pct must be in (0, 1]")
         return v
 
     @field_validator("risk_per_trade_pct")
@@ -545,6 +564,19 @@ class RiskConfig(BaseModel):
     max_sector_exposure_pct: float   # RE13: max fraction of capital in one sector (> 0, <= 1)
     max_consecutive_losses: int      # RE13: halt after N consecutive losses (>= 1)
     daily_loss_limit_pct: float      # RE13: daily loss limit as fraction of total capital (> 0, <= 1)
+    # ---- DELIVERY-scoped pre-trade gate limits: REQUIRED, no inheritance --------
+    # 22-Aug-2026 (fix item 1). Same contract and same declaration trick as the
+    # position_sizing delivery keys: Optional[float] with NO default, so a missing key
+    # AND an explicit null both fail loudly at load, each naming the key. The gates
+    # read ONLY the delivery value for a delivery (CNC) entry and ONLY the global value
+    # for an intraday entry — neither can move the other.
+    #
+    # SCOPE, recorded so this is never over-read: delivery_daily_loss_limit_pct scopes
+    # the PRE-TRADE gate (risk_engine check 7) ONLY. The post-close portfolio circuit
+    # breaker in fund_manager stays GLOBAL — there is one account-wide realized P&L and
+    # no per-book attribution to split it with. CONSECUTIVE_LOSSES stays shared too.
+    delivery_max_sector_exposure_pct: Optional[float]
+    delivery_daily_loss_limit_pct: Optional[float]
     # B-1 (02-Jul): ENFORCE flag for the daily-loss gate's unrealized-MTM term.
     # false = SHADOW (the reconciler populates MTM + the gate LOGS would_reject_with_
     # unrealized but ENFORCES realized-only → zero behaviour change). true = enforce
@@ -581,6 +613,20 @@ class RiskConfig(BaseModel):
     def _validate_pct(cls, v: float) -> float:
         if not (0 < v <= 1):
             raise ValueError("must be > 0 and <= 1")
+        return v
+
+    @field_validator("delivery_max_sector_exposure_pct", "delivery_daily_loss_limit_pct")
+    @classmethod
+    def _validate_delivery_gate_pct(cls, v: Optional[float]) -> float:
+        # A null is rejected here, not defaulted: a delivery gate limit that is absent
+        # must stop the boot, never inherit the intraday one.
+        if v is None:
+            raise ValueError(
+                "delivery gate pct must be set explicitly to a number in (0, 1]; "
+                "it does NOT fall back to the global (intraday) value"
+            )
+        if not (0 < v <= 1):
+            raise ValueError("delivery gate pct must be > 0 and <= 1")
         return v
 
     @field_validator("sector_cap_mode")

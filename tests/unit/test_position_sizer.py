@@ -101,6 +101,14 @@ def _make_sizer(
     min_tick_size: float = 0.05,  # FIX-041
     max_single_order_qty: int = 10000,  # FIX-041
     max_position_value_pct: float = 0.40,  # FIX-144 / BUILD 1 (#2): fraction of capital
+    # 22-Aug-2026 (fix item 1): delivery-scoped limits. FIXTURE CONVENIENCE ONLY —
+    # when a test says nothing about the delivery book these mirror the intraday
+    # numbers, so every pre-existing test's arithmetic is unchanged. ⛔ This mirroring
+    # is a property of THIS HELPER, not of production: production requires all three
+    # keys in config and the sizer refuses to borrow the intraday value.
+    delivery_risk_per_trade_pct: float | None = None,
+    delivery_max_concentration_pct: float | None = None,
+    delivery_max_position_value_pct: float | None = None,
 ) -> PositionSizer:
     fm = _MockFundManager(total, intraday_avail, positional_avail)
     return PositionSizer(
@@ -115,6 +123,15 @@ def _make_sizer(
         min_tick_size=min_tick_size,
         max_single_order_qty=max_single_order_qty,
         max_position_value_pct=max_position_value_pct,
+        delivery_risk_per_trade_pct=(
+            risk_per_trade_pct if delivery_risk_per_trade_pct is None
+            else delivery_risk_per_trade_pct),
+        delivery_max_concentration_pct=(
+            max_concentration_pct if delivery_max_concentration_pct is None
+            else delivery_max_concentration_pct),
+        delivery_max_position_value_pct=(
+            max_position_value_pct if delivery_max_position_value_pct is None
+            else delivery_max_position_value_pct),
     )
 
 

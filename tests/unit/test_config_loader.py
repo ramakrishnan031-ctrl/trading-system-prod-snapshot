@@ -103,6 +103,9 @@ position_sizing:
   min_tick_size: 0.05
   max_single_order_qty: 10000
   max_position_value_pct: 0.40
+  delivery_risk_per_trade_pct: 0.01
+  delivery_max_concentration_pct: 0.10
+  delivery_max_position_value_pct: 0.40
   tier_multipliers:
     HIGH: 1.0
     MEDIUM: 0.70
@@ -113,6 +116,8 @@ risk:
   max_sector_exposure_pct: 0.40
   max_consecutive_losses: 4
   daily_loss_limit_pct: 0.05
+  delivery_max_sector_exposure_pct: 0.40
+  delivery_daily_loss_limit_pct: 0.05
 signal_processor:
   worker_count: 5
   drain_poll_sec: 0.1
