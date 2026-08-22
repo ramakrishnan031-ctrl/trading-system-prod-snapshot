@@ -16,6 +16,8 @@ import math
 import logging
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from capital.fund_manager import CapitalSnapshot
@@ -467,6 +469,141 @@ def test_sl_wrong_side_sell_logs_warning() -> None:
     assert len(mock_log.warnings) == 1
     assert "sl_direction_warning" in mock_log.warnings[0][0]
     print("  OK SELL sl<entry: WARNING logged, calculation proceeds (PS10)")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Tests -- NI-1: the SL-direction warning must WARN, not raise
+#
+# The two tests above pass on the BROKEN code and always did. _MockLogger.warning
+# only appends (msg, extra) to a list; it never builds a logging.LogRecord, so a
+# reserved-attribute collision inside `extra` is invisible to it. A fake logger
+# cannot see a logging bug -- these use a REAL logging.Logger.
+# ─────────────────────────────────────────────────────────────────────────────
+
+class _CapturingHandler(logging.Handler):
+    """Keeps the LogRecord objects themselves, so `extra` fields can be asserted."""
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.DEBUG)
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
+
+
+def _real_logger(name: str) -> tuple[logging.Logger, _CapturingHandler]:
+    log = logging.getLogger(name)
+    log.setLevel(logging.DEBUG)
+    log.handlers.clear()
+    log.propagate = False
+    handler = _CapturingHandler()
+    log.addHandler(handler)
+    return log, handler
+
+
+def test_sl_direction_warning_buy_with_a_real_logger() -> None:
+    """NI-1: BUY with sl>entry must WARN through a real Logger, not raise KeyError.
+
+    Before the fix this raised KeyError("Attempt to overwrite 'msg' in LogRecord")
+    out of calculate(), so the signal was lost AND the warning that would have
+    explained why was never written -- a guard that destroys its own diagnostic.
+    """
+    log, handler = _real_logger("test_ni1_buy")
+    sizer = _make_sizer(total=100_000.0, intraday_avail=70_000.0, logger=log)
+
+    result = sizer.calculate("SYM", "BUY", 40.0, 50.0, "INTRADAY", score_tier="HIGH")
+
+    assert result.success, f"calc should proceed despite the wrong SL side: {result.reason}"
+    warns = [r for r in handler.records if r.levelno == logging.WARNING]
+    assert len(warns) == 1, f"expected exactly one WARNING, got {len(warns)}"
+    rec = warns[0]
+    assert rec.getMessage() == "position_sizer.sl_direction_warning"
+    # the diagnostic actually survived onto the record, under a NON-reserved name
+    assert "BUY sl_price > entry_price" in getattr(rec, "detail", "")
+    assert rec.side == "BUY" and rec.entry == 40.0 and rec.sl == 50.0
+    # and it can be FORMATTED -- the failure mode was inside record construction
+    assert (logging.Formatter("%(message)s").format(rec)
+            == "position_sizer.sl_direction_warning")
+    print("  OK NI-1 BUY: real Logger warns, record carries the diagnostic")
+
+
+def test_sl_direction_warning_sell_with_a_real_logger() -> None:
+    """NI-1, the SELL site. Same defect, same proof."""
+    log, handler = _real_logger("test_ni1_sell")
+    sizer = _make_sizer(total=100_000.0, intraday_avail=70_000.0, logger=log)
+
+    result = sizer.calculate("SYM", "SELL", 50.0, 40.0, "INTRADAY", score_tier="HIGH")
+
+    assert result.success, f"calc should proceed despite the wrong SL side: {result.reason}"
+    warns = [r for r in handler.records if r.levelno == logging.WARNING]
+    assert len(warns) == 1, f"expected exactly one WARNING, got {len(warns)}"
+    rec = warns[0]
+    assert rec.getMessage() == "position_sizer.sl_direction_warning"
+    assert "SELL sl_price < entry_price" in getattr(rec, "detail", "")
+    print("  OK NI-1 SELL: real Logger warns, record carries the diagnostic")
+
+
+def test_the_real_logger_check_could_have_gone_red() -> None:
+    """CONTROL. A green test is evidence only if it could have been red.
+
+    Feeds the OLD payload -- the one carrying "msg" -- to the same real Logger and
+    asserts it still raises. If logging ever stopped rejecting reserved keys, the
+    two tests above would go green for the wrong reason and this one would fail.
+    """
+    log, _handler = _real_logger("test_ni1_control")
+    with pytest.raises(KeyError):
+        log.warning("position_sizer.sl_direction_warning",
+                    extra={"side": "BUY", "msg": "the pre-NI-1 payload"})
+    print("  OK control: a reserved key in `extra` still raises through a real Logger")
+
+
+def test_no_extra_dict_uses_a_reserved_logrecord_key() -> None:
+    """NI-1 pinned as a CLASS, not as two instances.
+
+    Walks capital/position_sizer.py and checks every dict literal handed to a
+    logging-ish call -- self._warn(...), self._log.warning(...), .critical(...),
+    and friends -- for a name that logging.makeRecord refuses. The reserved set is
+    DERIVED from a real LogRecord rather than hard-coded, so it stays correct
+    across Python versions instead of rotting into a stale list.
+    """
+    import ast
+
+    probe = logging.LogRecord("n", logging.WARNING, "p", 1, "m", None, None)
+    reserved = set(probe.__dict__) | {"message", "asctime"}
+    assert "msg" in reserved and "levelname" in reserved, "reserved-set derivation broke"
+
+    src = (Path(__file__).parent.parent.parent / "capital" / "position_sizer.py")
+    tree = ast.parse(src.read_text(encoding="utf-8"))
+
+    log_calls = ("warning", "info", "debug", "error", "critical", "exception",
+                 "log", "_warn", "_info", "_debug", "_error", "_critical")
+    offenders: list[str] = []
+    dicts_seen = 0
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        fn = node.func
+        name = fn.attr if isinstance(fn, ast.Attribute) else (
+            fn.id if isinstance(fn, ast.Name) else None)
+        if name not in log_calls:
+            continue
+        payloads = [a for a in node.args if isinstance(a, ast.Dict)]
+        payloads += [k.value for k in node.keywords
+                     if k.arg == "extra" and isinstance(k.value, ast.Dict)]
+        for d in payloads:
+            dicts_seen += 1
+            for key in d.keys:
+                if isinstance(key, ast.Constant) and key.value in reserved:
+                    offenders.append(f"position_sizer.py:{key.lineno} -> {key.value!r}")
+
+    assert dicts_seen >= 2, (
+        f"sweep is vacuous: it inspected {dicts_seen} payload dicts. It must find the "
+        "PS10 sites, or it proves nothing."
+    )
+    assert not offenders, (
+        "reserved LogRecord attribute name(s) passed into a logging call -- "
+        "logging.makeRecord will raise KeyError:\n  " + "\n  ".join(offenders))
+    print(f"  OK no reserved LogRecord key in any of the {dicts_seen} payload dicts")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

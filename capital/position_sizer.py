@@ -325,13 +325,13 @@ class PositionSizer:
             self._warn(
                 "position_sizer.sl_direction_warning",
                 {"side": side, "entry": entry_price, "sl": sl_price,
-                 "msg": "BUY sl_price > entry_price (SL should be below entry for BUY)"},
+                 "detail": "BUY sl_price > entry_price (SL should be below entry for BUY)"},
             )
         elif side == "SELL" and sl_price < entry_price:
             self._warn(
                 "position_sizer.sl_direction_warning",
                 {"side": side, "entry": entry_price, "sl": sl_price,
-                 "msg": "SELL sl_price < entry_price (SL should be above entry for SELL)"},
+                 "detail": "SELL sl_price < entry_price (SL should be above entry for SELL)"},
             )
 
         # ── PS7: Bucket + snapshot ─────────────────────────────────────────────
@@ -738,5 +738,12 @@ class PositionSizer:
     # ── private ───────────────────────────────────────────────────────────────
 
     def _warn(self, msg: str, extra: dict) -> None:
+        # NI-1 (22-Aug-2026). `extra` MUST NOT carry a reserved LogRecord attribute
+        # name -- "msg", "args", "levelname", "module", "lineno", ... .
+        # logging.makeRecord RAISES KeyError on the collision, so a guard that was
+        # only trying to explain itself takes the whole sizing call down and loses
+        # the diagnostic at the same time. Both PS10 sites above passed "msg" and
+        # did exactly that. Pinned as a CLASS, not an instance, by
+        # test_position_sizer.py::test_no_extra_dict_uses_a_reserved_logrecord_key.
         if self._log is not None:
             self._log.warning(msg, extra=extra)
