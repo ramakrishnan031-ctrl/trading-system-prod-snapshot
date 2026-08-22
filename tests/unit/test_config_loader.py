@@ -118,6 +118,12 @@ risk:
   daily_loss_limit_pct: 0.05
   delivery_max_sector_exposure_pct: 0.40
   delivery_daily_loss_limit_pct: 0.05
+  # NI-4 (22-Aug-2026): the delivery COUNT caps are REQUIRED -- they no longer carry a
+  # schema default, so this fixture must supply them like any other required key.
+  # Fixture values, deliberately NOT the production 3/5: this file tests the LOADER,
+  # and a fixture that mirrored production would hide a loader that ignored the YAML.
+  max_open_delivery_positions: 7
+  max_daily_delivery_trades: 9
 signal_processor:
   worker_count: 5
   drain_poll_sec: 0.1

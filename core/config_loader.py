@@ -557,9 +557,23 @@ class RiskConfig(BaseModel):
     # current; the wording is in the commit diff. This was the FOURTH copy of that same
     # false-antecedent claim on these two keys -- the card named three (the two YAML
     # lines and the two risk_engine sites) and a sweep found this one too.
-    # Defaults make them optional in YAML.
-    max_open_delivery_positions: int = 3   # hard cap on concurrent open DELIVERY positions (>= 1)
-    max_daily_delivery_trades: int = 5     # hard cap on DELIVERY entries per day (>= 1)
+    #
+    # NI-4 (22-Aug-2026): these two carried `= 3` and `= 5`. That is the SAME defect
+    # class fix item 1 removed for the five delivery pct keys, on the two it did not
+    # cover: delete either key from the YAML and the system BOOTED on a hardcoded
+    # delivery cap instead of refusing. Now declared Optional[int] with NO DEFAULT, so
+    # both failure modes are loud and both name the key:
+    #   * no default  -> a MISSING key fails as "Field required" at loc=<the key>;
+    #   * Optional[]  -> an explicit `null` reaches the validator below, which rejects
+    #                    it with a message saying WHY, still at loc=<the key>.
+    # load_all then raises ConfigSchemaError, main._config_error_detail renders
+    # "<key>: <reason>", and the boot logs it at CRITICAL and returns 5.
+    # ⛔ THE VALUES DO NOT CHANGE. 3 and 5 are in the YAML and stay there. They are the
+    # delivery book's OWN caps, deliberately TIGHTER than the intraday twins (5 / 10),
+    # and are NOT copies of them -- writing the intraday numbers here would loosen two
+    # live risk limits.
+    max_open_delivery_positions: Optional[int]   # hard cap on concurrent open DELIVERY positions (>= 1)
+    max_daily_delivery_trades: Optional[int]     # hard cap on DELIVERY entries per day (>= 1)
     # 27-Jul-2026: one COMPLETED trade per symbol+DIRECTION per trading day.
     # false (default) = OFF, byte-identical to the pre-27-Jul path. true = a second
     # entry on the same symbol in the same direction is rejected for the rest of the
@@ -606,12 +620,28 @@ class RiskConfig(BaseModel):
     # was a no-op that only LOOKED active — misleading dead config. The base caps
     # above are now the sole authority in both paper and live.
 
-    @field_validator("max_open_positions", "max_daily_trades", "max_consecutive_losses",
-                     "max_open_delivery_positions", "max_daily_delivery_trades")
+    @field_validator("max_open_positions", "max_daily_trades", "max_consecutive_losses")
     @classmethod
     def _validate_positive_int(cls, v: int) -> int:
         if v < 1:
             raise ValueError("must be >= 1")
+        return v
+
+    @field_validator("max_open_delivery_positions", "max_daily_delivery_trades")
+    @classmethod
+    def _validate_delivery_count_cap(cls, v: Optional[int]) -> int:
+        # NI-4 (22-Aug-2026). A null is REJECTED here, not defaulted: a delivery COUNT
+        # cap that is absent must stop the boot, never fall back to a built-in 3 or 5.
+        # Split out of _validate_positive_int so the delivery pair carries its own
+        # reason -- a shared validator would report "must be >= 1" for a missing key,
+        # which says nothing about the fallback that used to happen.
+        if v is None:
+            raise ValueError(
+                "delivery count cap must be set explicitly to an integer >= 1; "
+                "it does NOT fall back to a built-in default"
+            )
+        if v < 1:
+            raise ValueError("delivery count cap must be >= 1")
         return v
 
     @field_validator("max_sector_exposure_pct", "daily_loss_limit_pct")

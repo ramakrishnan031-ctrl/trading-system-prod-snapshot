@@ -164,6 +164,7 @@ def test_extra_forbid_closes_the_key_universe() -> None:
             "max_open_positions": 5, "max_daily_trades": 10,
             "max_sector_exposure_pct": 0.40, "max_consecutive_losses": 4,
             "daily_loss_limit_pct": 0.03,
+            "max_open_delivery_positions": 3, "max_daily_delivery_trades": 5,
             "delivery_max_sector_exposure_pct": 0.40,
             "delivery_daily_loss_limit_pct": 0.03,
             "delivery_not_a_real_key_pct": 0.5,
