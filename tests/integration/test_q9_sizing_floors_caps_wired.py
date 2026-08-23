@@ -766,6 +766,7 @@ class TestRejectGuards:
 
         # Now: a local sizer with concentration LOOSER than the value cap can reach it.
         loose = PositionSizer(
+            max_position_value_pct=0.40,  # NI-5: was a silent default
             fund_manager=ctx.fund_manager,
             leverage_map=real._leverage_map,
             risk_per_trade_pct=real._risk_per_trade_pct,

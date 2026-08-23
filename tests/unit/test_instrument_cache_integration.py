@@ -100,6 +100,7 @@ def _make_sizer(
         intraday_avail=intraday_avail,
     )
     return PositionSizer(
+        max_position_value_pct=0.40,  # NI-5: was a silent default
         fund_manager=fm,
         leverage_map=_DEFAULT_LEVERAGE,
         risk_per_trade_pct=risk_per_trade_pct,

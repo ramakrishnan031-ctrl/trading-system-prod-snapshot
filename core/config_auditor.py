@@ -594,11 +594,33 @@ def _group_f_stale_default(sc: Any) -> List[AuditFinding]:
     """Guard that BUILD-1-aligned component constructor DEFAULTS still match config
     intent. A component built without explicit config (a default-arg call) that
     diverges from the YAML is a silent footgun → WARN. Deferred imports + fully
-    guarded (introspection must never break the audit)."""
+    guarded (introspection must never break the audit).
+
+    NI-5 (23-Aug-2026) — A ROW THIS GUARD DID NOT CHECK MUST SAY SO. Previously
+    both skip paths (`Parameter.empty`, and a failed introspection) fell through
+    SILENTLY while the summary below still named every parameter in the registry.
+    So removing a constructor default — which NI-5 does deliberately for
+    `PositionSizer.max_position_value_pct` — left group F reporting
+    "component defaults match config intent (position-value cap + daily-loss pct)"
+    having compared NEITHER. A check that asserts nothing and reports PASS is the
+    `V5` tautological-check class. MEASURED before this fix, with the default
+    removed and this function unchanged: the PositionSizer row produced no finding
+    of any severity, and the verdict was still PASS.
+
+    Severity rationale, per outcome:
+      * `required` — a removed default is STRONGER than a matching one: the value
+        can no longer be supplied silently at all. Reported at PASS.
+      * `unresolved` — NOT stronger. It means the guard did not run. Reported
+        explicitly, but deliberately left at PASS: changing what this audit ALERTS
+        on is a separate, major-impact decision and is not taken here.
+    """
     import inspect
 
     out: List[AuditFinding] = []
     import importlib
+    compared: List[str] = []                    # actually compared against config
+    required: List[tuple] = []                  # no default — nothing can go stale
+    unresolved: List[tuple] = []                # not introspectable — guard did not run
     for module_path, cls_name, param, getter in _STALE_DEFAULT_GUARDS:
         try:
             mod = importlib.import_module(module_path)
@@ -606,9 +628,12 @@ def _group_f_stale_default(sc: Any) -> List[AuditFinding]:
             default = inspect.signature(cls.__init__).parameters[param].default
             cfg_val = getter(sc)
         except Exception:  # noqa: BLE001 — never crash on a refactor / missing attr
+            unresolved.append((cls_name, param))
             continue
         if default is inspect.Parameter.empty:
+            required.append((cls_name, param))
             continue
+        compared.append(f"{cls_name}.{param}")
         if default != cfg_val:
             out.append(AuditFinding(
                 "F", f"F_{cls_name}_{param}", Severity.WARN,
@@ -617,10 +642,30 @@ def _group_f_stale_default(sc: Any) -> List[AuditFinding]:
                 "would use the stale default.",
                 metrics={"component": cls_name, "param": param,
                          "default": default, "config": cfg_val}))
-    if not out:
+    for cls_name, param in required:
         out.append(AuditFinding(
-            "F", "F_ok", Severity.PASS,
-            "component defaults match config intent (position-value cap + daily-loss pct)"))
+            "F", f"F_{cls_name}_{param}_required", Severity.PASS,
+            f"{cls_name}.__init__ takes NO default for {param} — it must be passed "
+            "explicitly, so no default exists that could go stale and there is "
+            "nothing here to compare. Stronger than a matching default, not weaker.",
+            metrics={"component": cls_name, "param": param, "outcome": "required"}))
+    for cls_name, param in unresolved:
+        out.append(AuditFinding(
+            "F", f"F_{cls_name}_{param}_unresolved", Severity.PASS,
+            f"{cls_name}.{param} could not be introspected — this guard did NOT run "
+            "for it. That is not evidence the default is correct.",
+            metrics={"component": cls_name, "param": param, "outcome": "unresolved"}))
+    if not any(f.severity is Severity.WARN for f in out):
+        if compared:
+            out.append(AuditFinding(
+                "F", "F_ok", Severity.PASS,
+                "component defaults match config intent "
+                f"({', '.join(compared)})"))
+        else:
+            out.append(AuditFinding(
+                "F", "F_ok", Severity.PASS,
+                "no component default was compared — every registry row is either "
+                "required-by-signature or could not be introspected (see above)"))
     return out
 
 

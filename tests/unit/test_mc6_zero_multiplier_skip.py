@@ -46,6 +46,7 @@ def _make_sizer(total=200_000.0, risk_pct=0.01, max_conc=0.20, tier_multipliers=
         leverage_map={"INTRADAY": 5.0, "POSITIONAL": 1.0},
         risk_per_trade_pct=risk_pct,
         max_concentration_pct=max_conc,
+        max_position_value_pct=0.40,  # NI-5: was a silent default
     )
     if tier_multipliers is not None:
         kwargs["tier_multipliers"] = tier_multipliers

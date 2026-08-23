@@ -116,8 +116,11 @@ class PositionSizer:
         sizer = PositionSizer(
             fund_manager=fm,
             leverage_map={"INTRADAY": 5.0, "DELIVERY": 1.0, ...},
+            # NI-5: all three are REQUIRED — no defaults. Values shown are the live
+            # config's, so this snippet cannot seed a looser stale cap.
             risk_per_trade_pct=0.01,
             max_concentration_pct=0.10,
+            max_position_value_pct=0.40,
             # Required to size a DELIVERY (positional) entry. Omit them and a
             # positional entry raises — it will NOT borrow the intraday values.
             delivery_risk_per_trade_pct=0.01,
@@ -133,18 +136,33 @@ class PositionSizer:
         self,
         fund_manager: "FundManager",
         leverage_map: dict[str, float],
-        risk_per_trade_pct: float = 0.01,
-        max_concentration_pct: float = 0.10,
-        min_qty_threshold: int = 1,
-        tier_multipliers: Optional[dict[str, float]] = None,
-        logger=None,
-        instrument_cache=None,  # IC7: optional InstrumentCache for lot_size lookup
-        lot_skew_rejection_threshold: float = 0.25,  # FIX-021: reject if skew exceeds this
-        min_tick_size: float = 0.05,  # FIX-041: min SL distance (penny stock guard)
-        max_single_order_qty: int = 10000,  # FIX-041: sanity cap on computed qty
+        # ── SAFETY-CRITICAL POLICY — NO DEFAULT (NI-5, 22-Aug-2026) ──────────────
+        # These three multiply capital into a number of shares. A silent default
+        # here sizes REAL MONEY on a number nobody chose, which is the same class of
+        # defect fix item 1 removed for the delivery keys. RiskEngine's own docstring
+        # already forbids exactly this for itself — *"RiskEngine takes NO defaults —
+        # all caps are required, so a component built without config fails fast
+        # rather than running loose."* The two classes now agree.
+        # ⛔ Do not restore a default to make a call site shorter. Pass the value.
+        risk_per_trade_pct: float,
+        max_concentration_pct: float,
         # FIX-144 / BUILD 1 (#2, #A.4): capital-relative hard cap on qty*price.
-        # Default is the conservative 40% (was a stale, far-looser absolute 50000).
-        max_position_value_pct: float = 0.40,
+        # MOVED up from below the defaulted params — a required parameter cannot
+        # follow a defaulted one. Safe because EVERY construction site in the tree
+        # passes by keyword (20 of 20, AST-measured at this SHA), so re-ordering
+        # cannot silently rebind anyone's argument.
+        max_position_value_pct: float,
+        # ── LEGITIMATE PROGRAMMING DEFAULTS — KEPT, each with its reason ─────────
+        # None of these can ENLARGE a position. They are floors, tick/skew guards,
+        # sanity caps and optional collaborators: a wrong value rejects or shrinks,
+        # it never sizes bigger than the three policy limits above allow.
+        min_qty_threshold: int = 1,  # a 1-share floor; below 1 there is no trade
+        tier_multipliers: Optional[dict[str, float]] = None,  # shape default; tier POLICY is a separate unit
+        logger=None,  # optional collaborator
+        instrument_cache=None,  # IC7: optional InstrumentCache for lot_size lookup
+        lot_skew_rejection_threshold: float = 0.25,  # FIX-021: REJECTS if skew exceeds this
+        min_tick_size: float = 0.05,  # FIX-041: REJECTS a sub-tick SL (penny stock guard)
+        max_single_order_qty: int = 10000,  # FIX-041: sanity cap; can only reduce qty
         broker_adapter=None,  # FIX-072: optional adapter for live margin fetch
         enabled: bool = True,                   # Diary #4: ON = score-tier × perf sizing (default)
         flat_value_rs: Optional[float] = None,  # Diary #4: flat Rs/order; required when enabled=False

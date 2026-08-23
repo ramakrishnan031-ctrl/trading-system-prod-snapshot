@@ -31,6 +31,7 @@ def _make_sizer(total=200000.0, risk_pct=0.01, max_conc=0.20):
         daily_realized_pnl=0.0, ts="2026-06-24T09:20:00",
     )
     sizer = PositionSizer(
+        max_position_value_pct=0.40,  # NI-5: was a silent default
         fund_manager=fm,
         leverage_map={"INTRADAY": 5.0, "POSITIONAL": 1.0},
         risk_per_trade_pct=risk_pct,

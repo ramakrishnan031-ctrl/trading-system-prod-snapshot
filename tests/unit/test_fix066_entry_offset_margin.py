@@ -68,6 +68,7 @@ def sizer_setup():
         fm = _initialized_fm(store, bus, balance=100_000.0)
 
         sizer = PositionSizer(
+            max_position_value_pct=0.40,  # NI-5: was a silent default
             fund_manager=fm,
             leverage_map={"INTRADAY": 5},
             risk_per_trade_pct=0.01,

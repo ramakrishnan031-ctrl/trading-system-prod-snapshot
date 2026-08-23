@@ -273,6 +273,7 @@ def test_fix021_high_skew_rejected() -> None:
     """FIX-021: tiered=40, lot=25 -> final=25, skew=37.5% > 25% -> REJECTED_LOT_SKEW."""
     fm = _MockFundManager(total=100_000.0, intraday_avail=70_000.0)
     sizer = PositionSizer(
+        max_position_value_pct=0.40,  # NI-5: was a silent default
         fund_manager=fm,
         leverage_map=_DEFAULT_LEVERAGE,
         risk_per_trade_pct=0.01,
@@ -296,6 +297,7 @@ def test_fix021_acceptable_skew_proceeds() -> None:
     """FIX-021: tiered=30, lot=25 -> final=25, skew=16.7% < 25% -> proceeds with qty=25."""
     fm = _MockFundManager(total=100_000.0, intraday_avail=70_000.0)
     sizer = PositionSizer(
+        max_position_value_pct=0.40,  # NI-5: was a silent default
         fund_manager=fm,
         leverage_map=_DEFAULT_LEVERAGE,
         risk_per_trade_pct=0.01,
@@ -316,6 +318,7 @@ def test_fix021_lot_size_one_never_rejected() -> None:
     """FIX-021: lot_size=1 skips skew check entirely (equity default)."""
     fm = _MockFundManager(total=100_000.0, intraday_avail=70_000.0)
     sizer = PositionSizer(
+        max_position_value_pct=0.40,  # NI-5: was a silent default
         fund_manager=fm,
         leverage_map=_DEFAULT_LEVERAGE,
         risk_per_trade_pct=0.01,
@@ -337,6 +340,7 @@ def test_fix021_threshold_configurable() -> None:
 
     # Strict threshold: 10%
     sizer_strict = PositionSizer(
+        max_position_value_pct=0.40,  # NI-5: was a silent default
         fund_manager=fm,
         leverage_map=_DEFAULT_LEVERAGE,
         risk_per_trade_pct=0.01,
@@ -352,6 +356,7 @@ def test_fix021_threshold_configurable() -> None:
 
     # Lenient threshold: 50%
     sizer_lenient = PositionSizer(
+        max_position_value_pct=0.40,  # NI-5: was a silent default
         fund_manager=fm,
         leverage_map=_DEFAULT_LEVERAGE,
         risk_per_trade_pct=0.01,
@@ -974,6 +979,7 @@ def test_fix072_live_margin_used_over_static() -> None:
     adapter = _MockAdapter(margin_pct=0.25)  # 25% margin = 4x leverage
 
     sizer = PositionSizer(
+        max_position_value_pct=0.40,  # NI-5: was a silent default
         fund_manager=fm,
         leverage_map={"INTRADAY": 5.0},  # static 20% margin = 5x leverage
         risk_per_trade_pct=0.01,
@@ -1021,6 +1027,7 @@ def test_fix072_fallback_to_static_on_api_failure() -> None:
     logger.setLevel(logging.WARNING)
 
     sizer = PositionSizer(
+        max_position_value_pct=0.40,  # NI-5: was a silent default
         fund_manager=fm,
         leverage_map={"INTRADAY": 5.0},
         risk_per_trade_pct=0.01,
@@ -1057,6 +1064,7 @@ def test_fix072_no_adapter_uses_static() -> None:
     fm = _MockFundManager(total=100_000, intraday_avail=50_000)
 
     sizer = PositionSizer(
+        max_position_value_pct=0.40,  # NI-5: was a silent default
         fund_manager=fm,
         leverage_map={"INTRADAY": 5.0},
         risk_per_trade_pct=0.01,

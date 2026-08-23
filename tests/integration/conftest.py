@@ -238,6 +238,7 @@ def _build_wired_system(request, tmp_path, webhook_secret):
     fund_manager.initialize(PAPER_CAPITAL)
 
     position_sizer = PositionSizer(
+        max_position_value_pct=0.40,  # NI-5: was a silent default
         fund_manager=fund_manager,
         leverage_map=leverage_map,
         risk_per_trade_pct=0.01,

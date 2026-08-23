@@ -403,11 +403,69 @@ class TestGroupFStaleDefault:
         # the real config matches the component defaults (BUILD 1 aligned them)
         assert audit(base_system, groups="F").verdict == "PASS"
 
-    def test_diverging_position_cap_default_warns(self, base_system):
-        # component default is 0.40; set config to 0.35 -> divergence WARN.
-        s = _mut(base_system, position_sizing__max_position_value_pct=0.35)
-        r = audit(s, groups="F")
-        assert any(f.metrics.get("param") == "max_position_value_pct" for f in r.warns)
+    def test_required_param_is_reported_explicitly_not_skipped(self, base_system):
+        """NI-5: `PositionSizer.max_position_value_pct` has NO default any more.
+
+        WAS `test_diverging_position_cap_default_warns`, which set config to 0.35 and
+        asserted a divergence WARN. That test cannot exist now -- with no default
+        there is nothing to diverge FROM. What must be pinned in its place is that
+        the row is not silently DROPPED: the `Parameter.empty` branch used to emit no
+        finding at all, while the summary still claimed the position-value cap had
+        been checked.
+        """
+        r = audit(base_system, groups="F")
+        rows = [f for f in r.findings
+                if f.metrics.get("param") == "max_position_value_pct"]
+        assert rows, "the PositionSizer row vanished -- group F is blind again"
+        assert rows[0].metrics.get("outcome") == "required"
+        # A REMOVED default is stronger than a matching one, so it is not a WARN.
+        assert not r.warns
+
+    def test_summary_names_only_what_it_actually_compared(self, base_system):
+        """The anti-tautology property (`V5`), asserted as a PROPERTY.
+
+        Deliberately not an equality check against a fixed sentence: the point is the
+        relationship between what was compared and what the summary claims, which
+        must keep holding as rows are added to or removed from the registry.
+        """
+        import core.config_auditor as ca
+
+        r = audit(base_system, groups="F")
+        summary = [f for f in r.findings if f.code == "F_ok"]
+        assert summary, "group F produced no summary finding"
+        msg = summary[0].message
+        skipped = {f.metrics["param"] for f in r.findings
+                   if f.metrics.get("outcome") in ("required", "unresolved")}
+        registry = {param for (_mod, _cls, param, _get) in ca._STALE_DEFAULT_GUARDS}
+        compared = registry - skipped
+        assert compared, "nothing was compared -- this assertion would be vacuous"
+        for param in compared:
+            assert param in msg, f"summary omits a parameter it DID compare: {param}"
+        for param in skipped:
+            assert param not in msg, \
+                f"summary claims to have checked {param}, which it skipped"
+
+    def test_unintrospectable_row_is_reported_not_swallowed(
+            self, base_system, monkeypatch):
+        """A registry row that cannot be introspected must leave a trace.
+
+        The bare `except: continue` made a RENAMED parameter indistinguishable from a
+        passing check -- the guard silently stopped existing and group F still said
+        PASS. Unlike the `required` case this one is NOT stronger: it means the guard
+        did not run.
+        """
+        import core.config_auditor as ca
+
+        monkeypatch.setattr(ca, "_STALE_DEFAULT_GUARDS", (
+            ("capital.position_sizer", "PositionSizer", "no_such_param_at_all",
+             lambda sc: 0.0),
+        ))
+        r = audit(base_system, groups="F")
+        rows = [f for f in r.findings if f.metrics.get("outcome") == "unresolved"]
+        assert rows, "an unintrospectable guard row was silently swallowed"
+        assert rows[0].metrics["param"] == "no_such_param_at_all"
+        summary = [f for f in r.findings if f.code == "F_ok"][0]
+        assert "no component default was compared" in summary.message
 
     def test_diverging_daily_loss_default_warns(self, base_system):
         s = _mut(base_system, risk__daily_loss_limit_pct=0.05)
