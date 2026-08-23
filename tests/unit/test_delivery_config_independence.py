@@ -259,6 +259,12 @@ def _engine(store, *, total=100_000.0, daily_pnl=0.0,
         logger=log, kill_switch=None,
         delivery_max_sector_exposure_pct=d_sector,
         delivery_daily_loss_limit_pct=d_loss,
+        # BUG-NI9 (23-Aug-2026): the delivery COUNT caps now REFUSE rather than
+        # defaulting to 3/5. Set high so the COUNT caps never bind -- this file
+        # tests the per-book LOSS and SECTOR limits, and a count rejection would
+        # mask exactly what it is asserting.
+        max_open_delivery_positions=100,
+        max_daily_delivery_trades=100,
     )
 
 

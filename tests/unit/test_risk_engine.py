@@ -191,6 +191,12 @@ def _make_engine(
         kill_switch=kill_switch,
         daily_loss_include_unrealized=daily_loss_include_unrealized,
         sector_cap_mode=sector_cap_mode,
+        # BUG-NI9 (23-Aug-2026): the delivery COUNT caps lost their silent 3/5
+        # defaults and now REFUSE when a delivery entry is gated without them.
+        # Set to the retired default values so every assertion in this file keeps
+        # its exact arithmetic -- this makes the wiring explicit, not different.
+        max_open_delivery_positions=3,
+        max_daily_delivery_trades=5,
         # 22-Aug-2026 (fix item 1): FIXTURE CONVENIENCE ONLY — mirror the intraday
         # limits so every pre-existing assertion in this file keeps its exact
         # arithmetic, including the one delivery-bucket CAPITAL test. ⛔ The mirroring

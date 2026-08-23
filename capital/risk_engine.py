@@ -155,10 +155,16 @@ class RiskEngine:
         logger: logging.Logger,
         kill_switch: Optional[object] = None,
         # SLICE2.5-PHASE-3 (A): SEPARATE delivery (CNC) count caps. Optional with
-        # defaults so existing callers/tests are unaffected; main.py wires the
-        # configured values. Enforced ONLY for a delivery entry (bucket=="positional").
-        max_open_delivery_positions: int = 3,
-        max_daily_delivery_trades: int = 5,
+        # BUG-NI9 (23-Aug-2026): these two carried silent defaults of 3 / 5 while this
+        # class's own docstring says it "takes NO defaults -- all caps are required".
+        # It contradicted itself on exactly these. They are now Optional and REFUSE on
+        # use, via _require_delivery -- the same shape fix item 1 gave the delivery
+        # pct limits in this file. Optional-and-refuse rather than positionally
+        # required: a caller that never gates a delivery entry is unaffected, so this
+        # closes the silent-value hole without touching callers that cannot hit it.
+        # Enforced ONLY for a delivery entry (bucket=="positional").
+        max_open_delivery_positions: Optional[int] = None,
+        max_daily_delivery_trades: Optional[int] = None,
         # B-1 (02-Jul): enforce the unrealized-MTM term in the DAILY_LOSS gate.
         # Default False = SHADOW (log would_reject, enforce realized-only).
         daily_loss_include_unrealized: bool = False,
@@ -323,9 +329,18 @@ class RiskEngine:
                 self._delivery_daily_loss_pct, "delivery_daily_loss_limit_pct")
             eff_max_sector_pct = self._require_delivery(
                 self._delivery_max_sector_pct, "delivery_max_sector_exposure_pct")
+            # BUG-NI9: the two COUNT caps join the same refusal contract.
+            eff_max_open_delivery = self._require_delivery(
+                self._max_open_delivery, "max_open_delivery_positions")
+            eff_max_daily_delivery = self._require_delivery(
+                self._max_daily_delivery, "max_daily_delivery_trades")
         else:
             eff_daily_loss_pct = self._daily_loss_pct
             eff_max_sector_pct = self._max_sector_pct
+            # Unused on the intraday path; both count checks below are inside
+            # `bucket == "positional"`, which is exactly `is_delivery_entry`.
+            eff_max_open_delivery = None
+            eff_max_daily_delivery = None
 
         # Consecutive loss streak (RE10)
         # FIX-183: scope the streak to TODAY. A cross-day streak was a deadlock —
@@ -385,6 +400,8 @@ class RiskEngine:
             sector=sector,                               # F1 (16-Jul): observe-mode log
             eff_daily_loss_pct=eff_daily_loss_pct,       # fix item 1: per-book limits
             eff_max_sector_pct=eff_max_sector_pct,
+            eff_max_open_delivery=eff_max_open_delivery,   # BUG-NI9
+            eff_max_daily_delivery=eff_max_daily_delivery,
         )
 
         # ── Log every call at INFO (RE12) ─────────────────────────────────────
@@ -479,6 +496,10 @@ class RiskEngine:
         *,
         eff_daily_loss_pct: float,
         eff_max_sector_pct: float,
+        # BUG-NI9 (23-Aug-2026): the two delivery COUNT caps travel the same way,
+        # for the same reason. None on the intraday path, where neither check runs.
+        eff_max_open_delivery: Optional[int],
+        eff_max_daily_delivery: Optional[int],
     ) -> ApprovalResult:
         """Execute checks in RE5 + FIX-018 + FIX-019 order; return the first failure or approval."""
 
@@ -541,11 +562,11 @@ class RiskEngine:
         # become "positional" and open_delivery_count CAN be non-zero. This branch is
         # LIVE and rejects real delivery entries.
         if sizing_result.bucket == "positional":
-            if open_delivery_count >= self._max_open_delivery:
+            if open_delivery_count >= eff_max_open_delivery:
                 return reject(
                     "OPEN_POSITIONS",
                     f"Delivery position cap reached: {open_delivery_count} open "
-                    f"delivery (CNC), max={self._max_open_delivery}",
+                    f"delivery (CNC), max={eff_max_open_delivery}",
                 )
         else:
             # FIX-018: processor_in_flight_count prevents the TOCTOU race where
@@ -629,11 +650,11 @@ class RiskEngine:
         # force_intraday_only is FALSE and delivery has traded, so daily_delivery_count
         # CAN be non-zero and this cap rejects real delivery entries.
         if sizing_result.bucket == "positional":
-            if daily_delivery_count >= self._max_daily_delivery:
+            if daily_delivery_count >= eff_max_daily_delivery:
                 return reject(
                     "DAILY_TRADES",
                     f"Delivery daily trade limit reached: {daily_delivery_count} "
-                    f"delivery (CNC) today, max={self._max_daily_delivery}",
+                    f"delivery (CNC) today, max={eff_max_daily_delivery}",
                 )
         else:
             _count_res_daily = getattr(self._fm, "count_live_reservations", None)
