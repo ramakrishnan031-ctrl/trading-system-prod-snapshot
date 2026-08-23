@@ -101,8 +101,17 @@ def test_the_branch_ni3_redescribes_is_the_branch_that_is_wired() -> None:
     """
     src = (_REPO / "capital" / "risk_engine.py").read_text(encoding="utf-8")
     assert 'if sizing_result.bucket == "positional":' in src
-    assert "open_delivery_count >= self._max_open_delivery" in src
-    assert "daily_delivery_count >= self._max_daily_delivery" in src
+    # BUG-NI9 (23-Aug-2026): the comparands were renamed from
+    # `self._max_open_delivery` / `self._max_daily_delivery` to the resolved
+    # `eff_*` locals, because those caps lost their silent 3/5 defaults and are now
+    # resolved once per call through _require_delivery -- the same per-book
+    # resolution fix item 1 gave the delivery pct limits. THE BRANCH IS UNCHANGED,
+    # which is what this test exists to assert; only the name of the value being
+    # compared moved. ⚠️ A source-containment check is brittle by construction: it
+    # is kept because it links NI-3's wording to the wired branch, and it did its
+    # job -- it caught this rename in the batch gate rather than after a deploy.
+    assert "open_delivery_count >= eff_max_open_delivery" in src
+    assert "daily_delivery_count >= eff_max_daily_delivery" in src
 
     proof = (_REPO / "tests" / "unit"
              / "test_phase3_delivery_caps_conditional_capital.py").read_text(encoding="utf-8")
