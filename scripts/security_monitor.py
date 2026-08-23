@@ -719,7 +719,29 @@ def check_sudo_events(cfg: SecConfig, scan: dict) -> list[Finding]:
 
 
 def check_watched_files(cfg: SecConfig, state: dict) -> list[Finding]:
+    """Content-integrity pass over the watched files.
+
+    NI-15 L1 (23-Aug-2026) -- THE INVARIANT: a None observation must NEVER
+    overwrite a valid baseline.
+
+    The previous form wrote `hashes[path] = cur` BEFORE skipping on None, so an
+    unreadable-or-absent file DESTROYED its own baseline. The consequence was
+    not merely "a delete raises no alert": on the next pass the file could be
+    re-created with DIFFERENT content and `prev` was None, so the change was
+    never reported. rm-then-write was a complete silent bypass of this control,
+    for EVERY watched path -- .env, sshd_config, both unit files, the configs.
+
+    Now the baseline is retained across an unreadable/missing window, so
+    HASH_A -> gone -> HASH_B IS a change and alerts as one. The gap is recorded
+    in state["file_unreadable"] so an operator can SEE which paths are not being
+    hashed, instead of finding a silent null in file_hashes.
+
+    NOT in scope (that is L2, unauthorised): /etc/sudoers is 0440 root:root and
+    this watcher runs as User=ubuntu, so it stays unreadable and stays skipped.
+    L1 makes the SKIP NON-DESTRUCTIVE; it does NOT make the file visible.
+    """
     hashes = state.get("file_hashes", {})
+    unreadable: dict = {}
     out: list[Finding] = []
     for spec in cfg.watched_files:
         path = spec.get("path")
@@ -729,15 +751,21 @@ def check_watched_files(cfg: SecConfig, state: dict) -> list[Finding]:
         label = spec.get("label", path)
         cur = sha256_file(path)
         prev = hashes.get(path)
-        hashes[path] = cur
         if cur is None:
+            # RETAIN prev. Record WHY it could not be hashed -- absent and
+            # unreadable are different operator problems.
+            unreadable[path] = "missing" if not os.path.exists(path) else "unreadable"
             continue
+        hashes[path] = cur
         if prev is not None and cur != prev:
             out.append(Finding(sev, f"file:{label}:{cur[:12]}",
                                f"Sensitive file changed: {label}",
                                f"{path} content changed (sha256 {prev[:12]}→{cur[:12]}). "
                                f"If this was not a git deploy / known change, investigate."))
-    state["file_hashes"] = hashes
+    # Drop any None left by the pre-L1 form: it meant "no baseline" but read as
+    # a recorded value. The state file now says unreadable/missing explicitly.
+    state["file_hashes"] = {k: v for k, v in hashes.items() if v is not None}
+    state["file_unreadable"] = unreadable
     return out
 
 
