@@ -465,6 +465,34 @@ def _group_c_capital_relative(sc: Any) -> List[AuditFinding]:
                      "max_effective_multiplier": mult_ceiling,
                      "effective_concentration_ceiling": effective_conc}))
 
+    # C2d (BUG-NI11, 23-Aug-2026) — the SAME ladder for the DELIVERY book.
+    # Fix item 1 gave delivery its own concentration and position-value keys with
+    # identical semantics, and C2 did not look at them at all: a delivery pair could
+    # be set to any inverted combination and this audit stayed silent. NI-2 corrected
+    # the intraday arm; adding the delivery arm is completing the same check, not a
+    # new policy.
+    #
+    # The multiplier ceiling is deliberately the SAME term: `tier_multipliers` is
+    # global for both books (NI-19), so a delivery order is sized on delivery
+    # percentages but scaled by the intraday multiplier ladder. Using a delivery-
+    # specific ceiling here would invent a split that does not exist in the code.
+    d_conc = getattr(ps, "delivery_max_concentration_pct", None)
+    d_posv = getattr(ps, "delivery_max_position_value_pct", None)
+    if d_conc is not None and d_posv is not None:
+        d_effective_conc = d_conc * mult_ceiling
+        if d_posv <= d_effective_conc:
+            out.append(AuditFinding(
+                "C", "C2d_delivery_position_cap_not_looser", Severity.WARN,
+                f"delivery_max_position_value_pct ({d_posv:.0%}) must be LOOSER than "
+                f"the EFFECTIVE routine ceiling delivery_max_concentration_pct × max "
+                f"effective multiplier ({d_conc:.0%} × {mult_ceiling:g} = "
+                f"{d_effective_conc:.0%}); as set the delivery catastrophic-loss "
+                "backstop would bind before routine delivery concentration sizing.",
+                metrics={"delivery_max_position_value_pct": d_posv,
+                         "delivery_max_concentration_pct": d_conc,
+                         "max_effective_multiplier": mult_ceiling,
+                         "delivery_effective_concentration_ceiling": d_effective_conc}))
+
     # C3 — risk per trade a sane fraction.
     rpt = ps.risk_per_trade_pct
     if not (0 < rpt <= 0.05):
