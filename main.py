@@ -2572,8 +2572,10 @@ def _main_locked(args, config_dir: Path) -> int:
         sector_cap_mode=risk_cfg.sector_cap_mode,
         logger=get_logger("risk_engine"),
         kill_switch=kill_switch,
-        # SLICE2.5-PHASE-3 (A): separate delivery (CNC) count caps (inert while
-        # force_intraday_only=true — no CNC entries reach the positional branch).
+        # SLICE2.5-PHASE-3 (A): separate delivery (CNC) count caps. NI-12 (23-Aug-2026):
+        # the "inert while force_intraday_only=true" clause was stale here exactly as NI-3
+        # found it elsewhere — force_intraday_only is FALSE (:89), CNC entries DO reach the
+        # positional branch, and these caps are LIVE.
         max_open_delivery_positions=risk_cfg.max_open_delivery_positions,
         max_daily_delivery_trades=risk_cfg.max_daily_delivery_trades,
         # DELIVERY-scoped gate limits (22-Aug-2026, fix item 1). Required by the schema,
@@ -2761,8 +2763,8 @@ def _main_locked(args, config_dir: Path) -> int:
 
     # SLICE2.5-P2: overnight CNC-GTT reconcile — re-verifies / recreates / finalises
     # the OCO GTT that protects a delivery position. Wired into the reconciler
-    # (startup [4a] + 15-min in-hours cadence [4b]). delivery_enabled=false in Phase 2
-    # (durability + safety only — no activation).
+    # (startup [4a] + 15-min in-hours cadence [4b]). NI-12 (23-Aug-2026): the Phase-2
+    # "delivery_enabled=false / no activation" note is stale — it is TRUE (:102).
     from core.time_authority import now_ist as _now_ist_mh
     _market_hours_fn = lambda: market_windows.is_market_open(_now_ist_mh())  # noqa: E731
     cnc_gtt_monitor = CncGttMonitor(
@@ -3015,9 +3017,9 @@ def _main_locked(args, config_dir: Path) -> int:
     # Re-run group A here WITH the loaded strategies and fail-fast before any capital
     # is reserved.
     #
-    # Gated on delivery_enabled, which has been false since the 15-Jun incident that
-    # created the lock: on every ordinary boot this is a byte-identical no-op, and it
-    # can only fire on a day someone deliberately turned delivery on. `is True` (not
+    # Gated on delivery_enabled. NI-12 (23-Aug-2026): this claimed the flag "has been
+    # false since the 15-Jun incident", making this "a byte-identical no-op on every
+    # ordinary boot". It is TRUE (:102) — this path runs on EVERY boot now. `is True` (not
     # truthy) for the same reason as Q4(c) — a MagicMock config in a unit test must not
     # trip it. Exit 3, like Q4(c): RestartPreventExitStatus="3 4", so a config block
     # stops cleanly instead of restart-looping.

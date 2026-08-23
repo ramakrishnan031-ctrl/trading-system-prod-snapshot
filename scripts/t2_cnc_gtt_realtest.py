@@ -2,8 +2,10 @@
 """
 scripts/t2_cnc_gtt_realtest.py — SLICE2.5-P1 T2: REAL-API proof (MARKET HOURS ONLY).
 
-THE PRODUCTION BLOCKER. Phase 1 is NOT done — and delivery_enabled stays false —
-until this passes: a REAL CNC buy fills, a REAL OCO-GTT places + verifies, and a REAL
+THE PRODUCTION BLOCKER, AS ORIGINALLY WRITTEN. NI-12 (23-Aug-2026): the clause saying
+delivery_enabled stays false until this passes is STALE — delivery_enabled is TRUE (:102)
+and delivery has traded. Whether this script ever passed is NOT recorded here; do not read
+the flag being true as proof that it did. What follows still describes what it proves: a REAL CNC buy fills, a REAL OCO-GTT places + verifies, and a REAL
 CNC sell of that share completes with NO manual CDSL TPIN/DDPI prompt.
 
 ⚠️  This places REAL orders with REAL money on the live account. Rama runs it MANUALLY

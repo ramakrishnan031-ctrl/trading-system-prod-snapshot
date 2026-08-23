@@ -23,7 +23,9 @@ invariants, then acts per the K6 ladder:
 Parity: paper backs get_gtts/holdings/place_gtt/delete_gtt with an in-memory store,
 so the whole routine runs end-to-end in paper (Y7 injected-state tests). Y4: a broker
 gather failure DEFERS the cycle + alerts — it never crashes and never treats "no data"
-as "no positions". delivery_enabled stays false in Phase 2 (durability + safety only).
+as "no positions". NI-12 (23-Aug-2026): the Phase-2 sentence here said delivery_enabled
+stays false. It is TRUE (:102) and delivery has traded; this routine now runs against a
+live book, which is the whole reason its GTT lifecycle matters.
 
 ⚠️ ONE THING PAPER CANNOT DO, AND IT SAYS SO (26-Jul-2026): the paper stores are
 in-memory and die with the nightly restart while `gtt_state` survives, so the morning

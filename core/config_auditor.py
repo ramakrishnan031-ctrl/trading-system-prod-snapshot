@@ -248,9 +248,10 @@ def _group_a_contradictions(sc: Any, strategies: Optional[dict]) -> List[AuditFi
     # positional bucket's size and looks like a sizing bug.
     #
     # WHY BLOCK AND NOT WARN — the precondition, not the severity of the outcome.
-    # delivery_enabled has been false since the 15-Jun incident that created the
-    # lock, so this rule CANNOT fire on an ordinary morning: it fires only on a day
-    # someone deliberately turned delivery on, in front of the person who did it,
+    # NI-12 (23-Aug-2026): this said delivery_enabled "has been false since the 15-Jun
+    # incident", so the rule "CANNOT fire on an ordinary morning". Both halves are now
+    # false — delivery_enabled is TRUE (:102) and delivery has traded, so this rule CAN
+    # fire on an ordinary morning and the BLOCK severity is load-bearing, not theoretical,
     # minutes after they did it. A fail-fast whose precondition is a DELIBERATE ACT
     # costs a minute. One whose precondition is ENVIRONMENTAL costs a trading day --
     # that is S4, 17-Jul, and it is why the S4 self-check gets the opposite answer.
