@@ -1,5 +1,5 @@
 """
-tests/unit/test_position_sizer_delivery_scaffold.py
+tests/unit/test_position_sizer_delivery_contract.py
 
 22-Aug-2026 (fix item 1) — THIS FILE'S SUBJECT WAS INVERTED, DELIBERATELY.
 
@@ -9,10 +9,12 @@ defect this build removes — delivery is live, has traded, and was being sized 
 the intraday risk budget through exactly that branch. The three assertions below
 that used to demand inheritance now demand REFUSAL.
 
-Kept under the original filename on purpose: the history of a contract that
-reversed is easier to follow when the file that asserted the old one asserts the
-new one. (The word "scaffold" in the name is now stale — recorded, not silently
-renamed mid-gate.)
+NI-7 (22-Aug-2026) renamed this file from `..._delivery_scaffold.py` to
+`..._delivery_contract.py` — a pure rename, 0 insertions / 0 deletions, md5
+unchanged. The earlier note here said the stale "scaffold" name was "recorded, not
+silently renamed mid-gate"; that was true only until the gate closed. NI-13 corrects
+this docstring, which still named the old path and still claimed the file was kept
+under it.
 """
 from __future__ import annotations
 
