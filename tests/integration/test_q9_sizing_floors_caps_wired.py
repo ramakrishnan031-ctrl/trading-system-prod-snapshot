@@ -58,8 +58,10 @@ GUARD LADDER, in execution order, with what each one does:
 G10's ceiling is `max(1, min(tiered_qty, raw_qty * 2))`. For any effective multiplier > 1 the
 final quantity can reach TWICE raw_qty — i.e. twice the tightest of risk/capital/concentration.
 G14 cannot catch it (2 x 10% = 20% < the 40% position-value cap), and the stored audit column
-still records `binding_constraint='concentration'` while the quantity is double the
-concentration limit. This is NOT reachable in production today, for one reason only:
+recorded `binding_constraint='concentration'` while the quantity is double the
+concentration limit — FIXED by BUG-NI18 (23-Aug-2026), which now reports
+`multiplier` and keeps the rung in `rung_before_multiplier`. The 2x QUANTITY
+ceiling itself is UNCHANGED and is still NI-16 / F2's to resolve. This is NOT reachable in production today, for one reason only:
 `PerformanceAllocator` is never instantiated anywhere outside its own docstring and
 `perf_weights` is never passed to `SignalProcessor`, so `perf_weight` is always the 1.0
 default (empirically: perf_weight_applied = 1.0 on 298 of 298 sized production trades). The
@@ -819,8 +821,18 @@ class TestTwoTimesMultiplierCeiling:
         )
         # ...which is DOUBLE the concentration limit the same call reports as binding.
         assert boosted.qty > conc_arm
-        assert boosted.breakdown["binding_constraint"] == "concentration", (
-            "the audit column no longer claims concentration bound — re-check this finding"
+        # BUG-NI18 (23-Aug-2026) — FIXED, and this assertion is the tripwire that
+        # asked to be re-checked. The column used to report `concentration` for a
+        # quantity DOUBLE the concentration rung: a field naming a limit the result
+        # exceeds. It now reports `multiplier`, and the rung it would have named is
+        # preserved so no information is lost. ⛔ The QUANTITY is unchanged — proven
+        # over a 432-point grid, 0 differences in success/qty/margin.
+        assert boosted.breakdown["binding_constraint"] == "multiplier", (
+            "the multiplier lifted qty above the tightest rung, so no rung bound it; "
+            "the audit column must not name one"
+        )
+        assert boosted.breakdown["rung_before_multiplier"] == "concentration", (
+            "the pre-multiplier rung must stay recoverable from the breakdown"
         )
         # The position-value cap does not catch it: 2 x conc_pct is still under it.
         pos_value = boosted.qty * price

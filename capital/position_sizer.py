@@ -585,6 +585,16 @@ class PositionSizer:
             # FIX-133 Item 21: cap at 2x base_qty, floor at 1 — for a POSITIVE
             # multiplier only (see the M-C6 note above).
             tiered_qty = max(1, min(tiered_qty, raw_qty * 2))
+            # BUG-NI18 (23-Aug-2026): when the multiplier lifts the size ABOVE the
+            # tightest rung, that rung did NOT bind the result, and reporting it
+            # names a limit the quantity EXCEEDS — a trap, not a diagnostic. The
+            # OFF branch below already re-points `constraint` at FLAT when flat is
+            # the tighter ceiling; this is the same move for the ON branch. The rung
+            # that would have bound is preserved in the breakdown, so nothing is lost.
+            # ⛔ The QUANTITY is deliberately unchanged — this fixes what is REPORTED.
+            if tiered_qty > raw_qty:
+                breakdown["rung_before_multiplier"] = constraint.lower()
+                constraint = "MULTIPLIER"
             breakdown["tier_multiplier_mode"] = "ON"
             breakdown["tier_weight_applied"] = tier_mult
             breakdown["perf_weight_applied"] = round(perf_weight, 4)

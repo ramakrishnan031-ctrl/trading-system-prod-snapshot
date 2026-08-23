@@ -219,7 +219,9 @@ CREATE TABLE IF NOT EXISTS trades (
     qty_by_capital            INTEGER,  -- candidate qty from available bucket capital
     qty_by_concentration      INTEGER,  -- candidate qty from max_concentration_pct
     qty_by_flat               INTEGER,  -- candidate qty from flat_value_rs (NULL when ON)
-    binding_constraint        TEXT,     -- risk | capital | concentration | flat
+    binding_constraint        TEXT,     -- risk | capital | concentration | flat | multiplier
+                                       -- BUG-NI18: `multiplier` = the tier/perf multiplier
+                                       -- lifted qty ABOVE the tightest rung, so no rung bound it
     actual_position_value_rs  REAL,     -- final qty * entry_price
 
     -- R:R fix (Slice 1, v35). The originating strategy's tgt_risk_reward, FROZEN
