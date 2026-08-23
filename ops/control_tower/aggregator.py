@@ -32,7 +32,7 @@ from ops.control_tower.db import (  # noqa: E402
 )
 from ops.control_tower.model import Finding, SourceResult  # noqa: E402
 from ops.control_tower.severity import (  # noqa: E402
-    CONFIG_MAP, SECURITY_MAP, map_severity,
+    CONFIG_MAP, SECURITY_MAP, map_severity, status_for,
 )
 
 _IST = timezone(timedelta(hours=5, minutes=30))
@@ -85,8 +85,7 @@ def read_security(root, now: datetime) -> SourceResult:
             reason=f"security findings present (count={data.get('findings_count')}, "
                    f"native max={native})",
             location=str(p), recommended_action="review security alerts / sentinels"))
-    status = ("critical" if any(f.severity == "CRITICAL" for f in findings)
-              else "warn" if findings else "ok")
+    status = status_for(f.severity for f in findings)   # NI-14
     return SourceResult("security", status, findings,
                         detail=f"clean={data.get('clean')} count={data.get('findings_count')}")
 
@@ -134,8 +133,7 @@ def read_cron(conn, config_dir: Path, markers_dir: Path, now: datetime,
                        f"(due by {j.due_time})",
                 location="cron_heartbeat|cron_marks",
                 recommended_action="check crontab + the job log"))
-    status = ("critical" if any(f.severity == "CRITICAL" for f in findings)
-              else "warn" if findings else "ok")
+    status = status_for(f.severity for f in findings)   # NI-14
     return SourceResult("cron", status, findings, detail=f"{len(expected)} expected by now")
 
 
@@ -256,7 +254,10 @@ def run_aggregation(db_path, root, config_dir, now: datetime | None = None,
             "checks_run": checks_run, "findings_total": len(detected),
             "critical_count": counts["CRITICAL"], "high_count": counts["HIGH"],
             "medium_count": counts["MEDIUM"], "low_count": counts["LOW"],
-            "status": "OK_WITH_FINDINGS" if detected else "OK",
+            # NI-14: follows SEVERITY, not mere existence. `counts` is already
+            # INFO-excluded, so an INFO-only run is OK. INFO findings remain in
+            # `detected` and in findings_total -- only this label changes.
+            "status": "OK_WITH_FINDINGS" if sum(counts.values()) else "OK",
         })
 
         # 1c: health (OPEN only, ACK suppressed) + status roll-up

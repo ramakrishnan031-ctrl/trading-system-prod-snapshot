@@ -32,3 +32,28 @@ def worst(severities) -> str:
     """Loudest tower severity in the iterable; INFO if empty/unknown."""
     known = [s for s in severities if s in RANK]
     return max(known, key=lambda s: RANK[s]) if known else "INFO"
+
+# ── NI-14 (23-Aug-2026): panel status follows SEVERITY, never mere existence ──
+# The defect this replaces: `"warn" if findings else "ok"` made `ok` UNREACHABLE
+# for any source that can emit an INFO finding, so a standing INFO condition
+# (the root-probe spike) pinned the security panel to `warn` and the field lost
+# all discrimination. Keyed off RANK so it follows the ONE vocabulary above --
+# note a native security WARNING arrives here as MEDIUM (SECURITY_MAP), so
+# keying on the literal "WARNING" would be dead code.
+# LOW is deliberately AMBER, not GREEN: LOW is not INFO, and the security
+# adapter uses LOW for "last_run.json unreadable" -- a real condition.
+# This changes ONLY the status derivation. Findings themselves are untouched:
+# still counted, still in open_severities, still push-eligible.
+def status_for(severities) -> str:
+    """Panel status from finding severities.
+
+    CRITICAL present -> "critical" | anything above INFO -> "warn"
+    | INFO-only or no findings -> "ok".
+    """
+    ranks = [RANK[s] for s in severities if s in RANK]
+    if not ranks:
+        return "ok"
+    top = max(ranks)
+    if top >= RANK["CRITICAL"]:
+        return "critical"
+    return "warn" if top > RANK["INFO"] else "ok"
