@@ -620,6 +620,51 @@ class PositionSizer:
         # ── PS6: Lot size rounding ─────────────────────────────────────────────
         final_qty = (tiered_qty // lot_size) * lot_size
 
+        # ── BUG-NI17: the FIX-041 sanity cap must also guard the OUTPUT ────────
+        # Guard 2 above tests `qty_by_risk` — ONE rung, and BEFORE the min(). A
+        # large qty_by_capital or qty_by_concentration can never trip it, and
+        # neither can the tier/perf multiplier, which is applied AFTER the min and
+        # can reach 2x the tightest rung. A cap that guards an INPUT does not cap
+        # the order. This applies the same limit to the quantity actually ordered.
+        #
+        # ⭐ The input check above is deliberately KEPT, not moved: it fails fast,
+        # and removing it could only ever REMOVE a rejection that exists today.
+        # This addition can only ADD one — it cannot loosen anything.
+        #
+        # 🔬 LATENT AT TODAY'S CAPITAL, measured: min_tick_size 0.05 caps
+        # qty_by_risk at R*risk_pct/0.05 = 2,117 at R=Rs10,587, and the 2x ceiling
+        # caps the output at 4,235 — both under 10,000. The output guard first
+        # becomes reachable at about Rs25,000 of capital (~2.4x today).
+        if final_qty > self._max_single_order_qty:
+            if self._log is not None:
+                self._log.critical(
+                    "position_sizer.qty_explosion_guard_output",
+                    extra={
+                        "symbol": symbol,
+                        "final_qty": final_qty,
+                        "raw_qty": raw_qty,
+                        "tiered_qty": tiered_qty,
+                        "max_single_order_qty": self._max_single_order_qty,
+                        "entry_price": entry_price,
+                    },
+                )
+            return SizingResult(
+                success=False,
+                qty=0,
+                margin_required=0.0,
+                risk_amount=0.0,
+                bucket=bucket,
+                constraint="QTY_EXPLOSION_GUARD",
+                reason=(
+                    f"final_qty={final_qty} > max_single_order_qty="
+                    f"{self._max_single_order_qty} for {symbol} (raw_qty={raw_qty}, "
+                    f"tiered_qty={tiered_qty}); the input guard did not see this "
+                    f"because it tests qty_by_risk only; rejecting to prevent "
+                    f"broker account suspension"
+                ),
+                breakdown=breakdown,
+            )
+
         # ── FIX-021: Lot skew rejection (skip if lot_size == 1 or final_qty == 0) ──
         # If final_qty==0, let BELOW_MIN handle it (more accurate constraint name).
         if lot_size != 1 and tiered_qty > 0 and final_qty > 0:
