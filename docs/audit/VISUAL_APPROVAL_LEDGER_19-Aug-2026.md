@@ -19,7 +19,7 @@ PNG, ⛔ not source HTML, ⛔ not a description.
 | **S04** | Signals | ✅ live `/signals` @1896×988 + 1416×808 | ✅ | ✅ **1** — ten ruled headings centred; the ones a width cap clipped un-clipped (`3e9c311`) | ✅ **"Screen approved"** — 20-Aug-2026 **16:2x IST** | 🟢 **VISUALLY APPROVED** · 🔴 **Q1·Q2 OWED** |
 | **S05** | Orders | ✅ live `/orders` @1896×988 + 1416×808 | ✅ | ✅ **1** — fourteen ruled headings centred; ₹ dropped from data cells (`1b61586`) | ✅ **"Screen approved"** — 20-Aug-2026 **22:4x IST** | 🟢 **VISUALLY APPROVED** · 🔴 **Q3·Q4 OWED** |
 | **S06** | Positions | ✅ live `/positions` @1896×988 + 1416×808 · 🔄 **corrected re-render captured 24-Aug 14:2x, both viewports** | ✅ | ✅ **2** — nineteen headings centred heading-only (`5142dfd`); the four grouped bands separated (`b47e148`, **post-approval, ⛔ still not seen by Rama**) | ✅ **"Screen approved"** — 20-Aug-2026 **23:3x IST**, *"but one minor change"* — ⚠️ given on the **PRE-correction** render | ⏳ **CORRECTION VERIFIED, ⛔ NOT VISUALLY CONFIRMED** — awaiting Rama's sight of the corrected render |
-| **S07** | Trade Explorer | ⏳ | — | — | — | ⏳ **NEXT — GATED** on S06 visual confirmation |
+| **S07** | Trade Explorer | ✅ **shown + approved 14-Aug on real VM data** (old ledger, `cd9043c`) | ✅ | ⚠️ `66fc82e` (21-Aug) landed AFTER that approval and is **unseen** | ✅ **APPROVED 14-Aug-2026** — ⛔ but under the PREVIOUS ledger | ⏳ **RE-APPROVAL OWED** — 👤 Rama's own 19-Aug 13px-floor decision re-opened **all 22** approvals; ⛔ this is a re-approval, ⛔ NOT a first one |
 | **S08** | Capital & Risk | ✅ live `/capital-risk` @1920×1080 + 1440×900 · 🔄 **FULL REBUILD**, ⛔ not a patch | ✅ | ✅ **1** — the whole screen composition replaced (`c479b40`); ⚠️ **+2 post-approval restorations** forced by the test contract (gauge geometry · gated export button) | ✅ **"Screen approved"** — 24-Aug-2026 **~16:2x IST** | 🟢 **VISUALLY APPROVED** · ⏳ **2 post-approval changes not yet seen** |
 | **S09** | P&L Analytics | ⏳ | — | — | — | ⏳ PENDING |
 | **S10** | Slippage Analytics | ⏳ | — | — | — | ⏳ PENDING |
@@ -37,7 +37,12 @@ PNG, ⛔ not source HTML, ⛔ not a description.
 | **S22** | Holdings | ⏳ | — | — | — | ⏳ PENDING |
 
 **APPROVED: 6 of 22 outright** (S01–S05, S08) **· S06 approved on the PRE-correction render and awaiting visual confirmation · S08 approved with 2 post-approval restorations not yet seen.**
-▶️ **NEXT: S07 Trade Explorer** — ⚠️ part-built already (`66fc82e` is an S07 fix; there is ⛔ **no** S07 approval commit).
+▶️ 👤 **RAMA DIRECTED S09 NEXT (24-Aug), ahead of S07.**
+⚠️ **S07 was genuinely APPROVED on 14-Aug** (`cd9043c`, real VM data) — ⛔ it is **not** unbuilt and
+⛔ not unapproved-in-general. What it owes is a **RE-approval**, because 👤 Rama's own 19-Aug 13px
+readability-floor decision states it *"RE-OPENS EVERY EXISTING SCREEN APPROVAL"* for all 22 screens,
+and because `66fc82e` (21-Aug) landed after the 14-Aug sign-off. ⛔ Do not describe S07 as
+"never approved" — that erases an approval he actually gave.
 ⭐ 👤 **S08 came off HOLD and was rebuilt+approved on 24-Aug** — see its entry below.
 
 ---
