@@ -20,7 +20,7 @@ PNG, ⛔ not source HTML, ⛔ not a description.
 | **S05** | Orders | ✅ live `/orders` @1896×988 + 1416×808 | ✅ | ✅ **1** — fourteen ruled headings centred; ₹ dropped from data cells (`1b61586`) | ✅ **"Screen approved"** — 20-Aug-2026 **22:4x IST** | 🟢 **VISUALLY APPROVED** · 🔴 **Q3·Q4 OWED** |
 | **S06** | Positions | ✅ live `/positions` @1896×988 + 1416×808 · 🔄 **corrected re-render captured 24-Aug 14:2x, both viewports** | ✅ | ✅ **2** — nineteen headings centred heading-only (`5142dfd`); the four grouped bands separated (`b47e148`, **post-approval, ⛔ still not seen by Rama**) | ✅ **"Screen approved"** — 20-Aug-2026 **23:3x IST**, *"but one minor change"* — ⚠️ given on the **PRE-correction** render | ⏳ **CORRECTION VERIFIED, ⛔ NOT VISUALLY CONFIRMED** — awaiting Rama's sight of the corrected render |
 | **S07** | Trade Explorer | ⏳ | — | — | — | ⏳ **NEXT — GATED** on S06 visual confirmation |
-| **S08** | Capital & Risk | ⏳ | — | — | — | 🛑 **ON HOLD** (👤 Rama, 24-Aug) |
+| **S08** | Capital & Risk | ✅ live `/capital-risk` @1920×1080 + 1440×900 · 🔄 **FULL REBUILD**, ⛔ not a patch | ✅ | ✅ **1** — the whole screen composition replaced (`c479b40`); ⚠️ **+2 post-approval restorations** forced by the test contract (gauge geometry · gated export button) | ✅ **"Screen approved"** — 24-Aug-2026 **~16:2x IST** | 🟢 **VISUALLY APPROVED** · ⏳ **2 post-approval changes not yet seen** |
 | **S09** | P&L Analytics | ⏳ | — | — | — | ⏳ PENDING |
 | **S10** | Slippage Analytics | ⏳ | — | — | — | ⏳ PENDING |
 | **S11** | Execution Analytics | ⏳ | — | — | — | ⏳ PENDING |
@@ -36,9 +36,9 @@ PNG, ⛔ not source HTML, ⛔ not a description.
 | **S21** | Scanner Attribution | ⏳ | — | — | — | ⏳ PENDING |
 | **S22** | Holdings | ⏳ | — | — | — | ⏳ PENDING |
 
-**APPROVED: 5 of 22 outright · S06 approved on the PRE-correction render and awaiting visual confirmation.**
-▶️ **Resume at S07 Trade Explorer** — ⛔ only after Rama has seen the corrected S06 render.
-🛑 **S08 Capital & Risk is ON HOLD** (👤 Rama, 24-Aug) — ⛔ not the next screen, ⛔ do not touch.
+**APPROVED: 6 of 22 outright** (S01–S05, S08) **· S06 approved on the PRE-correction render and awaiting visual confirmation · S08 approved with 2 post-approval restorations not yet seen.**
+▶️ **NEXT: S07 Trade Explorer** — ⚠️ part-built already (`66fc82e` is an S07 fix; there is ⛔ **no** S07 approval commit).
+⭐ 👤 **S08 came off HOLD and was rebuilt+approved on 24-Aug** — see its entry below.
 
 ---
 
@@ -596,3 +596,115 @@ does not touch them.
 🟢 **VISUALLY APPROVED** (Rama's word) · **BUILT** locally · ⛔ **NOT PUSHED**, ⛔ **NOT
 DEPLOYED**, ⛔ **NOT VERIFIED LIVE** — the GUI branch `feat/screen10-slippage-analytics`
 stays local.
+
+---
+
+## S08 — CAPITAL & RISK · APPROVED 24-Aug-2026 ~16:2x IST
+
+**Rama, verbatim:** *"Screen approved, local commit, update unpush ledger the other practics
+beore moving to next screen"*
+
+⭐ **Basis: BROWSER MODE** — the live `/capital-risk` route, real app, real blueprints, real
+`db_reader`. ⛔ Not a PNG, ⛔ not a mock page.
+👤 **S08 came OFF HOLD on 24-Aug** by Rama's instruction, with a specific ruling: ⛔ **do NOT patch
+the old screen — treat it as a clean full reproduction against the approved design files.**
+
+### THE REBUILD — ⛔ NOT A PATCH (`c479b40`)
+The previous S08 had drifted into a tall, sparse, card-heavy stack. **No wrapper, grid, panel or
+rule was carried forward.** Composition is now the artwork's: **4 across the top · one 5+5b
+capital-flow band · compact 6/7/8 · compact 9/10 · footer.**
+📄 Built against `gui/08. Capital_Risk.png` (composition/density/proportion) and
+`gui/08. Capital_Risk.txt` (labels/order/semantics), with the supplied reference source used only
+as a structural aid.
+
+### ⭐ DENSITY CAME FROM PADDING AND PROPORTION — ⛔ NEVER FROM FONT SIZE
+🔬 The reference source ships **9px** table headings. They were **NOT copied**: this repo carries a
+👤 Rama-approved **13px readability floor** (Q2, 19-Aug). **Every data cell is ≥13px.** Where a
+label stopped fitting it **wraps** — ⛔ it does not shrink and ⛔ it does not ellipse.
+⚠️ A 1440 pass caught 5b's row labels collapsing to single letters (`R`, `S`, `E`) — a
+`minmax(0,…)` track let the value columns crush them. Fixed with a hard minimum.
+
+### 🔬 RENDER — BOTH REQUIRED VIEWPORTS
+
+| check | 1920×1080 | 1440×900 |
+|---|---|---|
+| all 10 sections present | ✅ | ✅ |
+| page horizontal overflow | **none** | **none** |
+| content height | **1113 px** (≈fits) | 1333 px — reflows 2×2, scrolls vertically |
+| console errors | **0** | **0** |
+
+⚠️ **The 1440 vertical scroll is inherent, ⛔ not poor composition:** the artwork is a wide-screen
+design; at 1440 the content column is ~1250 px so panels must grow. The Limits Monitor table
+scrolls **inside its own panel** rather than pushing the page sideways.
+
+### 🔬 DATA — REAL, AND THE HARNESS IS DISCLOSED
+Seeded with **today's real production rows** pulled read-only **as data** over the existing ssh
+session (`fm_ledger` 163 · `trades` 7 · `orders` 17 · `config_snapshots` 39).
+⛔ **No file left the VM**, so VM→PC copy-protection was never involved. ⛔ `gui_config.local.yaml`
+was **not** edited — it carries a standing warning against leaving a QA DB pointer, so the override
+is in-process only and dies with the process.
+
+### ✅ APPROVED SEMANTICS — each verified in the render
+⛔ **Pay-in / Pay-out gone from the live screen** — no labels, no placeholders, no reserved gap.
+"Additional Cash" survives **only** inside 5b, which is a pinned hypothetical.
+✅ Capital Overview = Today's Opening Cash · Current Real Cash · Real Cash Consumed · Real Cash
+Available. ✅ Risk Summary = cumulative MIS+GTT. ✅ Limits Monitor keeps the **exact seven-row
+order** and keeps **Capital (MIS)/(GTT)** and **Daily Loss Limit (MIS)/(GTT)** as **separate** rows.
+
+### ➕ ONE ADDITIVE BACKEND FIELD, AND WHY IT WAS NECESSARY
+🔬 Both daily-loss pcts exist in config, but only the global one was reachable by the GUI — the
+delivery twin was exposed by **no endpoint**, so the GTT row could not show its CONFIGURED value at
+all. `/api/capital/segments` now passes both through plus the scope note.
+⭐ **Straight config passthrough — no new query, no computation, no behaviour change**, following
+the documented *additive read-only field* precedent.
+
+### 🔴 WHAT IS DELIBERATELY **NOT** SHOWN — the point of this screen
+* **Daily Loss Limit (GTT) `USED` = `—`.** 📄 `system_config.yaml`: the delivery key gates the
+  **PRE-TRADE** check only; the post-close breaker is **GLOBAL** and *"one account-wide realized P&L
+  exists and there is no per-book attribution to split it with."* ⇒ ⛔ **no per-book `used` was
+  invented.** The CONFIGURED limit is real and is shown.
+* **Strategy Limits** — 🔬 no global strategy-count cap exists anywhere in config (per-strategy caps
+  live in each strategy's own YAML). Shows the **measured** active count and `NO CAP`.
+* **Live MTM / unrealized** — stays *Pending Broker Source (G4)*.
+
+### 🔴 `pageBase.money()` IS OVERRIDDEN FOR THIS SCREEN ONLY
+🔬 The shared helper is `Number(v || 0)` ⇒ an **ABSENT** value renders as **`₹0.00`**,
+indistinguishable from a real zero. On a capital screen that is a **fabricated fact**. Missing now
+renders as an em-dash. ⛔ **Not changed in `base.html`** — that reaches all 22 screens and is a
+separate decision. 🏷️ **Recorded as an open item.**
+
+### 🔬 THREE DEFECTS FOUND BY *RENDERING*, ⛔ NOT BY READING
+1. An Alpine loop-template inside the chart's SVG threw `importNode` and **killed the whole chart**.
+2. `real_cash.last_sync` is an **object** and printed `[object Object]`.
+3. `pageBase` provides `load()`, **not** `init()` — so `x-init="init()"` silently loaded **nothing**
+   and every figure read `₹0.00`.
+
+### ⭐⭐ THE TEST SUITE CAUGHT WHAT I DROPPED — AND IT WAS RIGHT TO
+🔴 **11 failures on the first full run.** ⭐ **The repo already guarded the exact SVG/template bug I
+had just hit** — `test_no_alpine_template_loop_inside_an_svg`.
+🔬 The closure tests also pin an **approved gauge and bar contract** that my rebuild had replaced
+with an invention of my own. All restored from the tested implementation:
+
+| pinned behaviour | why it exists |
+|---|---|
+| ONE classifier (`usageClass`) for dial, number and range table | the picture can never disagree with the words beside it |
+| **NO arc** when utilisation is unknown | ⛔ a dial at 0% reads as *"nothing used"* — a fabricated fact |
+| arc-length constant matching the path (π×40) | if constant and path disagree, the dial silently lies |
+| ticks clear 13px **after** SVG user-unit scaling | the floor applies to rendered px, not source px |
+| bars relative to the **LARGEST** consumer; % column keeps share of the **true total** | the bar is a SHAPE, the number is the FACT |
+| the **gated export macro** still rendered | screens 04/08/09 must not look like the flag flipped globally |
+
+✅ **Full suite after the restorations: `2080 passed, 0 failed`** (GUI `.venv`).
+
+### 🔴 CARRIED — ⛔ NOT RESOLVED BY THIS APPROVAL
+⚠️ **TWO CHANGES LANDED *AFTER* RAMA'S APPROVAL and he has ⛔ NOT seen them re-rendered:**
+the **gauge geometry** (my own dial → the tested r=40 `cap-gauge` contract) and the **gated
+"Export Limits" button** (restored into the Limits Monitor panel). ⭐ Both were forced by
+pre-existing approved test contracts, ⛔ not by preference — but the approval was given on a render
+without them, and this file does ⛔ **not** pretend otherwise.
+🔴 **`Q1`·`Q2` (S04) and `Q3`·`Q4` (S05) remain OWED from Rama.** ⛔ Approving S08 does not touch them.
+⏳ **S06's corrected re-render is still awaiting Rama's sight.**
+
+### STATUS
+🟢 **VISUALLY APPROVED** (Rama's word) · **BUILT** locally · ⛔ **NOT PUSHED**, ⛔ **NOT DEPLOYED**,
+⛔ **NOT VERIFIED LIVE** — the GUI branch `feat/screen10-slippage-analytics` stays local.
