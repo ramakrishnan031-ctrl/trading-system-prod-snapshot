@@ -18,9 +18,9 @@ PNG, ⛔ not source HTML, ⛔ not a description.
 | **S03** | Strategies | ✅ live `/strategies` @1920 + 6 more widths | ✅ | ✅ **2** — all 16 strategies in the hierarchy; columns made truly draggable | ✅ **“Approved!!”** — 19-Aug-2026 **23:40 IST** | 🟢 **VISUALLY APPROVED** |
 | **S04** | Signals | ✅ live `/signals` @1896×988 + 1416×808 | ✅ | ✅ **1** — ten ruled headings centred; the ones a width cap clipped un-clipped (`3e9c311`) | ✅ **"Screen approved"** — 20-Aug-2026 **16:2x IST** | 🟢 **VISUALLY APPROVED** · 🔴 **Q1·Q2 OWED** |
 | **S05** | Orders | ✅ live `/orders` @1896×988 + 1416×808 | ✅ | ✅ **1** — fourteen ruled headings centred; ₹ dropped from data cells (`1b61586`) | ✅ **"Screen approved"** — 20-Aug-2026 **22:4x IST** | 🟢 **VISUALLY APPROVED** · 🔴 **Q3·Q4 OWED** |
-| **S06** | Positions | ✅ live `/positions` @1896×988 + 1416×808 | ✅ | ✅ **2** — nineteen headings centred heading-only (`5142dfd`); the four grouped bands separated (`b47e148`, **post-approval, ⛔ not yet seen by Rama**) | ✅ **"Screen approved"** — 20-Aug-2026 **23:3x IST**, *"but one minor change"* | 🟢 **VISUALLY APPROVED** · ⏳ **re-render awaiting sight** |
-| **S07** | Trade Explorer | ⏳ | — | — | — | ⏳ PENDING |
-| **S08** | Capital & Risk | ⏳ | — | — | — | ⏳ PENDING |
+| **S06** | Positions | ✅ live `/positions` @1896×988 + 1416×808 · 🔄 **corrected re-render captured 24-Aug 14:2x, both viewports** | ✅ | ✅ **2** — nineteen headings centred heading-only (`5142dfd`); the four grouped bands separated (`b47e148`, **post-approval, ⛔ still not seen by Rama**) | ✅ **"Screen approved"** — 20-Aug-2026 **23:3x IST**, *"but one minor change"* — ⚠️ given on the **PRE-correction** render | ⏳ **CORRECTION VERIFIED, ⛔ NOT VISUALLY CONFIRMED** — awaiting Rama's sight of the corrected render |
+| **S07** | Trade Explorer | ⏳ | — | — | — | ⏳ **NEXT — GATED** on S06 visual confirmation |
+| **S08** | Capital & Risk | ⏳ | — | — | — | 🛑 **ON HOLD** (👤 Rama, 24-Aug) |
 | **S09** | P&L Analytics | ⏳ | — | — | — | ⏳ PENDING |
 | **S10** | Slippage Analytics | ⏳ | — | — | — | ⏳ PENDING |
 | **S11** | Execution Analytics | ⏳ | — | — | — | ⏳ PENDING |
@@ -36,7 +36,75 @@ PNG, ⛔ not source HTML, ⛔ not a description.
 | **S21** | Scanner Attribution | ⏳ | — | — | — | ⏳ PENDING |
 | **S22** | Holdings | ⏳ | — | — | — | ⏳ PENDING |
 
-**APPROVED: 6 of 22.**  ▶️ **Resume at S07 Trade Explorer** — ⛔ only after Rama has seen the corrected S06 render.
+**APPROVED: 5 of 22 outright · S06 approved on the PRE-correction render and awaiting visual confirmation.**
+▶️ **Resume at S07 Trade Explorer** — ⛔ only after Rama has seen the corrected S06 render.
+🛑 **S08 Capital & Risk is ON HOLD** (👤 Rama, 24-Aug) — ⛔ not the next screen, ⛔ do not touch.
+
+---
+
+## 🔄 S06 RE-RENDER — 24-Aug-2026 ~14:2x IST · **THE CORRECTION IS VISIBLE AND MEASURED**
+### ⛔ THIS IS NOT AN APPROVAL. It is the artefact Rama's confirmation is waiting on.
+
+🔬 **Rendered from the CURRENT build** — worktree `D:\Projects\trading-system-gui09`,
+branch `feat/screen10-slippage-analytics`, `66fc82e`, real `positions.html` (55,262 B) and real
+`style.css`, ⛔ no copies. Harness: scratchpad only, ⛔ never promoted into the repo.
+🔬 **Fixture = 7 REAL rows pulled read-only from the production VM for 2026-08-24** — 2 Delivery
+rows carrying broker SL/TGT and 5 Intraday rows whose broker cells are NULL, so the honest `—` is
+exercised rather than assumed. KPI values are the reader's own queries run against the live DB.
+
+### 🔬 MEASURED — both approved viewports
+
+| check | 1896×988 | 1416×808 | ledger's 20-Aug figure |
+|---|---|---|---|
+| separators on the GROUP row | **5** | **5** | — |
+| separators on the SUB-HEADING row | **5** | **5** | — |
+| separators per VISIBLE data row | **5** ×7 rows | **5** ×7 rows | **5** ✅ |
+| page overflow-x | **0** | **0** | 0 ✅ |
+| clipped headers | **0** | **0** | 0 ✅ |
+| clipped data cells | **0** | **0** | 0 ✅ |
+| console errors | **0** | — | — |
+
+🔬 **Separator style = `1px solid rgb(35, 43, 53)`** — that is `var(--card-bd)` resolved.
+⭐ **The token, ⛔ not a literal colour**, exactly as `b47e148` claimed.
+🔬 **`.sep` lands on column indices 9 · 11 · 13 · 15 · 17** = the four band starts
+(`qty_system`, `entry_target_price`, `sl_initial`, `tgt_initial`) **plus the close after
+`tgt_broker`** — matching the ledger's *"the four band edges plus the close after TGT ₹"*.
+🔬 **Band rects, now genuinely separated** (20-Aug they were flush — each ending on the exact
+pixel the next began):
+
+| band | 1896×988 | 1416×808 |
+|---|---|---|
+| `Qty` (System \| Position) | 982 → 1116 | 906 → 1031 |
+| `Entry ₹` (System \| Filled) | 1116 → 1229 | 1031 → 1135 |
+| `SL ₹` (System \| Broker) | 1229 → 1352 | 1135 → 1248 |
+| `TGT ₹` (System \| Broker) | 1352 → 1475 | 1248 → 1362 |
+
+✅ **All four bands present, all four carry `sep: true`, System/Filled/Broker structure intact.**
+
+### ⛔ TWO THINGS THAT LOOKED LIKE DEFECTS AND ARE NOT — checked, ⛔ not waved past
+
+1. **An 8th `tbody` row reporting 0 separators.** 🔬 It is the **hidden empty-state row**
+   (`x-show="!view().length"`, `style="display: none"`, `colspan=23`, *"No positions match the
+   current filters."*). ⛔ Not a data row; correctly carries no separator. **7 visible data rows,
+   5 separators each.**
+2. **Numeric body cells compute `text-align: center`, not `right`.** ⚠️ This *appears* to
+   contradict the 20-Aug line *"centred body cells = `[]`"*. 🔬 It does not. The winning rule is
+   the **global, deliberate, documented** `style.css:1971-1974`
+   `table td.cap-num, td.dt-num, td.rt, td.ctr { text-align: center !important; }` — its own
+   comment says *"SCOPE IS DELIBERATELY NARROW… ⛔ Do not widen this rule"*. The `!important`
+   beats every per-screen `.rt → right` rule **app-wide**, so S06 renders exactly as S03/S04/S05
+   do. ⇒ ⭐ **The 20-Aug `[]` answered a narrower question — "did `hc` centre any BODY cell?"
+   (it did not; `hc` is `th`-only). It was never a claim that no body cell is centred.**
+   🏷️ **Recorded so a future reader does not "discover" this phantom regression a third time.**
+   ⛔ **NOTHING WAS CHANGED.**
+
+### ⇒ VERDICT
+✅ **The `b47e148` correction is present, correct and visible at both viewports.**
+🔴 **⛔ S06 IS STILL NOT VISUALLY CONFIRMED.** Rama's *"Screen approved"* of 20-Aug was given on
+the **pre-correction** render. ⛔ A measurement is ⛔ not a sign-off, and this file does ⛔ not
+promote one into the other. **The gate stands until he has seen it.**
+⛔ **No S06 code, CSS or test was modified by this pass** — the re-render proved no defect, and the
+instruction was to change nothing unless it did.
 
 ---
 
