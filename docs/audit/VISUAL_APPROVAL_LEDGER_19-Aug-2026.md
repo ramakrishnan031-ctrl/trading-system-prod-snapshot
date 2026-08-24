@@ -21,7 +21,7 @@ PNG, ⛔ not source HTML, ⛔ not a description.
 | **S06** | Positions | ✅ live `/positions` @1896×988 + 1416×808 · 🔄 **corrected re-render captured 24-Aug 14:2x, both viewports** | ✅ | ✅ **2** — nineteen headings centred heading-only (`5142dfd`); the four grouped bands separated (`b47e148`, **post-approval, ⛔ still not seen by Rama**) | ✅ **"Screen approved"** — 20-Aug-2026 **23:3x IST**, *"but one minor change"* — ⚠️ given on the **PRE-correction** render | ⏳ **CORRECTION VERIFIED, ⛔ NOT VISUALLY CONFIRMED** — awaiting Rama's sight of the corrected render |
 | **S07** | Trade Explorer | ✅ **shown + approved 14-Aug on real VM data** (old ledger, `cd9043c`) | ✅ | ⚠️ `66fc82e` (21-Aug) landed AFTER that approval and is **unseen** | ✅ **APPROVED 14-Aug-2026** — ⛔ but under the PREVIOUS ledger | ⏳ **RE-APPROVAL OWED** — 👤 Rama's own 19-Aug 13px-floor decision re-opened **all 22** approvals; ⛔ this is a re-approval, ⛔ NOT a first one |
 | **S08** | Capital & Risk | ✅ live `/capital-risk` @1920×1080 + 1440×900 · 🔄 **FULL REBUILD**, ⛔ not a patch | ✅ | ✅ **1** — the whole screen composition replaced (`c479b40`); ⚠️ **+2 post-approval restorations** forced by the test contract (gauge geometry · gated export button) | ✅ **"Screen approved"** — 24-Aug-2026 **~16:2x IST** | 🟢 **VISUALLY APPROVED** · ⏳ **2 post-approval changes not yet seen** |
-| **S09** | P&L Analytics | ⏳ | — | — | — | ⏳ PENDING |
+| **S09** | P&L Analytics | ✅ live `/pnl-analytics` @1920×1080 + 1440×900 | ✅ | ✅ **2** — density + the two missing panels (`7dba039`); then Rama's final visual pass in the same commit (heat cards un-stretched, Symbol left-aligned) | ✅ **"Screen approved"** — 24-Aug-2026 **~19:5x IST** | 🟢 **VISUALLY APPROVED** |
 | **S10** | Slippage Analytics | ⏳ | — | — | — | ⏳ PENDING |
 | **S11** | Execution Analytics | ⏳ | — | — | — | ⏳ PENDING |
 | **S12** | System Health | ⏳ | — | — | — | ⏳ PENDING |
@@ -36,7 +36,7 @@ PNG, ⛔ not source HTML, ⛔ not a description.
 | **S21** | Scanner Attribution | ⏳ | — | — | — | ⏳ PENDING |
 | **S22** | Holdings | ⏳ | — | — | — | ⏳ PENDING |
 
-**APPROVED: 6 of 22 outright** (S01–S05, S08) **· S06 approved on the PRE-correction render and awaiting visual confirmation · S08 approved with 2 post-approval restorations not yet seen.**
+**APPROVED: 7 of 22 outright** (S01–S05, S08, S09) **· S06 approved on the PRE-correction render and awaiting visual confirmation · S07 owes a RE-approval · S08 approved with 2 post-approval restorations not yet seen.**
 ▶️ 👤 **RAMA DIRECTED S09 NEXT (24-Aug), ahead of S07.**
 ⚠️ **S07 was genuinely APPROVED on 14-Aug** (`cd9043c`, real VM data) — ⛔ it is **not** unbuilt and
 ⛔ not unapproved-in-general. What it owes is a **RE-approval**, because 👤 Rama's own 19-Aug 13px
@@ -709,6 +709,92 @@ pre-existing approved test contracts, ⛔ not by preference — but the approval
 without them, and this file does ⛔ **not** pretend otherwise.
 🔴 **`Q1`·`Q2` (S04) and `Q3`·`Q4` (S05) remain OWED from Rama.** ⛔ Approving S08 does not touch them.
 ⏳ **S06's corrected re-render is still awaiting Rama's sight.**
+
+### STATUS
+🟢 **VISUALLY APPROVED** (Rama's word) · **BUILT** locally · ⛔ **NOT PUSHED**, ⛔ **NOT DEPLOYED**,
+⛔ **NOT VERIFIED LIVE** — the GUI branch `feat/screen10-slippage-analytics` stays local.
+
+---
+
+## S09 — P&L ANALYTICS · APPROVED 24-Aug-2026 ~19:5x IST
+
+**Rama, verbatim:** *"Screen approved, local commit and update ledger"*
+
+⭐ **Basis: BROWSER MODE** — the live `/pnl-analytics` route, real app, real blueprints, real
+`db_reader`. ⛔ Not a PNG, ⛔ not a mock page.
+👤 **Rama directed S09 next, ahead of S07** (which owes a re-approval — see its row).
+
+### ⚖️ THE JUDGEMENT THE BRIEF ASKED FOR: **CORRECT, ⛔ NOT REBUILD**
+📄 The instruction said rebuild if materially wrong, correct if structurally close. 🔬 It was
+**structurally close** — the skeleton already *was* the approved composition (two-column main+rail ·
+six-KPI strip · filter bar · 14-column summary table · 3+3 lower grid). ⭐ What was wrong was
+**density and completeness, ⛔ not structure.** Rebuilding would have discarded working data
+bindings and a Scanner decision that was already right.
+
+### ⭐ A FALSE ALARM CAUGHT BEFORE IT WAS ACTED ON
+The main table *looked* per-trade rather than aggregated — every row reading `1 / 1 / 0`. 🔬 The
+API's own `time_note` — *"Time = first ENTRY time in the group"* — says the rows **are** grouped;
+today simply has one trade per `date × strategy × symbol`. ⇒ **The grain was already correct and
+nothing was changed.** ⛔ A "fix" here would have been damage.
+
+### 🔬 DENSITY — WHAT WAS ACTUALLY WRONG
+* `.pnl-row3` stretched **every** panel to the tallest (the 172 px equity curve) while their content
+  was short ⇒ the extra height was **padding, ⛔ not information**. Panels now fill; curve 172→132 px;
+  gutters 16→10 px.
+* **P&L Attribution's legend sat BELOW its donut** where the artwork puts it **BESIDE** — that one
+  panel was setting the height of *both* heatmaps next to it. Now side-by-side, ⚠️ **scoped to
+  `.pnl-page`** because `.pos-donut-wrap` is shared and an unscoped rule would re-lay-out donuts
+  nobody asked about.
+* 🔬 Content height **1537 → 1429 px**.
+
+### ➕ TWO PANELS THE APPROVED TXT REQUIRES AND THE BUILD DID NOT HAVE
+* **Recent Risk Events** (rail) — bound to the **same** `/api/alerts` Capital & Risk already uses.
+  ⛔ No new endpoint, ⛔ no second definition of what a risk event is.
+* **Bottom export bar** — Export Current View · Export XLSX.
+
+### 🔴 THE EXPORT BAR IS DELIBERATELY INERT
+⚠️ My first version called `exportXlsx()`, **which does not exist** — S09 has no export route.
+Wiring a working download would have **invented a backend capability**. Both controls render through
+the **same gated macro** the table header already uses.
+
+### 🔴 SCANNER — 👤 RAMA'S STANDING RULING, 24-Aug
+👤 *"wherever Scanner & Strategy … appears … remove 'Scanner' and retain Strategy … Not only for
+this screen for entire remaining screens too."* ⭐ **This OVERRIDES the artwork**, which still draws
+a whole `SCANNER P&L RANKING` panel and a Scanner column.
+✅ 🔬 S09 already complied from an earlier override — its own header reads *"SCANNER IS GONE —
+column, filter, ranking panel and best/worst entry."* The only change needed was dropping the
+visible *"Scanner rows omitted"* note, which was itself a Scanner mention.
+🔬 **Verified on the live DOM: zero Scanner labels in S09's own content** (the only two on the page
+are the sidebar's link to Screen 21).
+🏷️ **Recorded as a standing cross-screen rule in the GUI workflow memory.**
+
+### ✅ FINAL VISUAL PASS (👤 Rama) — AND ITEM 1 WAS **MY OWN REGRESSION**
+| # | correction | note |
+|---|---|---|
+| 1 | **Day of Week** — compact near-square cards, day name **above** the value | 🔴 **I caused it.** The density pass above gave the heat cells `height:100%` to close a dead band, and that is exactly what stretched the artwork's small cards into tall rectangles |
+| 2 | **Time of Day** — same treatment, six slot cards, scale bar retained | `min-height`, ⛔ **not** a fixed height — the two-line time labels would clip |
+| 3 | **Symbol column left-aligned**, header and every value | Done as a **LABEL column** (`th.lbl` + plain `<td>`) — the codebase's own existing mechanism, the same one Trading Date and Strategy use. ⛔ No new alignment rule, ⛔ nothing global touched |
+
+⭐ The heat grids are now **explicitly excluded** from the fill rule, with a comment saying why, so
+the regression is not "re-optimised" back by a later density pass.
+
+### ⚠️ KNOWN RESIDUAL — STATED, ⛔ NOT HIDDEN
+Un-stretching the cards leaves a **dead band beneath them**: the row still stretches to the
+Attribution panel beside it. ⛔ **Not chased** — 👤 the final pass said the rest of the render was
+accepted and the overall layout was not to change. ⭐ It is the direct trade-off of correction 1.
+
+### 🔬 SCOPE + GATE
+**Two files**: `pnl_analytics.html` · `style.css`. 🔬 **All 17 CSS additions are `.pnl-page`-scoped**,
+so ⛔ no other screen can change. ⛔ No backend change at all on this screen.
+✅ **S09 suite 75 passed · full suite 2,080 passed, 0 failed.**
+
+### 🔴 OPEN — 👤 RAMA'S CALL, RAISED AT S09 RATHER THAN DISCOVERED AT S21
+1. 🔴 **Screen 21 "Scanner Attribution" is an entire screen premised on scanner as a dimension.**
+   If scanner ≡ strategy, is S21 redundant, or does it become something else?
+2. **"Trade Type & Direction"** sits in the rail and is ⛔ **not** in the artwork — it appears to be
+   what filled the space when Scanner was first removed. Keep or drop?
+3. **Equity Curve's Day/Week/Month/Custom toggle** — ⛔ deliberately **not** added. The page-level
+   period pills already control the range; a second control could disagree with the first.
 
 ### STATUS
 🟢 **VISUALLY APPROVED** (Rama's word) · **BUILT** locally · ⛔ **NOT PUSHED**, ⛔ **NOT DEPLOYED**,
