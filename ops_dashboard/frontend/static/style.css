@@ -2023,10 +2023,10 @@ table td.ctr { text-align: center !important; }
 
 /* Rail is fixed-width so the 14-column table keeps a predictable main width. */
 .pnl-page .pnl-grid { display: grid; grid-template-columns: minmax(0,1fr) 340px;
-  gap: 16px; align-items: start; }
+  gap: 10px; align-items: start; }
 .pnl-page .pnl-main { min-width: 0; }   /* required, else the wide table
                                            stretches the grid column */
-.pnl-page .pnl-rail { display: flex; flex-direction: column; gap: 16px; }
+.pnl-page .pnl-rail { display: flex; flex-direction: column; gap: 10px; }
 @media (max-width: 1400px) { .pnl-page .pnl-grid { grid-template-columns: 1fr; } }
 
 .pnl-page .pnl-panel-head { display: flex; align-items: center;
@@ -2080,13 +2080,41 @@ table td.ctr { text-align: center !important; }
 .pnl-page .cap-table th { text-align: center; }
 .pnl-page .cap-table th.lbl { text-align: left; }
 
+/* -- rail: recent risk events + the bottom export bar (24-Aug) ------------ */
+.pnl-page .pnl-viewall { font-size: 13px; color: var(--blue); text-decoration: none; }
+.pnl-page .pnl-viewall:hover { text-decoration: underline; }
+.pnl-page .pnl-ev { max-width: 150px; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }
+.pnl-page .pnl-warn { color: var(--yellow); }
+/* The artwork closes the page with the two export controls right-aligned. */
+.pnl-page .pnl-exportbar { display: flex; align-items: center; gap: 10px;
+  justify-content: flex-end; margin-top: 10px; padding: 9px 12px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 10px; }
+.pnl-page .pnl-exportbar .pnl-note { margin: 0 auto 0 0; }
+
 /* -- three-panel rows ---------------------------------------------------- */
 .pnl-page .pnl-row3 { display: grid; grid-template-columns: 1.25fr 1fr 1fr;
-  gap: 16px; margin-top: 16px; }
+  gap: 10px; margin-top: 10px; }
+/* ⭐ Content FILLS the panel instead of floating at the top. The row still
+   stretches (equal heights, as the artwork draws them) but the dead band under
+   each short panel is gone -- measured 24-Aug: rows were ~250px carrying ~120px
+   of content. ⛔ Nothing was padded to fake density. */
+.pnl-page .pnl-row3 > .panel { display: flex; flex-direction: column; }
+.pnl-page .pnl-row3 > .panel > .pnl-dd,
+.pnl-page .pnl-row3 > .panel > .pnl-bw { flex: 1 1 auto; }
+/* ⛔ THE HEAT GRIDS ARE DELIBERATELY EXCLUDED FROM THAT FILL RULE.
+   The artwork draws Mon-Fri and the six time slots as COMPACT, near-square
+   cards in one row — day/slot label on top, Net P&L beneath. An earlier density
+   pass gave them `height:100%`, which stretched them into tall rectangles
+   (Rama, 24-Aug: "must be compact, small square/near-square cards, not
+   wide/tall stretched rectangles"). They now size to their content. */
+.pnl-page .pnl-row3 > .panel > .pnl-heat { flex: 0 0 auto; align-self: start; }
+.pnl-page .pnl-dd { align-content: stretch; }
+.pnl-page .pnl-bw tbody { height: 100%; }
 @media (max-width: 1250px) { .pnl-page .pnl-row3 { grid-template-columns: 1fr; } }
 
 /* -- equity curve -------------------------------------------------------- */
-.pnl-page .pnl-curve { height: 172px; }
+.pnl-page .pnl-curve { height: 132px; }
 .pnl-page .pnl-zero { stroke: var(--border); stroke-width: 1; stroke-dasharray: 3 3; }
 .pnl-page .pnl-line-net { stroke: var(--pos); stroke-width: 1.8; }
 .pnl-page .pnl-line-gross { stroke: var(--blue); stroke-width: 1.8; }
@@ -2123,7 +2151,12 @@ table td.ctr { text-align: center !important; }
 .pnl-page .pnl-heat { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
 .pnl-page .pnl-heat-tod { grid-template-columns: repeat(6, 1fr); }
 .pnl-page .pnl-heat-c { border: 1px solid var(--border); border-radius: 7px;
-  padding: 9px 4px; display: flex; flex-direction: column; align-items: center; gap: 5px; }
+  padding: 8px 4px; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 4px;
+  /* near-square: the 5-up day cells land ~68px wide at 1920, the 6-up time
+     cells ~56px. ⛔ A fixed height is NOT used — the time labels wrap to two
+     lines and a hard height would clip them. */
+  min-height: 58px; }
 .pnl-page .pnl-heat-b { font-size: 13px; color: var(--muted); text-align: center; line-height: 1.25; }
 .pnl-page .pnl-heat-v { font-size: 13px; font-weight: 600;
   font-variant-numeric: tabular-nums; }
@@ -2158,6 +2191,16 @@ table td.ctr { text-align: center !important; }
 .pnl-page .dot-slate  { background: #484f58; }
 .pnl-page .dot-dim    { background: #30363d; }
 .pnl-page .pnl-pie { width: 104px; height: 104px; }
+/* ⭐ THE ARTWORK PUTS THE DONUT AND ITS LEGEND SIDE BY SIDE, not stacked. Stacked,
+   this panel was the tallest thing in row 2 and set the height of BOTH heatmap
+   panels beside it — which is where the page's remaining dead space came from
+   (measured 24-Aug). Side by side, the panel is ~120px shorter and the row
+   collapses with it. ⛔ Nothing was removed to achieve it. */
+/* ⚠️ SCOPED TO `.pnl-page`: `.pos-donut-wrap` is shared with other screens, so an
+   unscoped rule would re-lay-out donuts nobody asked about. */
+.pnl-page .pos-donut-wrap { display: flex; align-items: center; gap: 12px; }
+.pnl-page .pos-donut-wrap > .pnl-pie { flex: 0 0 auto; }
+.pnl-page .pos-donut-wrap > .pnl-legend { flex: 1 1 auto; min-width: 0; max-height: none; }
 .pnl-page .pnl-legend { max-height: 150px; overflow-y: auto; padding-right: 4px; gap: 5px; }
 .pnl-page .pnl-legend > div { font-size: 13px; }
 .pnl-page .pnl-pie-total { border-bottom: 1px solid var(--border);

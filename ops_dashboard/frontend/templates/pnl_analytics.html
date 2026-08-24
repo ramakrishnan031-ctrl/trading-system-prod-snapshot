@@ -144,7 +144,7 @@
           <thead><tr>
             <th class="lbl">Trading Date</th>
             <th :title="data.time_note || ''">Time</th>
-            <th class="lbl">Strategy</th><th>Symbol</th><th>Trade Type</th><th>Direction</th>
+            <th class="lbl">Strategy</th><th class="lbl">Symbol</th><th>Trade Type</th><th>Direction</th>
             <th>Trades</th><th>Wins</th><th>Losses</th>
             <th>Gross P&amp;L</th><th>Charges</th><th>Net P&amp;L</th>
             <th>ROI %</th><th>Profit Factor</th>
@@ -155,7 +155,10 @@
                 <td x-text="r.date"></td>
                 <td class="ctr" x-text="r.time || '—'"></td>
                 <td x-text="r.strategy"></td>
-                <td class="ctr" x-text="r.symbol"></td>
+                {# Symbol is a LABEL column, not a data column (Rama, 24-Aug):
+                   plain <td>, so the global `td.ctr` centring rule never reaches
+                   it — the same mechanism Trading Date and Strategy already use. #}
+                <td x-text="r.symbol"></td>
                 <td class="ctr" x-text="r.trade_type"></td>
                 <td class="ctr" :class="dirCls(r.direction)" x-text="r.direction"></td>
                 <td class="ctr" x-text="r.trades"></td>
@@ -286,8 +289,6 @@
           <tr><td class="pnl-bw-k pnl-bad">Worst Strategy</td>
             <td class="ctr" colspan="3" x-text="bwName('worst_strategy')"></td></tr>
         </tbody></table>
-        <div class="pnl-note pnl-bw-note">Scanner rows omitted — strategy is the
-          scanner identity on this system.</div>
       </section>
     </div>
 
@@ -416,8 +417,42 @@
         </template>
       </tbody></table>
     </section>
+
+    {# RECENT RISK EVENTS — the artwork's fourth rail panel. Bound to the SAME
+       /api/alerts the Capital & Risk screen already uses; ⛔ no new endpoint and
+       ⛔ no second source of truth for what a risk event is. #}
+    <section class="panel">
+      <div class="pnl-panel-head">
+        <h3 class="panel-title">Recent Risk Events</h3>
+        <a class="pnl-viewall" href="/audit">View all</a>
+      </div>
+      <table class="cap-table"><thead><tr>
+        <th class="lbl">Time</th><th class="lbl">Event</th><th>Category</th>
+      </tr></thead><tbody>
+        <template x-for="(e, i) in riskEvents()" :key="'re'+i">
+          <tr><td x-text="e.time"></td>
+            <td class="pnl-ev" :class="e.cls" x-text="e.title" :title="e.detail"></td>
+            <td class="ctr" x-text="e.category"></td></tr>
+        </template>
+        <tr x-show="!riskEvents().length" x-cloak>
+          <td colspan="3" class="pnl-empty">No risk events recorded.</td></tr>
+      </tbody></table>
+    </section>
   </aside>
   </div><!-- /pnl-grid -->
+
+  {# BOTTOM EXPORT BAR — the artwork's footer control. Both buttons drive the
+     SAME filtered export the table header already offers, so "current view"
+     means the active filter set and nothing else. #}
+  <div class="pnl-exportbar">
+    <span class="pnl-note" x-text="exportScopeNote()"></span>
+    {# ⛔ NOT a live handler. S09 has no export route, so both controls render
+       through the SAME gated macro the table header already uses. Wiring a
+       working download here would be inventing a capability the backend does
+       not have. #}
+    {{ export_button("Export Current View") }}
+    {{ export_button("Export XLSX") }}
+  </div>
 </div>
 
 <script>
@@ -441,7 +476,34 @@ function pnlAnalyticsPage() {
     attr: "strategy", cmp: "", curveKey: "net",
     size: 100, page: 1,
 
-    boot() { this.load(); },
+    boot() { this.load(); this.loadAlerts(); },
+    alerts: [],
+    async loadAlerts() {
+      /* Same endpoint Screen-08 uses. A failure here must NEVER blank the page:
+         the panel shows its empty state and the rest of the screen stands. */
+      try {
+        const r = await fetch("/api/alerts", {credentials:"same-origin"});
+        if (r.status === 401) { window.location = "/login"; return; }
+        const j = await r.json();
+        this.alerts = (j && j.alerts) || [];
+      } catch (e) { this.alerts = []; }
+    },
+    riskEvents() {
+      return (this.alerts || []).slice(0, 6).map(a => {
+        const sev = String(a.severity || a.level || "").toUpperCase();
+        const cls = (sev.indexOf("CRIT") === 0 || sev === "ERROR") ? "num-neg"
+                  : sev.indexOf("WARN") === 0 ? "pnl-warn" : "";
+        const ts = String(a.ts || a.timestamp || "");
+        return { time: ts.length >= 19 ? ts.slice(11, 19) : (ts || "—"),
+                 title: a.title || a.message || a.event || "—",
+                 detail: a.body || a.details || "",
+                 category: sev || "INFO", cls: cls };
+      });
+    },
+    exportScopeNote() {
+      const n = this.data && this.data.trade_count;
+      return (n === undefined || n === null) ? "" : ("exports the " + n + " filtered trade(s) in view");
+    },
 
     isPeriod(k) { return this.pick === k; },
     setPeriod(k) {
