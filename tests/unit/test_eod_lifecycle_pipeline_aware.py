@@ -17,8 +17,10 @@ import builtins
 import hashlib
 import inspect
 import re
+import threading
 from datetime import datetime, time as _time
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -510,4 +512,60 @@ def test_p3c_the_thread_forwards_the_resolver_to_the_decision_function():
     assert node.id in params, (
         "strategy_intent_fn is forwarded but is not a parameter of "
         "_start_eod_self_exit_thread - it cannot be coming from _main_locked"
+    )
+
+
+# -- fix (2): the degraded mode announces itself ------------------------------
+# The gate's own block comment says silently running product-blind "is exactly
+# the kind of unannounced behaviour change this gate must not make" -- but with
+# no resolver it did precisely that: skipped the pipeline-aware path and fell
+# through to the product-blind count without a single log line. The read-failure
+# path was loud; this one was mute. These two tests pin the announcement AND its
+# control, so it cannot regress to silence and cannot start crying wolf.
+
+
+def _start_and_settle(**kwargs):
+    """Run the REAL thread starter with an already-set shutdown event.
+
+    _run() checks that event before doing anything else, so the thread returns
+    immediately: this exercises the startup announcement with no poll loop, no
+    clock wait and no store read.
+    """
+    ev = threading.Event()
+    ev.set()
+    log = MagicMock()
+    main_mod._start_eod_self_exit_thread(
+        store=MagicMock(), notifier=None, mode="LIVE", log=log,
+        market_windows=None, shutdown_event=ev, window_end=WINDOW_END,
+        poll_interval_sec=1, **kwargs
+    )
+    return log
+
+
+def test_p3d_a_missing_resolver_is_announced_and_names_the_consequence():
+    """No resolver => the gate is product-blind. Say so, at CRITICAL, once.
+
+    A bare "resolver missing" would not do: whoever reads it at 08:15 needs to
+    know what it COSTS -- that a delivery carry will hold the service open and
+    the next trading day takes no entries in either book.
+    """
+    log = _start_and_settle()
+    assert log.critical.called, (
+        "a missing resolver silently degrades the gate to the product-blind "
+        "count -- it must announce itself"
+    )
+    msg = log.critical.call_args[0][0]
+    assert "PRODUCT-BLIND" in msg, "the announcement must name the degraded mode"
+    assert "NO ENTRIES IN EITHER BOOK" in msg, (
+        "the announcement must name the CONSEQUENCE, not just the condition"
+    )
+
+
+def test_p3e_a_wired_resolver_announces_nothing():
+    """The control. Without this, the test above would pass on a log.critical
+    that fires unconditionally -- which in production would be a CRITICAL every
+    single service start."""
+    log = _start_and_settle(strategy_intent_fn=_intent_fn)
+    assert not log.critical.called, (
+        "the normal, correctly-wired path must be silent"
     )

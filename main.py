@@ -1351,6 +1351,40 @@ def _start_eod_self_exit_thread(
     import time as _time_mod
     from core.time_authority import now_ist as _now_ist
 
+    # 25-Aug-2026 — THE DEGRADED MODE MUST ANNOUNCE ITSELF.
+    #
+    # Without a resolver, _eod_self_exit_due below never enters the pipeline-aware
+    # path and falls back to the product-blind count. That fallback is the SAFE
+    # direction — it counts MORE, so it errs toward staying up — but it is also
+    # exactly the lifecycle coupling this unit exists to remove, silently back in
+    # force and indistinguishable in the log from the working gate. The block
+    # comment on _eod_self_exit_due already states the principle: 'silently
+    # running in that degraded mode is exactly the kind of unannounced behaviour
+    # change this gate must not make'. This is that announcement.
+    #
+    # CRITICAL, and it should never fire: _main_locked is the ONLY production
+    # caller, it always passes the resolver, and for an operator/diagnostic start
+    # (--interactive / --resume / TS_IGNORE_MARKET_WINDOW=1) this thread is not
+    # started at all. There is no legitimate None path, so this cannot become
+    # routine noise. Announced ONCE per service start, not once per poll.
+    #
+    # It does NOT change the decision, and the fallback must STAY. Do not make the
+    # missing-resolver case 'fail harder' by removing it: that would trade a
+    # visible degradation for an invisible shutdown.
+    if strategy_intent_fn is None:
+        log.critical(
+            "eod_self_exit: NO strategy resolver was supplied — the EOD lifecycle "
+            "gate is running PRODUCT-BLIND for this session. Every open position "
+            "is counted, including a broker-protected CNC delivery carry, so a "
+            "carry will hold this service open past %s; the unit is then still "
+            "active at the next 08:15, token_watcher reads 'running — nothing to "
+            "do', NO BOOT happens, the 15:15 SOFT_KILL never auto-clears, and the "
+            "next trading day takes NO ENTRIES IN EITHER BOOK. Positions are NOT "
+            "at risk — the fallback counts more and so errs toward staying up — "
+            "but the pipeline-aware gate is NOT in force.",
+            window_end.strftime("%H:%M"),
+        )
+
     def _run() -> None:
         # Wait until window_end on the start date (the trading day we came up).
         start_now = _now_ist()
