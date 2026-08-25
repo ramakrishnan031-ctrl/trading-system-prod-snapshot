@@ -655,6 +655,47 @@ class StateStore:
         )
         return int(row["n"]) if row else 0
 
+    def get_active_positions_with_identity(self) -> List[sqlite3.Row]:
+        """
+        The same active set as count_active_positions() — OPEN/PARTIAL/PENDING_FILL
+        — but carrying BOTH independent identity sources, in ONE atomic query.
+
+        Added 25-Aug-2026 for the EOD lifecycle check. It is a SEPARATE read on
+        purpose: count_active_positions() has three production consumers (the EOD
+        gate, the risk_engine OPEN_POSITIONS cap, and the portfolio allocator), so
+        making *it* pipeline-aware would move a live risk cap in the same stroke.
+        That function is deliberately left exactly as it is.
+
+        The two sources, and why there are two:
+          - ``strategy``      -> the strategy's declared intent (PRIMARY). Every
+            trade carries its strategy provenance and the strategy YAML declares
+            INTRADAY vs DELIVERY, so identity is normally KNOWABLE.
+          - ``entry_product`` -> the broker product actually used (SECOND, and
+            INDEPENDENT). There is no trades.product column; product lives on
+            ``orders`` and is reached via the ENTRY leg.
+
+        Having two independent sources is the point: the defensive case for the
+        lifecycle gate is a CONFLICT between two sources that BOTH exist, not an
+        absence. A NULL check would pass a conflict straight through.
+
+        The LEFT JOIN cannot fan out a trade into several rows in practice — every
+        trade has at most one ENTRY order (measured 25-Aug: 595/595 trades had
+        exactly one). If that ever stops holding, a trade is counted twice, which
+        inflates the "requires the service" count and therefore biases toward
+        KEEPING THE SERVICE UP — the safe direction for this gate.
+        """
+        return self.fetch_all(
+            "SELECT t.trade_id       AS trade_id, "
+            "       t.symbol         AS symbol, "
+            "       t.status         AS status, "
+            "       t.strategy       AS strategy, "
+            "       o.product        AS entry_product "
+            "FROM trades t "
+            "LEFT JOIN orders o "
+            "       ON o.trade_id = t.trade_id AND o.leg = 'ENTRY' "
+            "WHERE t.status IN ('OPEN', 'PARTIAL', 'PENDING_FILL')"
+        )
+
     def get_trades_by_status_and_symbol(
         self, statuses: tuple[str, ...], symbol: str
     ) -> List[sqlite3.Row]:

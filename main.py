@@ -1071,19 +1071,186 @@ _ACTIVE_FLATTEN_IN_PROGRESS = -2
 # flatten gate above and only shuts down once the flatten is COMPLETE.
 _FLATTEN_DRAIN_GRACE_SEC = 15.0
 
+# ─────────────────────────────────────────────────────────────────────────────
+# EOD lifecycle: WHICH positions actually require THIS SERVICE? (25-Aug-2026)
+#
+# The question this gate asks has changed. It used to be "are there ANY open
+# positions?" — a product-blind count. That coupled the two pipelines through the
+# process lifecycle: a carried DELIVERY position held the whole service open past
+# window_end, so the unit was still `active` at 08:15, token_watcher read
+# "running — nothing to do", NO BOOT happened, the 15:15 SOFT_KILL never
+# auto-cleared, and the next day took NO ENTRIES IN BOTH BOOKS. A delivery carry
+# could silently disable the intraday pipeline. (Option A, Rama 25-Aug-2026.)
+#
+# The question is now: "is anything still open that requires THIS SERVICE to
+# remain running?"
+#   DELIVERY (CNC), cleanly identified  -> NO. Its stop and target are a
+#       broker-side two-leg OCO GTT resting at Zerodha (orders/cnc_gtt.py); it
+#       does not need this process, and the delivery GTT reconcile is in-hours
+#       only in any case.
+#   INTRADAY (MIS) still open here      -> YES. The gate only runs past
+#       window_end, which config guarantees is after eod_squareoff_time, so an
+#       intraday position seen here is ABNORMAL SURVIVAL: unprotected, and now an
+#       unplanned delivery obligation. Zerodha's auto square-off CAN fail — a
+#       circuit-locked stock is the common case.
+#   CONFLICT or UNRESOLVED identity     -> YES, and REPORT it.
+#
+# Identity is normally KNOWABLE, so the normal path is RESOLUTION, not defence:
+#   trades.strategy        -> the strategy YAML's declared `intent`  (PRIMARY)
+#   orders.product (ENTRY) -> PRODUCT_TO_INTENT            (SECOND, INDEPENDENT)
+# The defensive case is therefore a CONFLICT between two sources that BOTH exist
+# — not an absence. A NULL check would pass a conflict straight through.
+#
+# SCOPE: StateStore.count_active_positions() is deliberately UNCHANGED. It also
+# feeds the risk_engine OPEN_POSITIONS cap and the portfolio allocator; changing
+# it would move a live risk cap in the same stroke. This path uses a separate
+# read (get_active_positions_with_identity) and is consumed ONLY here.
+# EXITING-blindness is INHERITED, not fixed: the HARD_KILL flatten gate below
+# remains the separate, load-bearing guard for that and is untouched.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_PIPELINE_INTRADAY = "INTRADAY"
+_PIPELINE_DELIVERY = "DELIVERY"
+_IDENTITY_CONFLICT = "CONFLICT"
+_IDENTITY_UNRESOLVED = "UNRESOLVED"
+
+
+def _resolve_position_pipeline(strategy_intent, entry_product) -> str:
+    """Resolve ONE active position to its pipeline from the two identity sources.
+
+    Returns _PIPELINE_INTRADAY, _PIPELINE_DELIVERY, _IDENTITY_CONFLICT or
+    _IDENTITY_UNRESOLVED. Pure — no I/O, no config, no clock.
+
+    Strategy intent is the PRIMARY source and the broker product the SECOND. When
+    both are present and DISAGREE the answer is CONFLICT: we do not guess, we do
+    not silently prefer one, and (see the caller) we do not shut down.
+    """
+    from core.constants import PRODUCT_TO_INTENT
+
+    known = (_PIPELINE_INTRADAY, _PIPELINE_DELIVERY)
+
+    s = (str(strategy_intent).strip().upper() if strategy_intent else "")
+    s = s if s in known else None
+
+    p_code = (str(entry_product).strip().upper() if entry_product else "")
+    p = PRODUCT_TO_INTENT.get(p_code) if p_code else None
+    p = p if p in known else None
+
+    if s and p:
+        return s if s == p else _IDENTITY_CONFLICT
+    if s:
+        return s
+    if p:
+        return p
+    return _IDENTITY_UNRESOLVED
+
+
+# The ONLY product our overnight protection actually covers is CNC: CncGttPlacer
+# places a two-leg OCO GTT with product=CNC, and that is what rests at the broker.
+#
+# ⛔ Do NOT widen this to "whatever PRODUCT_TO_INTENT calls DELIVERY". That map
+# also sends NRML -> DELIVERY, but (a) this system never PLACES NRML — product_map
+# has only INTRADAY->MIS and DELIVERY->CNC — so an NRML position can only arrive
+# from outside, and (b) the emergency sites deliberately treat NRML as an
+# unrecognised anomaly to be flattened LOUDLY (see core/constants.py,
+# EMERGENCY_FLATTEN_PRODUCTS: "never silently spare the unknown"). A product this
+# system neither places nor protects must never buy an early shutdown.
+_BROKER_PROTECTED_PRODUCTS = frozenset({"CNC"})
+
+
+def _position_requires_service(pipeline: str, entry_product) -> bool:
+    """Does this position require THIS SERVICE to keep running?
+
+    Only a DELIVERY position whose ENTRY product is one we actually protect
+    broker-side does not. INTRADAY, CONFLICT and UNRESOLVED all do — and so does a
+    delivery-pipeline position we cannot confirm is broker-protected.
+
+    Deliberately NOT time-conditional: an intraday position requires the service
+    whether it is before its square-off deadline (being managed) or after it
+    (abnormal survival). The configured deadline only LABELS the report, never
+    decides, so no universal square-off literal lives in this path.
+    """
+    if pipeline != _PIPELINE_DELIVERY:
+        return True
+    product = (str(entry_product).strip().upper() if entry_product else "")
+    return product not in _BROKER_PROTECTED_PRODUCTS
+
+
+def _classify_active_positions(
+    rows,
+    strategy_intent_fn: "Optional[Callable[[str], Optional[str]]]" = None,
+) -> "tuple[int, list]":
+    """Count active positions that require this service, and describe the odd ones.
+
+    Returns (count, notes). `notes` carries one entry per CONFLICT/UNRESOLVED
+    position and per surviving INTRADAY position — everything an operator would
+    need to act, so a stay-up is never silent.
+    """
+    count = 0
+    notes: list = []
+    for r in rows:
+        strategy = r["strategy"]
+        entry_product = r["entry_product"]
+        intent = None
+        if strategy is not None and strategy_intent_fn is not None:
+            try:
+                intent = strategy_intent_fn(str(strategy))
+            except Exception:  # noqa: BLE001 — an unknown strategy is not fatal
+                intent = None
+        pipeline = _resolve_position_pipeline(intent, entry_product)
+        if not _position_requires_service(pipeline, entry_product):
+            continue
+        count += 1
+        if pipeline == _PIPELINE_DELIVERY:
+            # Identified as delivery, but on a product we do not protect
+            # broker-side. Keeping it is the conservative call; it is also worth
+            # saying out loud, because it means an overnight position with no
+            # OCO behind it.
+            reason = "delivery_without_broker_protection"
+        elif pipeline == _PIPELINE_INTRADAY:
+            reason = "intraday_survivor"
+        else:
+            reason = pipeline.lower()
+        notes.append({
+            "trade_id": r["trade_id"],
+            "symbol": r["symbol"],
+            "status": r["status"],
+            "strategy": strategy,
+            "strategy_intent": intent,
+            "entry_product": entry_product,
+            "pipeline": pipeline,
+            "reason": reason,
+        })
+    return count, notes
+
+
 def _eod_self_exit_due(
     store,
     now: datetime,
     window_end: _time,
     flatten_in_progress_fn: "Optional[Callable[[], bool]]" = None,
+    strategy_intent_fn: "Optional[Callable[[str], Optional[str]]]" = None,
+    on_unresolved: "Optional[Callable[[list], None]]" = None,
+    log=None,
 ) -> "tuple[bool, int]":
     """Decide whether the service should self-exit for the day.
 
     Returns (due, active_positions). `due` is True iff `now` is at/after
-    `window_end` AND no HARD_KILL flatten is in progress AND there are zero active
-    positions (OPEN/PARTIAL/PENDING_FILL). Before `window_end` → (False, -1)
-    without querying. On a count error → (False, -1) so the service stays up
-    (fail-safe). While a flatten is in progress → (False, _ACTIVE_FLATTEN_IN_PROGRESS).
+    `window_end` AND no HARD_KILL flatten is in progress AND zero active positions
+    REQUIRE THIS SERVICE. Before `window_end` → (False, -1) without querying. On a
+    count error → (False, -1) so the service stays up (fail-safe). While a flatten
+    is in progress → (False, _ACTIVE_FLATTEN_IN_PROGRESS).
+
+    25-Aug-2026: `active_positions` is no longer "every open position" — it is
+    "open positions that require THIS SERVICE to keep running". A cleanly
+    identified DELIVERY carry is protected broker-side and is NOT counted; an
+    INTRADAY survivor, an identity CONFLICT and an UNRESOLVED identity all are.
+    See the block comment above for why, and for what deliberately did not change.
+    `strategy_intent_fn` maps a strategy name to its declared intent (the PRIMARY
+    identity source); `on_unresolved` receives one note per counted position so a
+    stay-up is never silent. Both are optional: with neither supplied, and when
+    the pipeline-aware read is unavailable, this falls back to the old
+    product-blind count — which counts MORE, i.e. errs toward staying up.
 
     M-C8 — WHY THE FLATTEN GATE EXISTS (this closes a race that is latent TODAY,
     not one the async worker introduced): count_active_positions() counts only
@@ -1105,6 +1272,50 @@ def _eod_self_exit_due(
                 return (False, _ACTIVE_FLATTEN_IN_PROGRESS)
         except Exception:
             return (False, _ACTIVE_FLATTEN_IN_PROGRESS)  # cannot confirm → stay up
+
+    # Pipeline-aware path: count only what requires THIS SERVICE.
+    #
+    # Entered ONLY when the caller supplied `strategy_intent_fn`. That is the
+    # PRIMARY identity source; without it the resolver would fall back to the
+    # broker product alone, and silently running in that degraded mode is exactly
+    # the kind of unannounced behaviour change this gate must not make. Production
+    # always supplies it (main() wires the loaded strategies).
+    if strategy_intent_fn is not None:
+        try:
+            rows = store.get_active_positions_with_identity()
+            # A concrete sequence is REQUIRED. Anything else — a stub, a mock, a
+            # lazy proxy — must not be walked: an object that is iterable but
+            # EMPTY reads as "flat" and would exit the service out from under a
+            # live position. "Looks like zero" is the one answer this gate may
+            # never accept from a source it cannot verify.
+            if not isinstance(rows, (list, tuple)):
+                raise TypeError(
+                    "get_active_positions_with_identity returned "
+                    f"{type(rows).__name__}, expected list/tuple"
+                )
+            active, notes = _classify_active_positions(rows, strategy_intent_fn)
+            if notes and on_unresolved is not None:
+                try:
+                    on_unresolved(notes)
+                except Exception:  # noqa: BLE001 — reporting must never gate the decision
+                    pass
+            return (active == 0, active)
+        except Exception as exc:  # noqa: BLE001
+            # The pipeline-aware read failed. Fall back to the product-blind
+            # count: it counts MORE positions (delivery included) and so biases
+            # toward KEEPING THE SERVICE UP, the safe direction for this gate.
+            # Loud, never silent — while this fallback is in force the lifecycle
+            # coupling is back.
+            if log is not None:
+                try:
+                    log.error(
+                        "eod_self_exit: pipeline-aware position read FAILED (%s) "
+                        "— falling back to the product-blind count. A delivery "
+                        "carry will hold the service open until this is fixed.",
+                        exc,
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
     try:
         active = int(store.count_active_positions())
     except Exception:
@@ -1122,6 +1333,8 @@ def _start_eod_self_exit_thread(
     window_end: "_time",
     poll_interval_sec: int = 60,
     flatten_in_progress_fn: "Optional[Callable[[], bool]]" = None,
+    strategy_intent_fn: "Optional[Callable[[str], Optional[str]]]" = None,
+    squareoff_time: "Optional[_time]" = None,
 ) -> None:
     """Daemon thread: after the service-window end, exit cleanly once flat.
 
@@ -1153,9 +1366,95 @@ def _start_eod_self_exit_thread(
 
         warned_not_flat = False
         warned_flatten = False
+        # Latch: report an identity CONFLICT / UNRESOLVED position ONCE, not on
+        # every poll. Same shape as warned_not_flat below.
+        reported_identity: set = set()
+
+        def _report_unresolved(notes: list) -> None:
+            """Surface every position that is keeping this service alive.
+
+            A stay-up must never be silent. CONFLICT and UNRESOLVED are CRITICAL —
+            two identity sources that exist and disagree, or a position we cannot
+            attribute to a pipeline at all, is an operator decision, not something
+            this gate may resolve by guessing.
+            """
+            for n in notes:
+                key = (n.get("trade_id"), n.get("pipeline"))
+                if key in reported_identity:
+                    continue
+                reported_identity.add(key)
+                pipeline = n.get("pipeline")
+                if pipeline in (_IDENTITY_CONFLICT, _IDENTITY_UNRESOLVED):
+                    log.critical(
+                        "eod_self_exit: %s identity for %s (trade %s, status %s): "
+                        "strategy=%r declares intent=%r but ENTRY product=%r — "
+                        "NOT guessing, NOT shutting down; the service stays up "
+                        "until this is resolved.",
+                        pipeline, n.get("symbol"), n.get("trade_id"),
+                        n.get("status"), n.get("strategy"),
+                        n.get("strategy_intent"), n.get("entry_product"),
+                    )
+                    send_alert_recorded(
+                        notifier, log,
+                        severity="CRITICAL",
+                        title=f"[{mode}] EOD identity {str(pipeline).lower()} — {n.get('symbol')}",
+                        body=(
+                            f"{n.get('symbol')} (trade {n.get('trade_id')}, "
+                            f"status {n.get('status')}) could not be attributed to a "
+                            f"pipeline.\n"
+                            f"Strategy: {n.get('strategy')!r} → intent "
+                            f"{n.get('strategy_intent')!r}\n"
+                            f"ENTRY product: {n.get('entry_product')!r}\n"
+                            "The service is staying UP and is not guessing. "
+                            "Resolve the identity, then it can exit normally."
+                        ),
+                        source_module="main",
+                    )
+                elif n.get("reason") == "delivery_without_broker_protection":
+                    # Identified as delivery, but not on a product we place an
+                    # OCO for. Nothing is holding a stop behind it overnight.
+                    log.critical(
+                        "eod_self_exit: DELIVERY position %s (trade %s) has ENTRY "
+                        "product %r, which this system neither places nor protects "
+                        "with an OCO-GTT — it is NOT broker-protected. Staying up.",
+                        n.get("symbol"), n.get("trade_id"), n.get("entry_product"),
+                    )
+                    send_alert_recorded(
+                        notifier, log,
+                        severity="CRITICAL",
+                        title=f"[{mode}] Delivery position without protection — {n.get('symbol')}",
+                        body=(
+                            f"{n.get('symbol')} (trade {n.get('trade_id')}) resolves "
+                            f"to the DELIVERY pipeline but its ENTRY product is "
+                            f"{n.get('entry_product')!r}.\n"
+                            "This system only places OCO-GTT protection for CNC, so "
+                            "there is no broker-side stop behind this position.\n"
+                            "The service is staying UP rather than treating it as a "
+                            "protected carry."
+                        ),
+                        source_module="main",
+                    )
+                else:
+                    # An INTRADAY position still open here is abnormal survival:
+                    # we are past window_end, which is past the CONFIGURED
+                    # eod_squareoff_time. Auto square-off can fail (a
+                    # circuit-locked stock is the usual cause).
+                    log.warning(
+                        "eod_self_exit: INTRADAY position still open past the "
+                        "configured square-off (%s): %s (trade %s, status %s, "
+                        "product %r) — unprotected and now an unplanned delivery "
+                        "obligation; staying up.",
+                        squareoff_time.strftime("%H:%M") if squareoff_time else "n/a",
+                        n.get("symbol"), n.get("trade_id"), n.get("status"),
+                        n.get("entry_product"),
+                    )
+
         while not shutdown_event.is_set():
             due, active = _eod_self_exit_due(
-                store, _now_ist(), window_end, flatten_in_progress_fn
+                store, _now_ist(), window_end, flatten_in_progress_fn,
+                strategy_intent_fn=strategy_intent_fn,
+                on_unresolved=_report_unresolved,
+                log=log,
             )
             if active == _ACTIVE_FLATTEN_IN_PROGRESS and not warned_flatten:
                 warned_flatten = True
@@ -1191,8 +1490,10 @@ def _start_eod_self_exit_thread(
             if active > 0 and not warned_not_flat:
                 warned_not_flat = True
                 log.warning(
-                    "eod_self_exit: past %s IST but %d active position(s) remain "
-                    "— staying up to manage them; will exit once flat.",
+                    "eod_self_exit: past %s IST but %d position(s) REQUIRE this "
+                    "service — staying up to manage them; will exit once none do. "
+                    "(A cleanly identified DELIVERY carry is protected broker-side "
+                    "and is not counted here.)",
                     window_end.strftime("%H:%M"), active,
                 )
                 # == ALERT DELIVERY CONTRACT (Phase 1, 09-Aug-2026) =========
@@ -1209,9 +1510,10 @@ def _start_eod_self_exit_thread(
                     severity="WARNING",
                     title=f"[{mode}] EOD shutdown deferred",
                     body=(
-                        f"{active} position(s) still open past "
-                        f"{window_end.strftime('%H:%M')} IST — service staying "
-                        "up until flat (not abandoning positions)."
+                        f"{active} position(s) requiring this service are still "
+                        f"open past {window_end.strftime('%H:%M')} IST — service "
+                        "staying up (not abandoning positions). A delivery carry "
+                        "is protected broker-side and does not defer shutdown."
                     ),
                     source_module="main",
                 )
@@ -3709,6 +4011,17 @@ def _main_locked(args, config_dir: Path) -> int:
             window_end=_service_window_end,
             # M-C8: never self-exit while a HARD_KILL flatten is still running.
             flatten_in_progress_fn=kill_switch.is_flatten_in_progress,
+            # 25-Aug-2026: the PRIMARY identity source for the lifecycle gate —
+            # a strategy's DECLARED intent. The broker ENTRY product is the second,
+            # independent source and is read from the DB alongside it.
+            strategy_intent_fn=(
+                lambda name: getattr(strategies.get(name), "intent", None)
+            ),
+            # Used only to LABEL an abnormal intraday survivor in the report —
+            # never to decide. No universal square-off literal lives in this path.
+            squareoff_time=_parse_hhmm(
+                app_config.system.trading_hours.eod_squareoff_time
+            ),
         )
     else:
         _log.info(
