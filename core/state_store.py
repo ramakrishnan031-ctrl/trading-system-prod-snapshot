@@ -678,11 +678,21 @@ class StateStore:
         lifecycle gate is a CONFLICT between two sources that BOTH exist, not an
         absence. A NULL check would pass a conflict straight through.
 
-        The LEFT JOIN cannot fan out a trade into several rows in practice — every
-        trade has at most one ENTRY order (measured 25-Aug: 595/595 trades had
-        exactly one). If that ever stops holding, a trade is counted twice, which
-        inflates the "requires the service" count and therefore biases toward
-        KEEPING THE SERVICE UP — the safe direction for this gate.
+        The LEFT JOIN cannot fan out a trade into several rows in practice — no
+        trade has MORE than one ENTRY order. Measured 25-Aug on the live book:
+        743 trades total — 595 with exactly one ENTRY row, 148 with NONE, and
+        ZERO with two or more. If that ever stops holding, a trade is counted
+        twice, which inflates the "requires the service" count and therefore
+        biases toward KEEPING THE SERVICE UP — the safe direction for this gate.
+
+        Read those 148 carefully, because "595/595" would be a misleading way to
+        say this: a trade with no ENTRY row yields entry_product NULL, so the
+        broker product is simply ABSENT for a fifth of the book (148/743 = 20%).
+        That is precisely why the strategy intent is the PRIMARY source and not a
+        fallback, and why an absent product must be read as "no second opinion"
+        rather than as evidence of anything. All 743 trades do carry a strategy
+        name (measured: zero NULL or empty), so identity stays resolvable for the
+        rows the product source cannot speak to.
         """
         return self.fetch_all(
             "SELECT t.trade_id       AS trade_id, "
