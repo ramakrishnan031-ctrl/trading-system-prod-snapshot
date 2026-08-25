@@ -12,15 +12,19 @@ docs/audit/PREDICTION_eodlifecycle_25-Aug-2026.md for the frozen falsifiers.
 """
 from __future__ import annotations
 
+import ast
+import builtins
 import hashlib
 import inspect
 import re
 from datetime import datetime, time as _time
+from pathlib import Path
 
 import pytest
 
 import main as main_mod
 from core.state_store import StateStore
+from strategies.loader import StrategyLoader
 
 WINDOW_END = _time(17, 35)
 # Past window_end, which config guarantees is past eod_squareoff_time.
@@ -310,4 +314,200 @@ def test_t6c_the_new_read_is_consumed_only_by_the_eod_gate():
     call_sites = re.findall(r"\.get_active_positions_with_identity\(", main_src)
     assert len(call_sites) == 1, (
         f"expected exactly one call site in main.py, found {len(call_sites)}"
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# P-3 — IS THE PRODUCTION PATH ACTUALLY WIRED? (25-Aug-2026)
+#
+# Every test above this line supplies its OWN resolver. That is right for testing
+# the gate's LOGIC, but it means none of them can detect the single failure that
+# would make this whole unit inert: production not passing a resolver at all.
+# With strategy_intent_fn=None the gate falls back to the product-blind count and
+# the lifecycle coupling this unit exists to remove is back — deployed, gated
+# green, reporting nothing, and changing nothing.
+#
+# THE CHAIN THAT MUST HOLD, END TO END:
+#   _main_locked  --strategy_intent_fn=<lambda>-->  _start_eod_self_exit_thread
+#   _start_eod_self_exit_thread  --strategy_intent_fn=-->  _eod_self_exit_due
+# Break EITHER link and the fix is inert. Both are pinned below.
+#
+# INSTRUMENT — the AST of main.py, plus EXECUTION of the production expression
+# itself against the shipped strategy YAMLs. Not grep (formatting-fragile), and
+# not a re-implementation of the lambda (a copy can drift from production and
+# still go green). The resolver exercised here is the one parsed out of main.py.
+#
+# WHAT A RED HERE MEANS — AND WHAT IT DOES NOT:
+#   RED  = production stopped passing a WORKING strategy resolver into the EOD
+#          lifecycle gate. The gate is now product-blind, so a delivery carry
+#          holds the service open past window_end, the unit is still `active` at
+#          08:15, token_watcher reads "running - nothing to do", the 15:15
+#          SOFT_KILL never auto-clears, and the next trading day takes NO ENTRIES
+#          IN EITHER BOOK. That is a live trading defect.
+#          Fix the wiring. Do NOT edit the test to match.
+#   NOT  = someone moved or reformatted a line. These assertions are deliberately
+#          insensitive to formatting, to the lambda's parameter name, and to the
+#          name of the strategies mapping it closes over.
+#          Renaming the KEYWORD is a real wiring change and SHOULD fail here: the
+#          keyword is the contract between _main_locked and the gate.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_REPO_ROOT = Path(main_mod.__file__).resolve().parent
+_STRATEGIES_DIR = _REPO_ROOT / "config" / "strategies"
+
+
+def _main_ast() -> ast.Module:
+    return ast.parse(Path(main_mod.__file__).read_text(encoding="utf-8"))
+
+
+def _fn_node(name: str) -> ast.FunctionDef:
+    for n in ast.walk(_main_ast()):
+        if isinstance(n, ast.FunctionDef) and n.name == name:
+            return n
+    raise AssertionError(f"{name}() not found in main.py")
+
+
+def _sole_call_kwargs(container: ast.FunctionDef, callee: str) -> dict:
+    """The keyword arguments of the ONE call to `callee` inside `container`."""
+    calls = [
+        n for n in ast.walk(container)
+        if isinstance(n, ast.Call) and getattr(n.func, "id", None) == callee
+    ]
+    assert len(calls) == 1, (
+        f"expected exactly one call to {callee}() inside {container.name}(), "
+        f"found {len(calls)} - the wiring this test pins is no longer unique"
+    )
+    return {k.arg: k.value for k in calls[0].keywords}
+
+
+def _load_shipped_strategies(force_intraday_only: bool = False) -> dict:
+    """Load the SHIPPED strategy YAMLs with the SAME loader production uses.
+
+    Deterministic: config files only. No DB, no VM, no network, no clock, no
+    market date, no open position.
+    """
+    return StrategyLoader().load_all_strategies(
+        _STRATEGIES_DIR, force_intraday_only=force_intraday_only,
+    )
+
+
+def _compile_production_resolver(node: ast.AST):
+    """Compile the resolver EXPRESSION lifted from main.py's call site.
+
+    The one free name it closes over (the loaded strategies mapping, whatever it
+    happens to be called) is bound to the real shipped config, so what runs here
+    is the production expression itself rather than a copy of it.
+    """
+    src = ast.unparse(node)
+    params = set()
+    if isinstance(node, ast.Lambda):
+        a = node.args
+        params = {x.arg for x in (*a.posonlyargs, *a.args, *a.kwonlyargs)}
+    free = {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
+    free -= params
+    free -= set(dir(builtins))
+    assert free, (
+        "the production resolver closes over NO names, so it is not consulting the "
+        "loaded strategy config at all - it can never resolve an intent, and the "
+        f"EOD gate is effectively product-blind. Source: {src!r}"
+    )
+    assert len(free) == 1, (
+        "expected the production resolver to close over exactly one name - the "
+        f"loaded strategies mapping - but it references {sorted(free)}. That is a "
+        f"wiring change: review it, do not silently widen this test. Source: {src!r}"
+    )
+    mapping_name = free.pop()
+    strategies = _load_shipped_strategies()
+    g = {"__builtins__": builtins, mapping_name: strategies}
+    expr = ast.Expression(body=node)
+    ast.fix_missing_locations(expr)
+    resolver = eval(compile(expr, "<main.py::_main_locked>", "eval"), g)  # noqa: S307
+    return resolver, strategies, src
+
+
+# -- P-3a: the call site passes something, and it is not None -----------------
+def test_p3a_production_passes_a_resolver_that_is_not_none():
+    """_main_locked must hand the gate a real resolver.
+
+    RED here = the EOD gate is running product-blind in production (see the block
+    comment above). NOT a formatting failure.
+    """
+    kw = _sole_call_kwargs(_fn_node("_main_locked"), "_start_eod_self_exit_thread")
+    assert "strategy_intent_fn" in kw, (
+        "_main_locked no longer passes strategy_intent_fn to the EOD gate - the "
+        "gate has silently reverted to the product-blind count and a delivery "
+        "carry will again hold the service open overnight"
+    )
+    node = kw["strategy_intent_fn"]
+    assert not (isinstance(node, ast.Constant) and node.value is None), (
+        "strategy_intent_fn is passed as a literal None - that is exactly the "
+        "product-blind fallback, i.e. this unit deployed and inert"
+    )
+
+
+# -- P-3b: and it actually RESOLVES (the "wrong reason" guard) ----------------
+def test_p3b_the_production_resolver_actually_resolves_every_shipped_strategy():
+    """Presence of the kwarg is NOT enough: `lambda name: None` would satisfy it
+    and still leave the gate product-blind.
+
+    So execute the production expression against the shipped config and require
+    it to return each strategy's DECLARED intent. Two degenerate resolvers die
+    here: one that always returns None (fails the real names) and one that always
+    returns a fixed intent (fails the unknown name).
+    """
+    kw = _sole_call_kwargs(_fn_node("_main_locked"), "_start_eod_self_exit_thread")
+    resolver, strategies, src = _compile_production_resolver(kw["strategy_intent_fn"])
+
+    assert strategies, "no strategy YAMLs shipped - this test would be vacuous"
+
+    for name, cfg in sorted(strategies.items()):
+        got = resolver(name)
+        assert got == cfg.intent, (
+            f"the production resolver returned {got!r} for strategy {name!r} but "
+            f"its YAML declares intent {cfg.intent!r} - resolver source: {src}"
+        )
+        assert got in ("INTRADAY", "DELIVERY"), (
+            f"{name!r} resolved to {got!r}, which is neither pipeline"
+        )
+
+    # A constant resolver must not survive: an unknown strategy has no intent.
+    assert resolver("__no_such_strategy__") is None, (
+        "the production resolver returned an intent for a strategy that does not "
+        f"exist - it is not consulting the strategy config. Source: {src}"
+    )
+
+    # This test reads intents with force_intraday_only=False while production
+    # passes the configured value. That is only sound because the loader PRESERVES
+    # the declared intent (Option A, 10-Jul-2026 - the old load-time DELIVERY ->
+    # INTRADAY rewrite was removed). Pin that assumption rather than rely on it.
+    forced = {n: c.intent for n, c in _load_shipped_strategies(True).items()}
+    assert forced == {n: c.intent for n, c in strategies.items()}, (
+        "the loader now rewrites intent under force_intraday_only - the EOD gate's "
+        "PRIMARY identity source would change meaning with the breaker on"
+    )
+
+
+# -- P-3c: the second link - the thread forwards it to the decision function --
+def test_p3c_the_thread_forwards_the_resolver_to_the_decision_function():
+    """A resolver that reaches the thread but not _eod_self_exit_due is just as
+    inert as one that was never passed. This pins the second link.
+
+    RED here = the gate stopped receiving the resolver it was given.
+    """
+    fnode = _fn_node("_start_eod_self_exit_thread")
+    kw = _sole_call_kwargs(fnode, "_eod_self_exit_due")
+    assert "strategy_intent_fn" in kw, (
+        "_start_eod_self_exit_thread no longer forwards strategy_intent_fn to "
+        "_eod_self_exit_due - the gate is product-blind again"
+    )
+    node = kw["strategy_intent_fn"]
+    params = {x.arg for x in (*fnode.args.posonlyargs, *fnode.args.args,
+                              *fnode.args.kwonlyargs)}
+    assert isinstance(node, ast.Name) and node.id == "strategy_intent_fn", (
+        "the forwarded value is no longer the strategy_intent_fn parameter itself "
+        f"(got {ast.unparse(node)!r})"
+    )
+    assert node.id in params, (
+        "strategy_intent_fn is forwarded but is not a parameter of "
+        "_start_eod_self_exit_thread - it cannot be coming from _main_locked"
     )
