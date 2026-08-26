@@ -2425,3 +2425,27 @@ corrected first-execution dates.**
 premise. It created NO register row, closed nothing, and re-derived no finding — N = 231 stands.**
 ⏰ **The 05-Aug EVENING pass DID create one (A6) and discharged one (A1 → §D): N = 232.** ⭐ Both
 sentences are true of their own pass; the count in this line is the morning's.
+
+---
+
+# ✅ 26-AUG-2026 — **FORMAL CLOSURES (A5).** ⛔ N UNCHANGED — no new row, no row retired.
+
+> ⚠️ **READ THIS FIRST — WHY THESE ITEMS APPEAR HERE FOR THE FIRST TIME.** The `F-`, `Q-`, `O-` and
+> `DEFECT` series were tracked in `docs/SYSTEM_MAP.md`, in the unpushed-deploy ledger and in
+> `mempalace.yaml` — **none of which are on `origin/main`**. 🔬 Measured 26-Aug: this register
+> contained **zero** occurrences of `F7`, `F8`, `Q-3`, `Q-4`, `DEFECT D`, `O-1`, `O-2` and
+> `DEFECT B`. ⇒ ⭐ These are therefore **RECORDED, not flipped** — ⛔ nothing here retires a status
+> this file previously held, because it held none.
+
+| item | status | one-line reason | measurement source |
+|---|---|---|---|
+| **F7** | **CLOSED · NO FIX** | CHECK 1 = `L\B`, CHECK 2 = `B\L` — complementary halves of `L△B`. The *"algebraically the same"* premise is **REFUTED**. | `orders/order_reconciler.py` — CHECK 1 `_check1_manual_close`, CHECK 2 `_check2_orphan_adoption` |
+| **F8** | **CLOSED · NO FIX** | CHECK 2 is `_log.info` at `order_reconciler.py:1834`, with **21 production lines** present. The DEBUG→INFO premise is **REFUTED**. | source line + production log count |
+| **Q-3** | **CLOSED** | `:4038` opens the call; `:4051-4053` is the kwarg **inside** it. ⭐ The defect was the **METHOD** — line arithmetic across a multi-line call. | `main.py` read end-to-end across the call |
+| **Q-4** | **CLOSED** | `trades.exit_time` is **IST with an explicit `+05:30`**, written by `_now_ist_iso()`. The UTC premise is **REFUTED**. | stored values + the writer function |
+| **DEFECT D** | **CLOSED** | Its premise depended on Q-4, which is refuted. ⚠️ **SURVIVING LATENT FINDING, recorded:** `DATE()` converts to UTC while `substr(...,1,10)` does not; they disagree **only below 05:30 IST**, and **0 rows** fall there. 🏷️ **LATENT, ⛔ NOT LIVE.** | row scan of the boundary window |
+| **O-2** | **CLOSED** | `MEMORY.md` is **8,877 B = 37%** of its 24,000 B guard. The ~25.5 KB truncation premise is **STALE**. | `wc -c` on the index |
+| **O-1** | **CLOSED · RATIFIED AS-IS** | Verified against source (M5); **no difference found**; the L-3 posture is confirmed. ⛔ **Do not reopen P-3.** | source-vs-record comparison |
+
+⭐ **The closures are recorded with their reason and their source so that a later reader can
+re-run the measurement rather than trust the verdict.**
