@@ -2449,3 +2449,28 @@ sentences are true of their own pass; the count in this line is the morning's.
 
 ⭐ **The closures are recorded with their reason and their source so that a later reader can
 re-run the measurement rather than trust the verdict.**
+
+---
+
+# 🔬 26-AUG-2026 — **TODAY'S FINDINGS, AT THEIR MEASURED LABEL (A6).** ⛔ NO LABEL UPGRADED. ⛔ N UNCHANGED.
+
+| finding | 🏷️ LABEL — ⛔ as measured, ⛔ not improved |
+|---|---|
+| **DEFECT B** — CNC exit prices sit far from their triggers | **BEHAVIOURALLY ESTABLISHED AT POPULATION SCALE · MECHANISM UNRESOLVED · ⭐ PARKED AS NON-CORE.** ⛔ Do not reopen. ⚠️ Returns to scope **only** if shown to affect sizing, reservation, execution, risk or lifecycle. ⭐ **The broker is the final truth; a reporting discrepancy does not change what was traded.** |
+| **A-1** — the like-for-like control | **CLOSED.** MIS `SL_HIT` **n=137** · exact **15 (11%)** · min 0.000 · p25 0.026 · **med 0.1404** · p75 0.358 · max 2.672. MIS `TGT_HIT` **n=90** · exact **49 (54%)** · min 0.000 · p25 0.002 · **med 0.0043** · p75 0.019 · max 9.622. ⚠️ **`n=138` / med 0.1459 SUPERSEDED — a RAMCOIND join fan-out.** ⛔ The *"ratio < 2"* ambiguity rule is **WITHDRAWN** (threshold taken from the data it was applied to). ✅ S-4's five-treatment robustness **RETAINED**. |
+| **CHECK 1** exclusion of CNC trades | **PROVEN DESIGN PROPERTY** — the ACTIVE-GTT ownership boundary, `orders/order_reconciler.py:876-877`. ⛔ **Not a bug.** |
+| **PHANTOM** capital over-reservation | **MEASURED WINDOW ≈ 11 m 51.8 s** (start = the **first observed** `broker_used` collapse; ⚠️ ⛔ the true broker close time was **NOT directly measured**). ⭐ Acceptability is a **DESIGN DECISION**, ⛔ not a defect verdict. |
+| **CAUSE 3** | residual **435.19** vs position **454.48** at `carry = 0` ⇒ **CONTROLLED BENIGN REFERENCE CASE.** ⛔ **NOT a revert condition.** |
+| **THE EXIT-PRICE CONTRACT** | **ABSENT / UNSPECIFIED.** 🔬 `orders.avg_fill_price` is **NULL on all 1,205 orders**; `orders.price` is populated on **591 / 1,205**. |
+| **ERRORS OWNED** | 🔴 **THIRTEEN, unsoftened.** ⚠️ **#11 and #12 are the SAME SHAPE — a join fan-out, hours apart** (`trades ⋈ gtt_state`, then `trades ⋈ orders`). ⭐ **The PATTERN is the finding, not the instances.** ⚠️ **#13 (this evening): I recorded a CNC position as "invisible to a broker-positions filter" when it is DELIBERATELY OUT OF SCOPE — `get_open_intraday_positions()`, EOD6 design. I reached for the interesting explanation before the simplest one.** ⚠️ *(A6 as issued said TWELVE; #13 was found after that file was written.)* |
+| **THE CARRY TEST** | **NOT EXERCISED — DESIGN PRESERVED INTACT:** OWED-2 · carry CHECK 1 · CHECK 2a · CHECK 2b · the four-reading series · the three-cause discriminator · G3 settled-CNC T+1 · F6-leg T+1 · the `A_sameday` baseline. ⭐ **TRIGGER: the next trading day that ends with a DELIVERY/CNC position open *at the broker* at 15:30.** ⭐ A standing **WATCH ITEM**, ⛔ not a scheduled task. |
+| **PARKED OBSERVATION** | Four `gtt_state` rows still `TRIGGERED` from 05–11 Aug (ATULAUTO ×2, DIFFNKG ×2). **Both trades are CLOSED**, so the `:876-877` exclusion is harmless. ⭐ Observation only, ⛔ no branch opened. |
+
+## ⛔ A3 — **CANNOT COMPUTE, AND SAID SO RATHER THAN SKIPPED**
+`N20-20` asks for the register row **`N20-14`** to have its markdown column count corrected
+(reported as 5 structural pipes vs 3, pre-existing at `b019540`).
+🔬 **MEASURED: that row does not exist.** `N20-14` appears in exactly three places — `SYSTEM_MAP.md`,
+`drift_comparator_fix_20aug.md` and the unpushed-deploy ledger — and **all three are prose
+descriptions of the defect**; the `SYSTEM_MAP` line contains **0 pipe characters**. This register
+contains **zero** `N20-` entries. ⇒ ⛔ **A column count cannot be corrected in a row that is not there.**
+⭐ **Left OPEN and reported.** ⛔ Not invented, ⛔ not silently dropped.
