@@ -100,6 +100,30 @@ VM: 161.118.187.249 | User: ubuntu | System: ~/systems/trading-system
 
 **Verified by crash test**: PARTIAL — CT117 (WAL recovery), CT118 (table drop recovery). Full restore drill not run today.
 
+### 9a. Code rollback — TEMPORARY vs DURABLE  *(added 26-Aug-2026, Q-2)*
+
+The deploy hook checks out the **branch** (`main`), never the pushed revision. That single fact
+decides the semantics below. **This section deliberately names no commit SHA — read the current
+target from the rollback record in `docs/audit/`, and re-derive it; never paste one from memory.**
+
+1. **A VM working-tree rollback is TEMPORARY.** Checking the deployed tree back to an earlier
+   revision is undone by **the next push of anything to `main`** — including an unrelated,
+   innocent push by someone who does not know a rollback is in effect. It does not survive.
+2. **The DURABLE form is a ref-level change**: a revert **commit pushed to `main`** (the RB-2
+   shape in the rollback record), **not** `checkout -f`. Only a change to the ref itself
+   survives the next deploy.
+3. **POST-ROLLBACK VERIFICATION IS MANDATORY, AND IT IS TWO CHECKS — NOT ONE:**
+   - a. the bare repo's `refs/heads/main` matches the intended tree, **then**
+   - b. the deployed working tree matches it.
+   Checking only (b) passes while the ref still points elsewhere, and the next push silently
+   reverts your rollback. Checking only (a) passes while the box still runs the old tree.
+4. **A tree-only rollback is a STOPGAP, and it opens a PUSH FREEZE.** From the moment a
+   `checkout -f` rollback is in effect until it is made durable per (2), **nobody pushes to
+   `main`**. Announce the freeze; lift it only after (3) passes.
+
+> **Why this matters operationally:** a tree-only rollback plus any later push returns the box to
+> the broken code with no alarm, no log line, and no one intending it.
+
 ## 10. Cron Verification
 
 1. Check: `crontab -l` (expected: 20+ entries)
