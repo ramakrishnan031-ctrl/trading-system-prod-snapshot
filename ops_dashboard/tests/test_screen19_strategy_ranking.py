@@ -150,7 +150,7 @@ def test_the_table_columns_are_the_approved_ones_in_the_approved_order():
     """⭐ Trade Type sits IMMEDIATELY AFTER Strategy, and no approved column
     moved to make room for it."""
     tpl = _tpl()
-    block = tpl[tpl.index("DEFAULT_COLS:"):tpl.index("cols: [], dragKey")]
+    block = tpl[tpl.index("DEFAULT_COLS:"):tpl.index("cols: [],")]
     labels = re.findall(r'label:\s*"([^"]+)"', block)
     assert labels == APPROVED_COLUMNS
     assert labels[1:3] == ["Strategy", "Trade Type"]
@@ -440,7 +440,7 @@ def test_the_screen_has_no_write_path(client):
 def test_the_column_widths_are_bound_to_the_column_key():
     """⛔ Widths bound to a POSITION get reassigned by a drag."""
     tpl = _tpl()
-    block = tpl[tpl.index("DEFAULT_COLS:"):tpl.index("cols: [], dragKey")]
+    block = tpl[tpl.index("DEFAULT_COLS:"):tpl.index("cols: [],")]
     for line in block.splitlines():
         if "key:" in line and "label:" in line:
             assert "w:" in line, line.strip()

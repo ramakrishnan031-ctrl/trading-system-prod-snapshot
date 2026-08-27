@@ -441,7 +441,8 @@
 
 <script>
 function scannerPage() {
-  return Object.assign(pageBase("/api/scanner-attribution/screen"),
+  return Object.assign(
+    colDragMixin(),pageBase("/api/scanner-attribution/screen"),
     (typeof tableMixin === "function" ? tableMixin({defaultSize: 100, pageSizes: [100]}) : {}), {
 
     /* the six approved KPI cards, in the approved order */
@@ -488,7 +489,7 @@ function scannerPage() {
       { key: "trend",         label: "Trend",         ctr: true, w: "108px" },
     ],
     SPECIAL: ["rank", "display_name", "health", "quality_score", "trend"],
-    cols: [], dragKey: "", overKey: "", _dragEndAt: 0,
+    cols: [],
     COLS_KEY: "screen21.scanner.colOrder.v1",
 
     mode: "net_pnl",
@@ -738,25 +739,6 @@ function scannerPage() {
       try { window.localStorage.setItem(this.COLS_KEY, JSON.stringify(this.cols.map(c => c.key))); }
       catch (e) {}
     },
-    onDragStart(key, ev) {
-      this.dragKey = key;
-      if (ev && ev.dataTransfer) {
-        ev.dataTransfer.effectAllowed = "move";
-        try { ev.dataTransfer.setData("text/plain", key); } catch (e) {}
-      }
-    },
-    onDrop(targetKey) {
-      const from = this.cols.findIndex(c => c.key === this.dragKey);
-      const to = this.cols.findIndex(c => c.key === targetKey);
-      this.overKey = "";
-      if (from < 0 || to < 0 || from === to) return;
-      const next = this.cols.slice();
-      next.splice(to, 0, next.splice(from, 1)[0]);
-      this.cols = next;
-      this.saveCols();
-      this._dragEndAt = Date.now();
-    },
-    onDragEnd() { this.dragKey = ""; this.overKey = ""; this._dragEndAt = Date.now(); },
     headClick(key) {
       if (Date.now() - this._dragEndAt < 250) return;   /* drag, not a sort click */
       this.tSort(key);

@@ -22,6 +22,8 @@ later pass cannot quietly implement them without a ruling:
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import inspect
 import os
 import re
@@ -615,11 +617,18 @@ class TestPendingItemsRemainPending:
         assert '@click="headClick(c.key)"' in head
         assert 'draggable="true"' in head and '@drop.prevent="onDrop(c.key)"' in head
         code = _tpl_code()
+        # The screen must MIX IN the one shared reorder implementation. It used to
+        # carry its own copy; that copy existed in fifteen templates and is now
+        # colDragMixin() in static/components.js. The guard follows the code.
+        assert "colDragMixin()" in code, "screen no longer mixes in the shared reorder"
+        shared = (Path(__file__).resolve().parents[1]
+                  / "frontend" / "static" / "components.js").read_text(encoding="utf-8")
         # onDrop mutates the ONE array both thead and tbody consume
-        assert "const next = this.cols.slice();" in code
-        assert "next.splice(to, 0, next.splice(from, 1)[0]);" in code
-        assert "this.cols = next;" in code
-        # ⛔ a drag must never be read as a sort click
+        assert "var next = this.cols.slice();" in shared
+        assert "next.splice(to, 0, next.splice(from, 1)[0]);" in shared
+        assert "this.cols = next;" in shared
+        # ⛔ a drag must never be read as a sort click — the guard stays ON THE PAGE,
+        # because headClick is the page's own sort entry point
         assert "headClick(key) { if (Date.now() - this._dragEndAt < 250) return;" in code
 
     def test_the_saved_column_order_cannot_hide_or_resurrect_a_column(self):
