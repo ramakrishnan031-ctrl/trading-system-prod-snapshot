@@ -21,7 +21,7 @@ PNG, ⛔ not source HTML, ⛔ not a description.
 | **S06** | Positions | ✅ live `/positions` @1896×988 + 1416×808 · 🔄 **corrected re-render captured 24-Aug 14:2x, both viewports** | ✅ | ✅ **2** — nineteen headings centred heading-only (`5142dfd`); the four grouped bands separated (`b47e148`, **post-approval, ⛔ still not seen by Rama**) | ✅ **"Screen approved"** — 20-Aug-2026 **23:3x IST**, *"but one minor change"* — ⚠️ given on the **PRE-correction** render | ⏳ **CORRECTION VERIFIED, ⛔ NOT VISUALLY CONFIRMED** — awaiting Rama's sight of the corrected render |
 | **S07** | Trade Explorer | ✅ **shown + approved 14-Aug on real VM data** (old ledger, `cd9043c`) | ✅ | ⚠️ `66fc82e` (21-Aug) landed AFTER that approval and is **unseen** | ✅ **APPROVED 14-Aug-2026** — ⛔ but under the PREVIOUS ledger | ⏳ **RE-APPROVAL OWED** — 👤 Rama's own 19-Aug 13px-floor decision re-opened **all 22** approvals; ⛔ this is a re-approval, ⛔ NOT a first one |
 | **S08** | Capital & Risk | ✅ live `/capital-risk` @1920×1080 + 1440×900 · 🔄 **FULL REBUILD**, ⛔ not a patch | ✅ | ✅ **1** — the whole screen composition replaced (`c479b40`); ⚠️ **+2 post-approval restorations** forced by the test contract (gauge geometry · gated export button) | ✅ **"Screen approved"** — 24-Aug-2026 **~16:2x IST** | 🟢 **VISUALLY APPROVED** · ⏳ **2 post-approval changes not yet seen** |
-| **S09** | P&L Analytics | ✅ live `/pnl-analytics` @1920×1080 + 1440×900 | ✅ | ✅ **2** — density + the two missing panels (`7dba039`); then Rama's final visual pass in the same commit (heat cards un-stretched, Symbol left-aligned) | ✅ **"Screen approved"** — 24-Aug-2026 **~19:5x IST** | 🟢 **VISUALLY APPROVED** |
+| **S09** | P&L Analytics | ✅ live `/pnl-analytics` @1920 · 🔄 **re-rendered 27-Aug on SEEDED DEMO data** (the local DB holds no closed trades) | ✅ | ✅ **3** — density + the two missing panels (`7dba039`); Rama's final visual pass; then **the heatmaps rebuilt as the artwork's two-row MATRIX** (`292a750`) | ✅ **"screen approved"** — **27-Aug-2026 ~21:5x IST** (supersedes the 24-Aug approval) | 🟢 **VISUALLY APPROVED** |
 | **S10** | Slippage Analytics | ⏳ | — | — | — | ⏳ PENDING |
 | **S11** | Execution Analytics | ⏳ | — | — | — | ⏳ PENDING |
 | **S12** | System Health | ⏳ | — | — | — | ⏳ PENDING |
@@ -799,3 +799,52 @@ so ⛔ no other screen can change. ⛔ No backend change at all on this screen.
 ### STATUS
 🟢 **VISUALLY APPROVED** (Rama's word) · **BUILT** locally · ⛔ **NOT PUSHED**, ⛔ **NOT DEPLOYED**,
 ⛔ **NOT VERIFIED LIVE** — the GUI branch `feat/screen10-slippage-analytics` stays local.
+
+---
+
+## 🔄 S09 CORRECTION 3 — 27-Aug-2026 ~21:5x IST · **THE HEATMAPS BECOME A MATRIX**
+
+### What was wrong, and how it was found
+⭐ Both images were cropped to the SAME scale and compared side by side, rather than
+judged from memory. That is what exposed it: the panels had been built as **one
+tinted card per bucket**, but `09. PnL_Analytics.png` draws a **two-row matrix**
+introduced by a left row-label.
+
+| | approved PNG | what was built |
+|---|---|---|
+| structure | label row + value row | one card per bucket, label+value inside |
+| row label | **`Net P&L (₹)`** | ⛔ absent |
+| tint | **value row only** | whole card, day name included |
+| cells | contiguous, full panel width | gaps, shrink-to-fit |
+
+### The change (`292a750`, 2 files)
+⭐ `Net P&L (₹)` row label · uncoloured label row · one contiguous coloured value row ·
+full panel width. ⭐ The tint now belongs to the **VALUE cell only** — a green "Mon"
+would colour a label that carries no measurement.
+⭐ `align-self: start → stretch` on the grid; ⭐ `flex: 0 0 auto` KEPT, so the
+`height:100%` regression of 24-Aug is ⛔ **not** re-introduced. The comment recording
+that regression was UPDATED, ⛔ not deleted.
+
+### ⛔ SYMBOL WAS ALREADY CORRECT — ⛔ NOT TOUCHED
+🔬 `<th class="lbl">Symbol</th>` + a plain `<td>`; left-aligned by
+`.pnl-page .cap-table th.lbl`, never reached by the global `td.ctr` rule, and already
+pinned by `test_label_cells_stay_left`. ⭐ Re-verified visually once rows existed.
+⛔ No edit was made to claim credit for work already done.
+
+### 🔴 THE EVIDENCE LIMIT — STATED, ⛔ NOT HIDDEN
+🔬 The local `data_store/trading_system.db` holds **0 closed trades** (last written
+03-Aug), so this render was verified against **75 SEEDED DEMO trades** in a scratchpad
+DB named `S09_DEMO_ONLY_NOT_PRODUCTION.db`.
+⇒ ⚠️ **This approval rests on DEMO data, ⛔ not production data.** Colour on both signs,
+the row label, and Symbol alignment with rows present are confirmed; ⛔ the populated
+PRODUCTION appearance remains unverified.
+✅ 🔬 The demo pointer in `gui_config.local.yaml` was reverted **byte-identically** after
+the review (that file's own comment forbids leaving one), the demo DB lives **outside
+the repo**, and the real DB's mtime is **unchanged at 03-Aug 16:08** — ⛔ it was never
+opened for writing.
+
+### 🔬 SCOPE + GATE
+**Two files**: `pnl_analytics.html` · `style.css`; ⭐ all CSS `.pnl-page`-scoped, so ⛔ no
+other screen can change. ⛔ No backend change.
+✅ **S09 92 passed** · **dashboard suite 2,079 passed, 1 failed** — the known
+environmental `test_isolation::test_c_venv_has_no_kiteconnect`, ⛔ untouched.
