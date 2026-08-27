@@ -31,7 +31,7 @@
     <h2 class="panel-title" style="margin-top:14px">Closed trades — today</h2>
     <div class="tbl-scroll">
     <table class="cap-table">
-      <thead><tr><th>Symbol</th><th>Strategy</th><th>Dir</th><th>Qty</th><th>Entry</th>
+      <thead><tr><th class="lbl">Symbol</th><th class="lbl">Strategy</th><th>Dir</th><th>Qty</th><th>Entry</th>
         <th>Exit</th><th>Exit time</th><th>Reason</th><th>Charges</th><th>Net</th></tr></thead>
       <tbody>
         <template x-for="t in data.closed_trades || []" :key="t.trade_id">

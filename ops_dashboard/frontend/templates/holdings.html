@@ -511,7 +511,8 @@
 
 <script>
 function holdingsPage() {
-  return Object.assign(pageBase("/api/holdings/screen"),
+  return Object.assign(
+    colDragMixin(),pageBase("/api/holdings/screen"),
     (typeof tableMixin === "function" ? tableMixin({defaultSize: 10, pageSizes: [10, 25, 50]}) : {}), {
 
     /* the six approved KPI cards, in the approved order */
@@ -535,7 +536,7 @@ function holdingsPage() {
       { key: "trade_date",     label: "Trade Date",   ctr: true, w: "90px" },
       { key: "trade_time",     label: "Trade Time",   ctr: true, w: "82px" },
       { key: "display_name",   label: "Strategy",                w: "140px" },
-      { key: "symbol",         label: "Symbol",       ctr: true, w: "78px" },
+      { key: "symbol",         label: "Symbol",                  w: "78px" },
       { key: "product",        label: "Product",      ctr: true, w: "76px" },
       { key: "quantity",       label: "Quantity",     ctr: true, num: true, w: "76px" },
       { key: "avg_price",      label: "Avg Price",    ctr: true, num: true, w: "88px" },
@@ -552,7 +553,7 @@ function holdingsPage() {
     PRICE_COLS: ["current_price", "market_value", "unrealized_pnl"],
     SPECIAL: ["current_price", "market_value", "unrealized_pnl",
               "delta_qty", "recon_status", "source", "display_name", "product"],
-    cols: [], dragKey: "", overKey: "", _dragEndAt: 0,
+    cols: [],
     COLS_KEY: "screen22.holdings.colOrder.v1",
 
     f: { product: "", status: "", source: "", trade_type: "", symbol: "" },
@@ -794,25 +795,6 @@ function holdingsPage() {
       try { window.localStorage.setItem(this.COLS_KEY, JSON.stringify(this.cols.map(c => c.key))); }
       catch (e) {}
     },
-    onDragStart(key, ev) {
-      this.dragKey = key;
-      if (ev && ev.dataTransfer) {
-        ev.dataTransfer.effectAllowed = "move";
-        try { ev.dataTransfer.setData("text/plain", key); } catch (e) {}
-      }
-    },
-    onDrop(targetKey) {
-      const from = this.cols.findIndex(c => c.key === this.dragKey);
-      const to = this.cols.findIndex(c => c.key === targetKey);
-      this.overKey = "";
-      if (from < 0 || to < 0 || from === to) return;
-      const next = this.cols.slice();
-      next.splice(to, 0, next.splice(from, 1)[0]);
-      this.cols = next;
-      this.saveCols();
-      this._dragEndAt = Date.now();
-    },
-    onDragEnd() { this.dragKey = ""; this.overKey = ""; this._dragEndAt = Date.now(); },
     headClick(key) {
       if (Date.now() - this._dragEndAt < 250) return;   /* drag, not a sort click */
       this.tSort(key);

@@ -2416,7 +2416,10 @@ table td.ctr { text-align: center !important; }
 .slp-page .slp-unobserved td { color: var(--dim); }
 
 /* -- price buckets, impact, RR ------------------------------------------- */
-.slp-page .slp-row3 { display: grid; grid-template-columns: 1fr 1.15fr 1fr;
+/* Four panels across, as the artwork draws the bottom row: impact · donut ·
+   guide · export. The donut keeps the widest track; export is the narrowest
+   because it carries one sentence and one button. */
+.slp-page .slp-row3 { display: grid; grid-template-columns: 1fr 1.15fr 1fr .8fr;
   gap: 16px; margin-top: 16px; }
 @media (max-width: 1250px) { .slp-page .slp-row3 { grid-template-columns: 1fr; } }
 .slp-page .slp-bkt th, .slp-page .slp-bkt td,
@@ -6104,3 +6107,21 @@ main.content:has(> .cfg16-page) { width: 100%; max-width: none; margin: 0;
 
 /* Screens 16 and 17 carried exactly ONE sub-floor element each. */
 .cfg16-page .kpi-label, .ctl-page .kpi-label { font-size: 13px; }
+
+/* -- export panel (artwork's 4th bottom panel) ------------------------------ */
+.slp-page .slp-export { display: flex; flex-direction: column; gap: 10px; }
+.slp-page .slp-export-d { font-size: 13px; color: var(--muted); margin: 0; }
+.slp-page .slp-export-b { align-self: stretch; justify-content: center; }
+
+/* ── GLOBAL drag affordance (27-Aug-2026 ruling: headings drag to reorder) ────
+   ONE definition. The per-page copies (.strat-page/.sig-page/.ord-page/...)
+   predate this and still win on specificity, so nothing they own changes; a NEW
+   screen needs no copy of its own. The grip stays hidden until the heading is
+   hovered, so it costs no width in the normal reading state. */
+.st-grip { display: inline-block; width: 0; overflow: hidden; opacity: 0;
+  color: var(--dim); font-size: 10px; vertical-align: 1px;
+  transition: width .12s ease, opacity .12s ease; }
+th:hover > .st-grip { width: 11px; opacity: .8; }
+th.is-drag { opacity: .45; }
+th.is-over { box-shadow: inset 2px 0 0 var(--blue); }
+th[draggable="true"] { cursor: grab; }
