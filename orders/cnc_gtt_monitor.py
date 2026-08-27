@@ -463,7 +463,23 @@ class CncGttMonitor:
             sym = getattr(p, "symbol", None) or (p.get("symbol") if isinstance(p, dict) else None)
             qty = getattr(p, "qty", 0) or (p.get("qty", 0) if isinstance(p, dict) else 0)
             if sym:
-                held[sym] = held.get(sym, 0) + abs(int(qty))
+                # F6-leg (27-Aug-2026). Same-day CNC positions are summed with
+                # max(0, ...) — NOT abs(), and NOT the raw signed value.
+                #
+                # WHY abs() WAS WRONG: on a T+1 exit the broker reports holdings
+                # 0 and a same-day position of -1 (the sale). abs(-1) = 1 made
+                # `held` read 1 for a position that no longer exists, and
+                # `held == 0` (:489) is the SOLE door to _finalize_gtt_exit, so
+                # the row fell to _reprotect and the exit was never finalised.
+                #
+                # WHY DELETING abs() IS ALSO WRONG: the signed sum gives -1,
+                # which is likewise != 0 and fails the same door. Only clamping
+                # the SELL leg to zero restores reachability.
+                #
+                # A same-day BUY still counts (max(0, +1) = 1), and a genuine
+                # partial fill still leaves a positive remainder, so the
+                # _reprotect branch keeps its meaning.
+                held[sym] = held.get(sym, 0) + max(0, int(qty))
         return broker_gtts, held
 
     # ── per-row K6 ladder ─────────────────────────────────────────────────────
