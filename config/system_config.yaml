@@ -151,11 +151,17 @@ capital:                      # FM16
   sl_limit_offset_pct: 0.005  # P0 2026-06-15: SL legs are SL (stop-limit); limit = trigger ± 0.5% so triggered stops fill (Zerodha rejects SL-M via API)
   gtt_sl_limit_offset_pct: 0.03  # SLICE2.5-P1: DEEP protective limit offset for a CNC OCO-GTT SL leg (3%); separate from the 0.5% intraday offset so an overnight gap-down still fills within the floor
   emergency_exit_buffer_pct: 0.01  # FIX-181: emergency/kill exits use marketable LIMIT (LTP ± 1%) so they fill but cap worst-case slippage
-  leverage_map:
+  leverage_map:             # OPERATIONAL -- routine values
     INTRADAY: 5.0             # MIS leverage
     COVER_ORDER: 6.0          # CO leverage
-    DELIVERY: 1.0             # CNC, no leverage
+    DELIVERY: 1.0             # CNC, no leverage -- PINNED to exactly 1.0 (UNIT 3a)
     BRACKET_ORDER: 5.0        # BO leverage
+  leverage_safety:            # GOVERNANCE -- deliberate, reviewed, rarely touched.
+    min_allowed: 1.0          # 1x IS "no leverage"; nothing below it is meaningful.
+    max_allowed: 10.0         # INTERNAL safety ceiling. NOT a SEBI or broker limit.
+                              # Reuses the threshold config_auditor G2 already used
+                              # (`if value > 10`), so no new number is introduced.
+                              # Hard-bounded in code by ABSOLUTE_MAX_LEVERAGE (20.0).
 
 position_sizing:              # PS9
   enabled: true               # Diary #4 tier-multiplier switch.

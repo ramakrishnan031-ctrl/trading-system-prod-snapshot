@@ -181,12 +181,111 @@ class ClockConfig(BaseModel):
     probe: ClockSkewProbeConfig = Field(default_factory=ClockSkewProbeConfig)  # BL-21
 
 
+# UNIT 3a (27-Aug-2026). The hard code bound that `leverage_safety.max_allowed`
+# may never exceed. It is an INTERNAL absolute -- NOT a SEBI limit, NOT a broker
+# limit, and it must never be described as externally mandated. Its only claim is
+# arithmetic about typos: a dropped decimal (5.0 -> 50, 6.0 -> 60) or a doubled
+# digit (55) is caught, while a DELIBERATE governance value (12, 15, 18) is
+# permitted with no code change -- nobody types those by accident.
+ABSOLUTE_MAX_LEVERAGE: float = 20.0
+
+# The one intent whose leverage is a PRODUCT property, not a tunable parameter.
+_DELIVERY_PINNED_LEVERAGE: float = 1.0
+
+
+def _validate_finite_leverage(v: float, key: str) -> float:
+    """Reject non-finite values EXPLICITLY -- a range check alone lets NaN through.
+
+    NaN fails every comparison silently (`nan < 1.0` is False, `nan > 10.0` is
+    False), so a bounds test on its own would ACCEPT it. Infinity would divide the
+    required margin to zero. Both must be named and refused.
+    """
+    f = float(v)
+    if f != f or f in (float("inf"), float("-inf")):
+        raise ValueError(
+            f"Invalid `{key}`: expected a finite value within the approved range"
+        )
+    return f
+
+
+class LeverageSafetyConfig(BaseModel):
+    """GOVERNANCE block -- deliberate, reviewed, rarely touched.
+
+    These are NOT routine trading knobs. `leverage_map` holds the operational
+    values; this holds the boundary they must satisfy. A fat-finger touches ONE
+    block and is caught here; a legitimate change touches TWO blocks -- two
+    deliberate edits, and still no code change.
+
+    It is SELF-validating: an unvalidated governance block would simply become an
+    unvalidated source of capital authority.
+    """
+    model_config = ConfigDict(extra="forbid")
+    min_allowed: float
+    max_allowed: float
+
+    @field_validator("min_allowed", "max_allowed")
+    @classmethod
+    def _finite(cls, v: float, info) -> float:
+        return _validate_finite_leverage(v, f"leverage_safety.{info.field_name}")
+
+    @model_validator(mode="after")
+    def _validate_bounds(self) -> "LeverageSafetyConfig":
+        if self.min_allowed < 1.0:
+            raise ValueError(
+                "Invalid `leverage_safety.min_allowed`: expected a finite value "
+                "within the approved range (>= 1.0; 1x means no leverage and "
+                "nothing below it is meaningful)"
+            )
+        if self.max_allowed < self.min_allowed:
+            raise ValueError(
+                "Invalid `leverage_safety.max_allowed`: expected a finite value "
+                "within the approved range (>= min_allowed)"
+            )
+        if self.max_allowed > ABSOLUTE_MAX_LEVERAGE:
+            raise ValueError(
+                f"Invalid `leverage_safety.max_allowed`: expected a finite value "
+                f"within the approved range (<= ABSOLUTE_MAX_LEVERAGE "
+                f"{ABSOLUTE_MAX_LEVERAGE})"
+            )
+        return self
+
+
 class LeverageMapConfig(BaseModel):
+    """OPERATIONAL block -- the per-intent multiplier actually applied.
+
+    Every intent is REQUIRED, finite, and bounded by `leverage_safety`. A missing,
+    null, zero, negative, non-finite or out-of-range value is REJECTED at config
+    load: the boot logs the key name at CRITICAL and exits 5. There is NO silent
+    default and NO coercion.
+
+    DELIVERY is PINNED to exactly 1.0 rather than merely bounded. CNC delivery is
+    cash-and-carry -- 1x IS the product, not a tunable. Adopting MTF (margin
+    trading facility) brings interest charges, pledge mechanics and different
+    margin rules; that is a NEW PRODUCT, not a number change, and it must be its
+    own deliberate unit rather than arriving through a config edit.
+    """
     model_config = ConfigDict(extra="forbid")
     INTRADAY: float
     COVER_ORDER: float
     DELIVERY: float
     BRACKET_ORDER: float
+
+    @field_validator("INTRADAY", "COVER_ORDER", "DELIVERY", "BRACKET_ORDER")
+    @classmethod
+    def _finite(cls, v: float, info) -> float:
+        return _validate_finite_leverage(v, f"leverage_map.{info.field_name}")
+
+    @field_validator("DELIVERY")
+    @classmethod
+    def _delivery_is_pinned(cls, v: float) -> float:
+        if v != _DELIVERY_PINNED_LEVERAGE:
+            raise ValueError(
+                "Invalid `leverage_map.DELIVERY`: expected exactly "
+                f"{_DELIVERY_PINNED_LEVERAGE} -- CNC delivery is cash-and-carry and "
+                "1x is the product, not a tunable. Adopting MTF is a new product "
+                "and needs its own unit, not a config edit"
+            )
+        return v
 
 
 class CapitalConfig(BaseModel):
@@ -212,6 +311,9 @@ class CapitalConfig(BaseModel):
     gtt_sl_limit_offset_pct: float = 0.03
     emergency_exit_buffer_pct: float = 0.01  # FIX-181: marketable-LIMIT buffer for emergency/kill exits
     leverage_map: LeverageMapConfig  # FM16: per-intent leverage multiplier
+    # UNIT 3a: the governance boundary the map above must satisfy. REQUIRED --
+    # there is no default, because a defaulted safety bound is not a bound.
+    leverage_safety: LeverageSafetyConfig
 
     @field_validator("sl_limit_offset_pct")
     @classmethod
@@ -244,6 +346,28 @@ class CapitalConfig(BaseModel):
         if not (0 < v < 1):
             raise ValueError("bucket_pct must be between 0 and 1 exclusive")
         return v
+
+    @model_validator(mode="after")
+    def _validate_leverage_within_safety(self) -> "CapitalConfig":
+        """Every configured intent must sit inside the governance bounds.
+
+        This is the direction that costs money. A dropped decimal (5.0 -> 50)
+        multiplies the intended quantity ~10x; before UNIT 3a it produced only a
+        WARN, and only for INTRADAY and COVER_ORDER. It is now a hard failure for
+        ALL FOUR intents. The opposite direction (5.0 -> 0.05) is money-safe but
+        SILENT -- it collapses every size to 1/100th of intent -- and it fails
+        here too, because silently wrong is still wrong.
+        """
+        lo = self.leverage_safety.min_allowed
+        hi = self.leverage_safety.max_allowed
+        for intent in ("INTRADAY", "COVER_ORDER", "DELIVERY", "BRACKET_ORDER"):
+            value = getattr(self.leverage_map, intent)
+            if not (lo <= value <= hi):
+                raise ValueError(
+                    f"Invalid `leverage_map.{intent}`: expected a finite value "
+                    f"within the approved range [{lo}, {hi}]; got {value}"
+                )
+        return self
 
 
 class OrderMonitorConfig(BaseModel):

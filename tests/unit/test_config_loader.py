@@ -95,6 +95,9 @@ capital:
     COVER_ORDER: 6.0
     DELIVERY: 1.0
     BRACKET_ORDER: 5.0
+  leverage_safety:            # UNIT 3a: REQUIRED governance bounds, no default
+    min_allowed: 1.0
+    max_allowed: 10.0
 position_sizing:
   risk_per_trade_pct: 0.01
   max_concentration_pct: 0.10
