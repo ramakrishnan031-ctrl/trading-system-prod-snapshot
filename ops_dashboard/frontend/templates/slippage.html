@@ -157,40 +157,36 @@
       <div class="slp-tbl-wrap">
         <table class="cap-table slp-tbl">
           <thead><tr>
-            <template x-for="c in COLS" :key="c.key">
-              <th :class="(c.lbl ? 'lbl ' : '') + 'slp-th'" role="button" tabindex="0"
-                  :title="c.title || ''"
-                  @click="tSort(c.key)" @keyup.enter="tSort(c.key)">
-                <span x-text="c.label"></span><span class="slp-arrow" x-text="tArrow(c.key)"></span>
+            <template x-for="c in cols" :key="c.key">
+              <th :class="[(c.lbl ? 'lbl ' : '') + 'slp-th',
+                           dragKey === c.key ? 'is-drag' : '',
+                           overKey === c.key ? 'is-over' : '']"
+                  draggable="true" role="button" tabindex="0"
+                  :title="(c.title ? c.title + ' — ' : '') + 'click to sort, drag to reorder'"
+                  @dragstart="onDragStart(c.key, $event)"
+                  @dragover.prevent="overKey = c.key"
+                  @dragleave="overKey === c.key && (overKey = '')"
+                  @drop.prevent="onDrop(c.key)"
+                  @dragend="onDragEnd()"
+                  @click="headClick(c.key)" @keyup.enter="tSort(c.key)">
+                <span class="st-grip" aria-hidden="true">⠿</span><span x-text="c.label"></span><span
+                      class="slp-arrow" x-text="tArrow(c.key)"></span>
               </th>
             </template>
           </tr></thead>
           <tbody>
             <template x-for="r in tPaged(rows())" :key="rowKey(r)">
+              {# The row iterates the SAME live `cols` the heading does, so a
+                 reordered column carries its DATA and its ALIGNMENT with it —
+                 a label moving alone is the defect this shape prevents. #}
               <tr>
-                <td x-text="r.date"></td>
-                <td class="ctr" x-text="dash(r.time)"></td>
-                <td x-text="dash(r.strategy)"></td>
-                <td class="ctr" x-text="dash(r.symbol)"></td>
-                <td class="ctr" x-text="dash(r.trade_type)"></td>
-                <td class="ctr" :class="dirCls(r.direction)" x-text="dash(r.direction)"></td>
-                <td class="ctr" x-text="dash(r.system_score)"></td>
-                <td class="ctr" x-text="dash(r.score_threshold)"></td>
-                <td class="ctr" x-text="rs(r.entry_price_system)"></td>
-                <td class="ctr" x-text="rs(r.entry_price_filled)"></td>
-                <td class="ctr" x-text="rs(r.allowed_slippage_rs)"></td>
-                <td class="ctr" :class="stNum(r.status)" x-text="rs(r.actual_slippage_rs)"></td>
-                <td class="ctr" x-text="pct(r.slippage_pct)"></td>
-                <td class="ctr">
-                  <span class="slp-badge" :class="'slp-' + r.status"
-                        :title="r.status_ratio_pct === null ? 'not measurable'
-                                : (r.status_ratio_pct + '% of the allowed slippage')"
-                        x-text="stLabel(r.status)"></span>
-                </td>
+                <template x-for="c in cols" :key="c.key">
+                  <td :class="cellCls(c, r)" x-html="cell(r, c)"></td>
+                </template>
               </tr>
             </template>
             <tr x-show="!rows().length" x-cloak>
-              <td :colspan="COLS.length" class="slp-empty">No slippage rows for the current filters.</td>
+              <td :colspan="cols.length" class="slp-empty">No slippage rows for the current filters.</td>
             </tr>
           </tbody>
         </table>
@@ -435,6 +431,19 @@
         <div class="slp-note">Every threshold is a share of the <b>allowed slippage</b>
           for that order — ⛔ not of its price.</div>
       </section>
+
+      {# EXPORT — the artwork's fourth bottom panel. It is NOT a new capability:
+         the button calls the SAME exportXlsx() the table and both ranking headers
+         already call, so the sheet is the CURRENT FILTERED set and cannot disagree
+         with what is on screen. ⛔ No new route, ⛔ no new query builder. #}
+      <section class="panel slp-export">
+        <h3 class="panel-title">Export</h3>
+        <p class="slp-export-d">Export filtered slippage data and analytics.</p>
+        <button class="btn-export slp-export-b" type="button" @click="exportXlsx()">
+          ⭳ Export to XLSX</button>
+        <div class="slp-note" x-show="rows().length === 0" x-cloak>
+          Nothing to export for the current filters.</div>
+      </section>
     </div>
 
     <div class="slp-foot">
@@ -448,6 +457,7 @@
 <script>
 function slippagePage() {
   return Object.assign(
+    colDragMixin({ storageKey: "algocore.s10.cols" }),
     pageBase("/api/analytics/slippage"),
     tableMixin({ defaultSize: 100, pageSizes: [50, 100, 200, 500] }),
     {
@@ -459,11 +469,37 @@ function slippagePage() {
        stays LEFT; every other heading sits over its own data and is CENTRED by
        `.slp-page .cap-table th`. ⛔ Not a positional guess — Strategy is the
        third heading, so `th:first-child` could not express this. */
-    COLS: [
+    /* the approved order; `cols` is the LIVE (possibly reordered) copy */
+    /* the same <th> is drag handle AND sort button: a drop fires a click right
+       after, so a reorder must not also flip the sort. */
+    headClick(key) { if (Date.now() - this._dragEndAt < 250) return; this.tSort(key); },
+    /* ALIGNMENT TRAVELS WITH THE COLUMN: `lbl` columns stay LEFT wherever they
+       are dragged to; everything else stays centred, exactly as before. */
+    cellCls(c, r) {
+      var cls = c.lbl ? "" : "ctr";
+      if (c.key === "direction") cls += " " + this.dirCls(r.direction);
+      if (c.key === "actual_slippage_rs") cls += " " + this.stNum(r.status);
+      return cls;
+    },
+    cell(r, c) {
+      var k = c.key;
+      if (k === "date") return r.date;
+      if (k === "entry_price_system" || k === "entry_price_filled"
+          || k === "allowed_slippage_rs" || k === "actual_slippage_rs") return this.rs(r[k]);
+      if (k === "slippage_pct") return this.pct(r.slippage_pct);
+      if (k === "status") {
+        var t = r.status_ratio_pct === null ? "not measurable"
+                : (r.status_ratio_pct + "% of the allowed slippage");
+        return '<span class="slp-badge slp-' + r.status + '" title="' + t + '">'
+               + this.stLabel(r.status) + "</span>";
+      }
+      return this.dash(r[k]);
+    },
+    DEFAULT_COLS: [
       { key:"date",                label:"Trading Date", lbl:true },
       { key:"time",                label:"Time",     title:"Entry time (IST)" },
       { key:"strategy",            label:"Strategy", lbl:true },
-      { key:"symbol",              label:"Symbol" },
+      { key:"symbol",              label:"Symbol", lbl:true },
       { key:"trade_type",          label:"Trade Type", title:"Product on the ENTRY order; UNKNOWN when the trade has no ENTRY order row" },
       { key:"direction",           label:"Direction" },
       { key:"system_score",        label:"System Score",    title:"The ACHIEVED screener score" },
@@ -484,7 +520,7 @@ function slippagePage() {
     applied: { strategy:"", symbol:"", trade_type:"", direction:"", price_bucket:"", status:"" },
     trendKey: "rs",
 
-    boot() { this.load(); },
+    boot() { this.initCols(); this.load(); },
     /* THE POLL PATH (ops-refresh). ⛔ Must not reset the pager, the sort or the
        filters — the operator is looking at the page while it refreshes. */
     refresh() { this.load(); },

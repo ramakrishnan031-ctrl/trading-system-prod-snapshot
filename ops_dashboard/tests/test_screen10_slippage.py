@@ -177,9 +177,14 @@ def test_label_columns_are_declared_left_and_data_columns_centred():
     assert "Scanner" not in labels
     # Exactly the two row-label columns are LEFT; every other heading is data.
     left = [lbl for _k, lbl, rest in entries if "lbl:true" in rest]
-    assert left == ["Trading Date", "Strategy"]
+    # THREE row-label columns are LEFT. Symbol joined them on Rama's 27-Aug
+    # GLOBAL ruling ("Symbol heading and its column data left aligned"), which
+    # also matches this screen's own design TXT ("Symbol is left aligned") and
+    # production-instruction rule 9. It was CENTRED before -- that was the miss.
+    assert left == ["Trading Date", "Strategy", "Symbol"]
     # and the body marks its data cells with the codebase's own marker
-    assert 'class="ctr"' in t
+    # alignment is emitted by cellCls() now, so it TRAVELS with a dragged column
+    assert '"ctr"' in t and "cellCls(c, r)" in t
 
 
 def test_symbol_is_not_duplicated():
