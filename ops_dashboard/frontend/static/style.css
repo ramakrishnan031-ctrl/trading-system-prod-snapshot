@@ -2103,12 +2103,15 @@ table td.ctr { text-align: center !important; }
 .pnl-page .pnl-row3 > .panel > .pnl-dd,
 .pnl-page .pnl-row3 > .panel > .pnl-bw { flex: 1 1 auto; }
 /* ⛔ THE HEAT GRIDS ARE DELIBERATELY EXCLUDED FROM THAT FILL RULE.
-   The artwork draws Mon-Fri and the six time slots as COMPACT, near-square
-   cards in one row — day/slot label on top, Net P&L beneath. An earlier density
-   pass gave them `height:100%`, which stretched them into tall rectangles
-   (Rama, 24-Aug: "must be compact, small square/near-square cards, not
-   wide/tall stretched rectangles"). They now size to their content. */
-.pnl-page .pnl-row3 > .panel > .pnl-heat { flex: 0 0 auto; align-self: start; }
+   The artwork draws Mon-Fri and the six time slots as a COMPACT two-row matrix
+   — day/slot label on top, Net P&L beneath — sized to its content. An earlier
+   density pass gave them `height:100%`, which stretched them into tall
+   rectangles (Rama, 24-Aug: "must be compact, small square/near-square cards,
+   not wide/tall stretched rectangles"). ⛔ Do not re-introduce a fill rule. */
+/* `flex: 0 0 auto` keeps the matrix at its content HEIGHT (no fill rule);
+   `align-self: stretch` lets it take the panel's full WIDTH, which is how
+   the artwork draws it — the value row reads as one heat band edge to edge. */
+.pnl-page .pnl-row3 > .panel > .pnl-heat { flex: 0 0 auto; align-self: stretch; }
 .pnl-page .pnl-dd { align-content: stretch; }
 .pnl-page .pnl-bw tbody { height: 100%; }
 @media (max-width: 1250px) { .pnl-page .pnl-row3 { grid-template-columns: 1fr; } }
@@ -2148,18 +2151,31 @@ table td.ctr { text-align: center !important; }
 .pnl-page .pnl-bw-note { margin-top: 8px; }
 
 /* -- heatmaps ------------------------------------------------------------ */
-.pnl-page .pnl-heat { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
-.pnl-page .pnl-heat-tod { grid-template-columns: repeat(6, 1fr); }
-.pnl-page .pnl-heat-c { border: 1px solid var(--border); border-radius: 7px;
-  padding: 8px 4px; display: flex; flex-direction: column; align-items: center;
-  justify-content: center; gap: 4px;
-  /* near-square: the 5-up day cells land ~68px wide at 1920, the 6-up time
-     cells ~56px. ⛔ A fixed height is NOT used — the time labels wrap to two
-     lines and a hard height would clip them. */
-  min-height: 58px; }
-.pnl-page .pnl-heat-b { font-size: 13px; color: var(--muted); text-align: center; line-height: 1.25; }
+/* The approved PNG draws a two-row MATRIX: an uncoloured label row, then one
+   coloured value row introduced by a left row-label ("Net P&L (₹)"). The cells
+   are contiguous — no gap — so the value row reads as a single heat band.
+   ⛔ The tint belongs to the VALUE cell only; colouring the day/slot name would
+   tint a label that carries no measurement. `auto` first column sizes to the
+   row-label; the bucket columns share the rest equally. */
+.pnl-page .pnl-heat { display: grid; grid-template-columns: auto repeat(5, 1fr);
+  gap: 0; align-items: stretch; }
+.pnl-page .pnl-heat-tod { grid-template-columns: auto repeat(6, 1fr); }
+.pnl-page .pnl-heat-corner { border: 0; }
+.pnl-page .pnl-heat-rl { font-size: 13px; color: var(--muted); white-space: nowrap;
+  display: flex; align-items: center; justify-content: flex-end; padding-right: 10px; }
+.pnl-page .pnl-heat-b { font-size: 13px; color: var(--muted); text-align: center;
+  line-height: 1.25; border: 1px solid var(--border); border-right: 0;
+  display: flex; align-items: center; justify-content: center;
+  /* ⛔ A fixed height is NOT used — the time labels wrap to two lines and a
+     hard height would clip them. */
+  min-height: 46px; padding: 6px 4px; }
+.pnl-page .pnl-heat-b:last-child { border-right: 1px solid var(--border); }
 .pnl-page .pnl-heat-v { font-size: 13px; font-weight: 600;
-  font-variant-numeric: tabular-nums; }
+  font-variant-numeric: tabular-nums; text-align: center;
+  border: 1px solid var(--border); border-top: 0; border-right: 0;
+  display: flex; align-items: center; justify-content: center;
+  min-height: 46px; padding: 6px 4px; }
+.pnl-page .pnl-heat-v:last-child { border-right: 1px solid var(--border); }
 /* A bucket with no trades shows a dash, no fill, dim. Never a coloured zero -
    "no observation" and "observed zero" must not look the same. */
 .pnl-page .pnl-heat-none { color: var(--dim); font-weight: 400; }

@@ -297,13 +297,21 @@
       <section class="panel">
         <h3 class="panel-title">Day of Week vs Profitability</h3>
         <div class="pnl-heat">
-          <template x-for="c in (data.heatmap_dow || [])" :key="c.bucket">
-            <div class="pnl-heat-c" :style="heatStyle(c, data.heatmap_dow)"
-                 :title="c.observed ? (c.trades + ' trades') : 'no trades in this bucket'">
-              <span class="pnl-heat-b" x-text="c.bucket"></span>
-              <span class="pnl-heat-v" :class="c.observed ? '' : 'pnl-heat-none'"
-                    x-text="c.observed ? money(c.net) : '—'"></span>
-            </div>
+          {# The approved PNG draws these as a two-row MATRIX, not a stack of
+             cards: an uncoloured label row on top, then a single coloured value
+             row carried by a left row-label. The heat tint belongs to the VALUE
+             cell only - tinting the day/slot name too would colour a label that
+             carries no measurement. #}
+          <span class="pnl-heat-corner" aria-hidden="true"></span>
+          <template x-for="c in (data.heatmap_dow || [])" :key="'h-' + c.bucket">
+            <span class="pnl-heat-b" x-text="c.bucket"></span>
+          </template>
+          <span class="pnl-heat-rl">Net P&amp;L (₹)</span>
+          <template x-for="c in (data.heatmap_dow || [])" :key="'v-' + c.bucket">
+            <span class="pnl-heat-v" :style="heatStyle(c, data.heatmap_dow)"
+                  :class="c.observed ? '' : 'pnl-heat-none'"
+                  :title="c.observed ? (c.trades + ' trades') : 'no trades in this bucket'"
+                  x-text="c.observed ? money(c.net) : '—'"></span>
           </template>
         </div>
         <div class="pnl-scale"><span>−ve</span><i class="pnl-scale-bar"></i><span>+ve</span></div>
@@ -312,13 +320,21 @@
       <section class="panel">
         <h3 class="panel-title">Time of Day vs Profitability</h3>
         <div class="pnl-heat pnl-heat-tod">
-          <template x-for="c in (data.heatmap_tod || [])" :key="c.bucket">
-            <div class="pnl-heat-c" :style="heatStyle(c, data.heatmap_tod)"
-                 :title="c.observed ? (c.trades + ' trades') : 'no trades in this bucket'">
-              <span class="pnl-heat-b" x-text="c.bucket"></span>
-              <span class="pnl-heat-v" :class="c.observed ? '' : 'pnl-heat-none'"
-                    x-text="c.observed ? money(c.net) : '—'"></span>
-            </div>
+          {# The approved PNG draws these as a two-row MATRIX, not a stack of
+             cards: an uncoloured label row on top, then a single coloured value
+             row carried by a left row-label. The heat tint belongs to the VALUE
+             cell only - tinting the day/slot name too would colour a label that
+             carries no measurement. #}
+          <span class="pnl-heat-corner" aria-hidden="true"></span>
+          <template x-for="c in (data.heatmap_tod || [])" :key="'h-' + c.bucket">
+            <span class="pnl-heat-b" x-text="c.bucket"></span>
+          </template>
+          <span class="pnl-heat-rl">Net P&amp;L (₹)</span>
+          <template x-for="c in (data.heatmap_tod || [])" :key="'v-' + c.bucket">
+            <span class="pnl-heat-v" :style="heatStyle(c, data.heatmap_tod)"
+                  :class="c.observed ? '' : 'pnl-heat-none'"
+                  :title="c.observed ? (c.trades + ' trades') : 'no trades in this bucket'"
+                  x-text="c.observed ? money(c.net) : '—'"></span>
           </template>
         </div>
         <div class="pnl-scale"><span>−ve</span><i class="pnl-scale-bar"></i><span>+ve</span></div>
