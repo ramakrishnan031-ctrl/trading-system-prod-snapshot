@@ -22,7 +22,7 @@ PNG, ⛔ not source HTML, ⛔ not a description.
 | **S07** | Trade Explorer | ✅ **shown + approved 14-Aug on real VM data** (old ledger, `cd9043c`) | ✅ | ⚠️ `66fc82e` (21-Aug) landed AFTER that approval and is **unseen** | ✅ **APPROVED 14-Aug-2026** — ⛔ but under the PREVIOUS ledger | ⏳ **RE-APPROVAL OWED** — 👤 Rama's own 19-Aug 13px-floor decision re-opened **all 22** approvals; ⛔ this is a re-approval, ⛔ NOT a first one |
 | **S08** | Capital & Risk | ✅ live `/capital-risk` @1920×1080 + 1440×900 · 🔄 **FULL REBUILD**, ⛔ not a patch | ✅ | ✅ **1** — the whole screen composition replaced (`c479b40`); ⚠️ **+2 post-approval restorations** forced by the test contract (gauge geometry · gated export button) | ✅ **"Screen approved"** — 24-Aug-2026 **~16:2x IST** | 🟢 **VISUALLY APPROVED** · ⏳ **2 post-approval changes not yet seen** |
 | **S09** | P&L Analytics | ✅ live `/pnl-analytics` @1920 · 🔄 **re-rendered 27-Aug on SEEDED DEMO data** (the local DB holds no closed trades) | ✅ | ✅ **3** — density + the two missing panels (`7dba039`); Rama's final visual pass; then **the heatmaps rebuilt as the artwork's two-row MATRIX** (`292a750`) | ✅ **"screen approved"** — **27-Aug-2026 ~21:5x IST** (supersedes the 24-Aug approval) | 🟢 **VISUALLY APPROVED** |
-| **S10** | Slippage Analytics | ⏳ | — | — | — | ⏳ PENDING |
+| **S10** | Slippage Analytics | ✅ live `/slippage` @1920 + 1440 · 🔄 **on REAL VM data** (2.5 MB read-only extract; the local DB has none) | ✅ | ✅ **3** — the artwork's **Export** panel; the table made genuinely column-driven; **Symbol left-aligned** (`c37e718`) | ✅ **"screen approved"** — **28-Aug-2026 ~00:0x IST** | 🟢 **VISUALLY APPROVED** |
 | **S11** | Execution Analytics | ⏳ | — | — | — | ⏳ PENDING |
 | **S12** | System Health | ⏳ | — | — | — | ⏳ PENDING |
 | **S13** | Audit | ⏳ | — | — | — | ⏳ PENDING |
@@ -848,3 +848,50 @@ opened for writing.
 other screen can change. ⛔ No backend change.
 ✅ **S09 92 passed** · **dashboard suite 2,079 passed, 1 failed** — the known
 environmental `test_isolation::test_c_venv_has_no_kiteconnect`, ⛔ untouched.
+
+---
+
+## 🟢 S10 SLIPPAGE ANALYTICS — APPROVED 28-Aug-2026 ~00:0x IST
+
+### What changed to earn it (`c37e718`, 2 files)
+1. ⭐ **The artwork's fourth bottom panel — EXPORT — was missing.** Added. ⛔ NOT a new
+   capability: it calls the SAME `exportXlsx()` the table and both ranking headers already
+   call, so the sheet is the current FILTERED set and cannot disagree with the screen.
+2. 🔴 **The table only LOOKED reorderable.** The `<tbody>` held **fourteen positional
+   `<td>`s**, so a dragged heading would have moved the LABEL and left the DATA behind —
+   exactly the defect S03's guard names. Both `<thead>` and `<tbody>` now iterate the same
+   live `cols`, with `cellCls()`/`cell()` so **alignment travels with the column**.
+3. 🔴 **Symbol was CENTRED in the main table — this screen was the miss.** An earlier
+   audit called S10 clean because it found the *Symbol Ranking panel's* heading; the main
+   table's Symbol comes from a dynamic column array. It contradicted 👤 Rama's global
+   ruling, this screen's own TXT (*"Symbol is left aligned"*) and instruction rule 9.
+
+### 🔴 SCANNER STAYS REMOVED — and the reference files say otherwise
+⚠️ **Both S10 files (updated 27-Aug 22:14) say KEEP Scanner** — as a filter, a table column
+and a ranking panel (instruction rule 7).
+🔬 **Measured against the whole production population: `scanner` EQUALS `strategy` on
+181,586 of 181,586 signals — 13 distinct values on each side, zero exceptions.**
+⇒ ⭐ The files forbid removing it *"merely because another screen has a Scanner decision"*.
+That is ⛔ not the reason. The reason is that the column **repeats its neighbour**. In the
+artwork Scanner holds INDEX names (`NIFTY 50`, `BANKNIFTY`) — it was drawn assuming a
+separate dimension the real system never had.
+⇒ 🔴 **This also settles the S09 open question: S21 Scanner Attribution is premised on
+scanner being a dimension, and it is not.** 👤 Rama's to rule before S21.
+
+### 🔴 THE EVIDENCE LIMIT — STATED, ⛔ NOT HIDDEN
+🔬 Verified on **REAL VM data** (a 2.5 MB read-only extract: 286 slippage rows, 785 trades,
+1,237 orders, 785 signals) — ⛔ **not** seeded numbers, which this screen's own instruction
+forbids. ✅ The config pointer was reverted **byte-identically** afterwards; the extract
+lives **outside the repo**.
+⚠️ **But it is a STALE SNAPSHOT, ⛔ not live**, and what it showed limits the approval:
+- 🔴 **Slippage is ~₹0.00–0.02 and 100% WITHIN LIMIT** ⇒ the amber/red status path is
+  **LIVE BUT NEVER EXERCISED**. ⛔ The artwork's 130-exceeded picture has no real counterpart.
+- ⚠️ **System Score and Score Threshold are empty on every row.** The columns work; the data
+  is absent for these trades.
+- ⚠️ **RR Degradation reads 118.50%** because Actual RR is **negative** (1 : −0.28). Real, and
+  >100% by construction in that case. 👤 Whether >100% should present differently is unruled.
+
+### 🔬 SCOPE + GATE
+**S10 101 passed · dashboard suite 2,079 passed, 1 failed** — the known environmental
+`test_isolation::test_c_venv_has_no_kiteconnect`, ⛔ untouched.
+⛔ **NOT PUSHED, ⛔ NOT DEPLOYED, ⛔ NOT VERIFIED LIVE.**
