@@ -96,6 +96,41 @@ class TradingHoursConfig(BaseModel):
     # half of a deploy is independently safe (schema-without-key and key-without-schema
     # would both otherwise fail the boot), and so a revert is a one-line config edit.
     service_window_end: str = "16:00"
+    # ── MIS AUTO-SQUAREOFF (28-Aug-2026) ──────────────────────────────────────
+    # DEFAULTED so each half of a deploy is independently safe under
+    # extra="forbid" (schema-without-key and key-without-schema would both
+    # otherwise fail the boot), matching service_window_end's precedent.
+    # The VALUES are still validated fail-closed by MisSquareoffTiming.build().
+    mis_squareoff_cutoff: str = "15:12"
+    mis_squareoff_first_offset: str = "5m"
+    mis_squareoff_second_offset: str = "2m"
+    mis_squareoff_margin_sec: int = 20
+
+    @model_validator(mode="after")
+    def _validate_mis_squareoff_timing(self) -> "TradingHoursConfig":
+        """FAIL CLOSED on any invalid MIS square-off timing (28-Aug-2026).
+
+        Delegates to the single validated constructor so the schema and the
+        runtime cannot disagree: there is ONE definition of the ordering
+        invariant (entry_end < CHECK_1 < CHECK_2 < cutoff < eod_squareoff_time)
+        and of the margin floor, and it lives with the unit that uses it.
+        """
+        from orders.mis_autosquareoff import (
+            MisSquareoffConfigError, MisSquareoffTiming,
+        )
+        try:
+            MisSquareoffTiming.build(
+                cutoff=self.mis_squareoff_cutoff,
+                first_offset=self.mis_squareoff_first_offset,
+                second_offset=self.mis_squareoff_second_offset,
+                margin_sec=self.mis_squareoff_margin_sec,
+                poll_interval_sec=5,
+                entry_end=self.entry_end,
+                eod_squareoff_time=self.eod_squareoff_time,
+            )
+        except MisSquareoffConfigError as exc:
+            raise ValueError(str(exc)) from exc
+        return self
 
     @model_validator(mode="after")
     def _validate_window_ordering(self) -> "TradingHoursConfig":

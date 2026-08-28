@@ -1167,6 +1167,43 @@ class StateStore:
             """
         )
 
+    def get_open_mis_exit_orders_for_symbol(self, symbol: str) -> List[sqlite3.Row]:
+        """MIS-only resting SL/TGT legs for ONE symbol (mis_autosquareoff, 28-Aug-2026).
+
+        Deliberately NARROWER than get_pending_exit_orders_for_open_positions,
+        which admits CO via product IN ('MIS','CO'). The MIS auto-square-off unit
+        must not inherit CO eligibility, and it cancels ONE symbol's orders at a
+        time -- never "all pending orders", and never anything CNC. A CNC GTT is
+        not reachable from here at all: it lives in gtt_state and has no orders row.
+
+        Row fields: trade_id, symbol, leg, variety, order_id.
+        Sorted by leg (Foundation Rule 3.7 deterministic order).
+        """
+        return self.fetch_all(
+            """
+            SELECT
+                t.trade_id,
+                t.symbol,
+                o.leg,
+                o.variety,
+                o.order_id
+            FROM trades t
+            JOIN orders o
+              ON o.trade_id = t.trade_id
+            JOIN orders e
+              ON e.trade_id = t.trade_id
+             AND e.leg = 'ENTRY'
+            WHERE t.symbol = ?
+              AND t.status IN ('OPEN', 'PARTIAL')
+              AND e.product = 'MIS'
+              AND o.product = 'MIS'
+              AND o.leg IN ('SL', 'TGT')
+              AND o.status NOT IN ('COMPLETE', 'CANCELLED', 'REJECTED', 'FAILED')
+            ORDER BY o.leg
+            """,
+            (symbol,),
+        )
+
     def get_open_intraday_positions(self) -> List[sqlite3.Row]:
         """
         Return trades with status OPEN or PARTIAL whose ENTRY leg has an

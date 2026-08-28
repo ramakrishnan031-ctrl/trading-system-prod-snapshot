@@ -123,6 +123,13 @@ def _make_mock_app_config():
     # here (not a MagicMock attribute) because main() parses it at boot — a bare mock
     # would make every boot-sequencing test fail inside _parse_hhmm.
     sys_cfg.trading_hours.service_window_end = "17:35"
+    # 28-Aug-2026: the MIS auto-square-off unit parses these at boot, exactly like
+    # service_window_end above — bare MagicMock attributes would make every
+    # boot-sequencing test fail inside MisSquareoffTiming.build().
+    sys_cfg.trading_hours.mis_squareoff_cutoff = "15:12"
+    sys_cfg.trading_hours.mis_squareoff_first_offset = "5m"
+    sys_cfg.trading_hours.mis_squareoff_second_offset = "2m"
+    sys_cfg.trading_hours.mis_squareoff_margin_sec = 20
     sys_cfg.kill_switch.api_failure_threshold = 3
     sys_cfg.kill_switch.enable_auto_trip = True
     sys_cfg.clock.warn_skew_sec = 2.0

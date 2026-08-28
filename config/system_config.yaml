@@ -46,7 +46,37 @@ trading_hours:
   # stays 15:15 (separate mechanism, out of scope); they no longer coincide. Keep both.
   entry_end: "15:00"          # T5 (29-Jun): aligned to per-strategy 15:00 (global backstop; was 15:15). Zero behaviour change (no entry ever after 14:57). <= eod_squareoff_time 15:17
   eod_entry_cutoff: "15:15"   # FIX-073: absolute last moment to place order (prevents rate-limiter delays from opening positions after EOD)
-  eod_squareoff_time: "15:17" # Square-off trigger; 3-min buffer before RMS auto-sq at 15:20 (P1)
+  eod_squareoff_time: "15:17" # EOD ACCOUNTING + EMERGENCY BACKSTOP -- NOT the primary MIS
+                              # square-off. It also does the WAL checkpoint and
+                              # fund_manager.reset_daily_pnl, so it must NOT be moved earlier:
+                              # any 15:07-15:17 realised P&L would be booked AFTER the day's
+                              # RESET_PNL row. Primary MIS safety is mis_squareoff_* below.
+                              # CORRECTED 2026-08-28: the previous comment claimed a "3-min
+                              # buffer before RMS auto-sq at 15:20". 15:20 matches NONE of
+                              # Zerodha's four published cutoffs (CAS 15:12 / non-CAS 15:25 /
+                              # F&O 15:26 / MCX close-10m) and was untraceable to any source.
+  # ── MIS AUTO-SQUAREOFF (28-Aug-2026) — PRIMARY MIS SAFETY ──────────────────
+  mis_squareoff_cutoff: "15:12"      # source: Zerodha intraday auto-square-off timing page
+                                     # (support.zerodha.com), checked_at: 2026-08-28.
+                                     # rationale: earliest current EQUITY-STOCK cutoff (CAS =
+                                     # SEBI Closing Auction Session, i.e. F&O-listed equities).
+                                     # This is THIS SYSTEM'S configured protective cutoff for
+                                     # its equity-MIS unit -- NOT "Zerodha's universal cutoff".
+                                     # broker_adjustable: true (Zerodha states the risk team
+                                     # may change these), so this is CONFIG, never a constant.
+                                     # KNOWN LIMITATION: absolute IST time; NOT session-relative.
+                                     # special_sessions moves eod_squareoff_time per date but
+                                     # does NOT move this, and the ordering invariant will not
+                                     # detect the divergence (15:12 < 19:12 is valid).
+  mis_squareoff_first_offset: "5m"   # CHECK 1 = cutoff - 5m = 15:07 (price-seeking pass)
+  mis_squareoff_second_offset: "2m"  # CHECK 2 = cutoff - 2m = 15:10 (certainty pass, MARKET)
+  mis_squareoff_margin_sec: 20       # DERIVED, not picked:
+                                     #   poll_interval_sec 5  (PASS 2's instant is EVALUATED
+                                     #     anywhere in [15:10:00, 15:10:05] -- real lateness)
+                                     # + ~8.2s pessimistic PASS-2 execution bound
+                                     # + ~6.8s explicit buffer
+                                     # A margin below poll_interval_sec is incoherent and FAILS
+                                     # CLOSED: PASS 2 could not be evaluated inside it.
   market_open: "09:15"        # NSE regular-session open
   market_close: "15:30"       # NSE regular-session close; cutoff for EOD-window checks
   # 25-Jul-2026: WHEN THE SERVICE SELF-EXITS FOR THE DAY (was a hardcoded 16:00 in

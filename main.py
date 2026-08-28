@@ -69,6 +69,7 @@ from core.state_store import StateStore
 from data.candle_store import CandleStore
 from data.live_feed import LiveFeedManager
 from orders.eod_squareoff import EodSquareoff
+from orders.mis_autosquareoff import MisAutoSquareoff, MisSquareoffTiming
 from orders.shadow_tracker import ShadowTracker
 from orders.cnc_gtt import CncGttPlacer
 from orders.cnc_gtt_monitor import CncGttMonitor
@@ -3282,6 +3283,35 @@ def _main_locked(args, config_dir: Path) -> int:
     )
     # FIX-128 (Fix D): wire EodSquareoff into the daily loss callback late-binding ref.
     _eod_ref["eod"] = eod
+
+    # ── MIS AUTO-SQUAREOFF (28-Aug-2026) — ADD-ALONGSIDE, PRIMARY MIS SAFETY ──
+    # The 15:17 EodSquareoff above is UNCHANGED and keeps its compound end-of-day
+    # role (cancel pending, exit positions, WAL checkpoint, reset_daily_pnl). It
+    # is now the BACKSTOP. This unit is the primary MIS safety pass at 15:07/15:10,
+    # ahead of Zerodha's earliest equity cutoff (CAS 15:12).
+    _th = app_config.system.trading_hours
+    _mis_timing = MisSquareoffTiming.build(
+        cutoff=_th.mis_squareoff_cutoff,
+        first_offset=_th.mis_squareoff_first_offset,
+        second_offset=_th.mis_squareoff_second_offset,
+        margin_sec=_th.mis_squareoff_margin_sec,
+        poll_interval_sec=app_config.system.eod_squareoff.poll_interval_sec,
+        entry_end=_th.entry_end,
+        eod_squareoff_time=_th.eod_squareoff_time,
+    )
+    mis_autosq = MisAutoSquareoff(
+        adapter=broker_adapter,
+        store=store,
+        logger=get_logger("mis_autosquareoff"),
+        timing=_mis_timing,
+        now_fn=time_authority.now_ist,
+        is_trading_holiday_fn=market_windows.is_trading_holiday,
+        limit_grace_sec=app_config.system.eod_squareoff.limit_grace_sec,
+        inter_order_delay_sec=(
+            app_config.system.eod_squareoff.inter_order_delay_ms / 1000.0),
+        notifier=notifier,
+    )
+    mis_autosq.start_polling()
 
     # FIX-186 (FIX 2): wire the stale-order sweep so EOD finalizes any orphan
     # order rows left non-terminal by a broker-side cancel (the 17-Jun IRFC leak).
