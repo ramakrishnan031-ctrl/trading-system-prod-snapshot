@@ -755,3 +755,38 @@ def test_19b_an_absent_product_is_ineligible_in_the_unit():
     u = unit(a)
     got = u._find_open_mis_positions_for_auto_squareoff(a.get_positions())
     assert [r["symbol"] for r in got] == ["REAL"]
+
+
+# ══ F SINK · observability, NEVER control authority ═════════════════════════
+
+def test_critical_invokes_the_f_sink():
+    seen = []
+    a = FakeAdapter([], fail_positions=True)
+    u = unit(a, critical_sink=lambda s, d: seen.append((s, d)))
+    u._run_pass(PASS_2, at(15, 10), at(15, 10))
+    assert [s for s, _ in seen] == [MisState.BROKER_STATE_UNAVAILABLE]
+
+
+def test_a_failing_f_sink_never_hides_the_critical():
+    """F is an observability mechanism, not the source of truth. A sink that raises
+    must not prevent, replace or downgrade the CRITICAL that already happened."""
+    def boom(state, detail):
+        raise RuntimeError("transport dead")
+
+    a = FakeAdapter([], fail_positions=True)
+    log = FakeLog()
+    u = unit(a, log=log, critical_sink=boom)
+    r = u._run_pass(PASS_2, at(15, 10), at(15, 10))
+    # the orchestrator's own truth is unchanged
+    assert r.state == MisState.BROKER_STATE_UNAVAILABLE
+    assert any(MisState.BROKER_STATE_UNAVAILABLE in c for c in log.criticals)
+    # and the sink failure is itself recorded, never silent
+    assert any("F sink failed" in c for c in log.criticals)
+
+
+def test_orchestrator_works_with_no_f_sink_at_all():
+    """F is optional by construction — the orchestrator does not depend on it."""
+    a = FakeAdapter([], fail_positions=True)
+    u = unit(a)                      # no critical_sink
+    r = u._run_pass(PASS_2, at(15, 10), at(15, 10))
+    assert r.state == MisState.BROKER_STATE_UNAVAILABLE

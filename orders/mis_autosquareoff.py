@@ -179,6 +179,7 @@ class MisAutoSquareoff:
         pass_2_bound_ms_per_symbol: int = 800,
         pass_2_bound_fixed_ms: int = 400,
         notifier=None,
+        critical_sink: Optional[Callable[[str, str], None]] = None,
     ) -> None:
         self._adapter = adapter
         self._store = store
@@ -192,6 +193,9 @@ class MisAutoSquareoff:
         self._p2_per_symbol_ms = int(pass_2_bound_ms_per_symbol)
         self._p2_fixed_ms = int(pass_2_bound_fixed_ms)
         self._notifier = notifier
+        # F's entry point. Optional: the orchestrator is fully functional
+        # without it, which is the point -- F observes, it does not control.
+        self._critical_sink = critical_sink
 
         self._lock = threading.Lock()
         # A-3: per-date PER-PASS fired state. A single shared boolean is NOT
@@ -654,10 +658,26 @@ class MisAutoSquareoff:
             return self._results.get((d, which))
 
     def _emit(self, state: str, detail: str, *, critical: bool = False) -> None:
+        # The LOG happens first and unconditionally: it is the source of truth.
+        # Nothing below may prevent, replace or downgrade it. F is an
+        # observability mechanism, not control authority -- "DEADLINE_BREACH
+        # occurred" and "F delivery failed" are two separate records and must
+        # never collapse into "no alert" / "no incident" / "warning only" / PASS.
         if critical:
             self._log.critical("mis_autosquareoff %s: %s", state, detail)
         else:
             self._log.info("mis_autosquareoff %s: %s", state, detail)
+
+        # F (D-1b). Invoked AFTER the log, in its own guard, so a broken or absent
+        # notifier changes nothing about the CRITICAL that just happened.
+        if critical and self._critical_sink is not None:
+            try:
+                self._critical_sink(state, detail)
+            except Exception as exc:  # noqa: BLE001
+                self._log.error(
+                    "mis_autosquareoff: F sink failed for %s (the CRITICAL above "
+                    "stands regardless): %s", state, exc)
+
         if critical and self._notifier is not None:
             try:
                 self._notifier.send(

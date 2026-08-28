@@ -69,7 +69,9 @@ from core.state_store import StateStore
 from data.candle_store import CandleStore
 from data.live_feed import LiveFeedManager
 from orders.eod_squareoff import EodSquareoff
-from orders.mis_autosquareoff import MisAutoSquareoff, MisSquareoffTiming
+from orders.mis_autosquareoff import MisAutoSquareoff
+from core.mis_squareoff_timing import MisSquareoffTiming
+from alerts.mis_squareoff_notifier import MisSquareoffNotifier
 from orders.shadow_tracker import ShadowTracker
 from orders.cnc_gtt import CncGttPlacer
 from orders.cnc_gtt_monitor import CncGttMonitor
@@ -3299,6 +3301,27 @@ def _main_locked(args, config_dir: Path) -> int:
         entry_end=_th.entry_end,
         eod_squareoff_time=_th.eod_squareoff_time,
     )
+    # ── F / D-1b — human-facing delivery for the orchestrator's CRITICALs ────
+    # Built BEFORE the orchestrator and from CONFIG, on its own timer. It is not
+    # given the orchestrator, the orchestrator's timing object, or a callback into
+    # it: an orchestrator that failed before computing CHECK_1 must not be able to
+    # take F's trigger with it.
+    mis_notifier = MisSquareoffNotifier(
+        trading_hours=_th,
+        poll_interval_sec=app_config.system.eod_squareoff.poll_interval_sec,
+        send_email=lambda subject, body: notifier._send_email_fallback(
+            subject, body, "mis_autosquareoff"),
+        send_telegram=lambda subject, body: notifier.send(
+            severity="INFO" if "SELF_TEST" in subject else "CRITICAL",
+            title=subject, body=body, source_module="mis_autosquareoff"),
+        logger=get_logger("mis_squareoff_notifier"),
+        now_fn=time_authority.now_ist,
+    )
+    # background=True: the boot path must not wait on a transport.
+    mis_notifier.run_boot_self_test(background=True)
+
+    mis_notifier.start_polling()
+
     mis_autosq = MisAutoSquareoff(
         adapter=broker_adapter,
         store=store,
@@ -3310,6 +3333,8 @@ def _main_locked(args, config_dir: Path) -> int:
         inter_order_delay_sec=(
             app_config.system.eod_squareoff.inter_order_delay_ms / 1000.0),
         notifier=notifier,
+        critical_sink=lambda state, detail: mis_notifier.notify_critical(
+            state, detail),
     )
     mis_autosq.start_polling()
 
