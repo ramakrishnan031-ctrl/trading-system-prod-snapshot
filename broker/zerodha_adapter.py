@@ -1201,7 +1201,16 @@ class ZerodhaAdapter:
                         symbol=sym,
                         qty=info["qty"],
                         avg_price=info["avg_price"],
-                        product=info.get("product", "MIS"),
+                        # S-2 parity (28-Aug-2026): default to "" like the LIVE
+                        # branch below (:1234 str(row.get("product", ""))), NOT
+                        # to "MIS". A product-scoped safety filter treats an
+                        # unknown product as INELIGIBLE, so defaulting to "MIS"
+                        # made PAPER strictly MORE PERMISSIVE than LIVE on a
+                        # safety boundary -- a position with no product would be
+                        # squared off in paper and silently skipped in live, and
+                        # paper would have shown a green result. Paper must match
+                        # live; never the reverse.
+                        product=info.get("product", ""),
                         side=info["side"],
                     )
                     for sym, info in self._paper_positions.items()

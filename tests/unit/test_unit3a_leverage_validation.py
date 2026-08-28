@@ -29,6 +29,21 @@ that test goes red, because the bad config would then load. The neutrality oracl
 goes red if the arithmetic or the configured values move. `test_mutation_*`
 documents the three deletions that must break this file.
 
+COVERAGE IS 16 OF 18 -- NOT 18/18 (recorded 28-Aug-2026)
+--------------------------------------------------------
+This file contains 18 test FUNCTIONS and the design matrix has 18 SLOTS
+(4 valid / 12 fail-closed / 1 parity / 1 neutrality --
+FILE16_UNIT3_SCOPE_FROZEN_27-Aug-2026.md:185). The two 18s are a COINCIDENCE OF
+ARITHMETIC, not evidence of coverage: two of the matrix's protections are NOT
+asserted here (cases 15 and 16 below), because the matrix was scoped for the
+WHOLE of UNIT 3 (U3-c..U3-g) while this file ships U3-d + U3-f only.
+
+  ASSERTED HERE .......... 16 of 18
+  DEFERRED TO UNIT 3b .... 2 of 18  (cases 15, 16 -- named below)
+
+test_unit3b_cases_15_and_16_are_named_and_unasserted() makes that gap
+machine-visible, so "18 functions" can never again be read as "18/18 covered".
+
 DEFERRED TO UNIT 3b -- NOT CLAIMED HERE
 ---------------------------------------
 Two protections from the original 18-case matrix are NOT in this unit and are NOT
@@ -258,3 +273,32 @@ def test_mutation_map_documents_what_must_break_this_file():
       change any shipped leverage value   -> test_01 + test_03 (12 params) go RED
     """
     assert math.isclose(ABSOLUTE_MAX_LEVERAGE, 20.0)
+
+
+def test_unit3b_cases_15_and_16_are_named_and_unasserted():
+    """C-3 closure (28-Aug-2026): the two matrix protections this file does NOT
+    assert, named in code so the gap survives a careless reading of the count.
+
+    CASE 15 -- an unknown intent must FAIL rather than silently resolve to 1.0.
+               Guarded path: position_sizer's `.get(intent, 1.0)` fallback.
+    CASE 16 -- FundManager's hardcoded `leverage_map is None` default must not be
+               able to activate.
+
+    Both are LATENT today: main.py always supplies the map, and only MIS and CNC
+    occur in production (SELECT DISTINCT product FROM orders = {MIS, CNC}). That
+    is why they were deferred -- not because they do not matter.
+
+    This test asserts the ACCOUNTING, not the protections. It goes red if someone
+    claims full coverage without shipping UNIT 3b.
+    """
+    MATRIX_SLOTS = 18            # FILE16:185 -- 4 valid / 12 fail-closed / 1 parity / 1 neutrality
+    DEFERRED_TO_UNIT_3B = {
+        15: "unknown intent must fail, not resolve to 1.0 (position_sizer .get(intent, 1.0))",
+        16: "FundManager's hardcoded `leverage_map is None` default must not activate",
+    }
+    asserted = MATRIX_SLOTS - len(DEFERRED_TO_UNIT_3B)
+    assert asserted == 16, "coverage is 16 of 18 until UNIT 3b ships"
+    assert set(DEFERRED_TO_UNIT_3B) == {15, 16}
+    assert MATRIX_SLOTS != asserted, (
+        "if these are ever equal, UNIT 3b shipped -- update this test deliberately, "
+        "do not delete it")

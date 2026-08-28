@@ -728,3 +728,30 @@ def test_9_the_15_17_pass_1_cannot_reach_a_cnc_gtt():
     assert "o.product = 'MIS'" in flat3 and "e.product = 'MIS'" in flat3
     assert "'CO'" not in flat3, "the new unit must not inherit CO eligibility"
     assert "gtt_state" not in flat3
+
+
+# ══ G · S-2 ADAPTER PARITY (the OLD path) · closes prediction #19 ════════════
+
+def test_19_paper_and_live_agree_on_an_absent_product():
+    """#19 named assertion: the unsafe event is a position with NO product being
+    treated as MIS in paper while live excludes it -- paper more permissive than
+    live on a safety boundary, so a paper run would show green for a case live
+    would skip. Both branches must default to "" (ineligible).
+    """
+    import inspect
+    from broker import zerodha_adapter
+
+    src = inspect.getsource(zerodha_adapter.ZerodhaAdapter.get_positions)
+    assert 'info.get("product", "MIS")' not in src, (
+        "paper defaults an absent product to MIS -- more permissive than live")
+    assert 'info.get("product", "")' in src, "paper branch must default to ''"
+    assert 'str(row.get("product", ""))' in src, "live branch must default to ''"
+
+
+def test_19b_an_absent_product_is_ineligible_in_the_unit():
+    """The consequence that matters: whatever the adapter yields, a position with
+    no resolvable product is never selected for a MIS square-off."""
+    a = FakeAdapter([NoProductPos("GHOST", 3), Pos("REAL", 1, "MIS")], after=[])
+    u = unit(a)
+    got = u._find_open_mis_positions_for_auto_squareoff(a.get_positions())
+    assert [r["symbol"] for r in got] == ["REAL"]
