@@ -115,7 +115,11 @@ class TradingHoursConfig(BaseModel):
         invariant (entry_end < CHECK_1 < CHECK_2 < cutoff < eod_squareoff_time)
         and of the margin floor, and it lives with the unit that uses it.
         """
-        from orders.mis_autosquareoff import (
+        # core.mis_squareoff_timing, NOT orders.mis_autosquareoff: importing the
+        # orchestrator here would put it on the import path of everything that
+        # loads config -- including F, whose independence test forbids exactly
+        # that.
+        from core.mis_squareoff_timing import (
             MisSquareoffConfigError, MisSquareoffTiming,
         )
         try:
