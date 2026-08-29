@@ -501,6 +501,21 @@ def _tier_mode_line(config_dir: Path) -> str:
         return "Tier multiplier today: (unknown - config unreadable)"
 
 
+def _output_retention_line() -> str:
+    """State the LIVE output-retention rule in the EOD report.
+
+    Imported from the job itself rather than restated here, so the report can
+    never disagree with the code: if the window, floor or cap is ever changed --
+    or changed WRONGLY -- the new value appears in the next report instead of a
+    stale sentence that keeps saying what the rule used to be.
+    """
+    try:
+        from scripts.output_retention import retention_rule
+        return retention_rule()
+    except Exception:
+        return "Output retention: (unknown - scripts/output_retention.py unreadable)"
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Phase 3 (self-maintaining cron): ROSTER INTEGRITY + auto-discovery + self-test.
 # FAIL-SAFE: every helper is best-effort and is called wrapped in try/except by
@@ -684,6 +699,7 @@ def build_report(registry: CronRegistry, store: StateStore, today: date,
              "Known: daily_report heartbeat is pending the xlsx redesign (shown ⏸ Pending)."]
     if is_eod:
         extra.append(_tier_mode_line(config_dir))  # Diary #4: sizing-mode badge
+        extra.append(_output_retention_line())     # the live 7d window, stated
     severity = _compute_severity(jobs, watcher_stale)
 
     # Phase 3 (EOD): ROSTER INTEGRITY block (a-d) + sha256 stamp. FAIL-SAFE — a

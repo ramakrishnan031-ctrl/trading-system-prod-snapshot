@@ -79,6 +79,34 @@ jobs:
     env_wrapper: none
     log_target: '>> /home/ubuntu/systems/trading-system/logs/cron-sentinel-retention.log 2>&1'
     marker_name: sentinel_retention
+  output_retention:
+    # keep-N reaper for reports/output + logs: retain the newest 7 per family,
+    # ranked by the DATE IN THE FILENAME. That is 7 TRADING days by construction
+    # (these producers only write on trading days) -- an mtime rule cannot say
+    # that: `-mtime +7` spans a weekend and keeps ~5 trading days, fewer across a
+    # holiday cluster, so it under-retains by a margin that varies with the
+    # calendar. Filename-ranked also fixes the mtime-drift case (alert_watcher_
+    # 2026-07-28.log carried an mtime of 01-Aug). Keep-N makes the emptying case
+    # structurally impossible; CAP 25/run still guards over-deletion (~4x the
+    # ~6/day steady state). Excludes .gitkeep (git-tracked), .holiday_notified_*
+    # (state) and cron-*.log (append-mode, undated). Refuses anything matching no
+    # family, and anything undated inside a family. NOT a backups job --
+    # data_store/backups stays with backup_retention, data_store/v3/*.jsonl is
+    # never touched.
+    script: scripts/output_retention.py --apply (keep newest 7 per family by filename date; cap 25)
+    schedule: 02:10 daily
+    type: python
+    critical: false
+    market_day_only: false
+    cadence: daily
+    monitored: true
+    enabled: true
+    personal_tooling: false
+    cron_expression: 10 2 * * *
+    command: scripts/output_retention.py --apply
+    env_wrapper: python
+    log_target: '>> logs/cron-output-retention.log 2>&1'
+    marker_name: output_retention
   db_retention:
     script: 'scripts/db_retention.py  (Sun: --vacuum)'
     schedule: 02:30 daily

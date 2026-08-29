@@ -27,6 +27,9 @@ SHELL=/bin/bash
 # sentinel_retention  [02:05 daily]
 5 2 * * * find /home/ubuntu/systems/trading-system/data_store -maxdepth 1 -name "critical_alert_*.delivered" -mtime +7 -delete >> /home/ubuntu/systems/trading-system/logs/cron-sentinel-retention.log 2>&1; rc=$?; mkdir -p /home/ubuntu/systems/trading-system/data_store/cron_marks; echo "$rc $(date -Iseconds)" > /home/ubuntu/systems/trading-system/data_store/cron_marks/sentinel_retention.done
 
+# output_retention  [02:10 daily]
+10 2 * * * cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/output_retention.py --apply >> logs/cron-output-retention.log 2>&1; rc=$?; mkdir -p /home/ubuntu/systems/trading-system/data_store/cron_marks; echo "$rc $(date -Iseconds)" > /home/ubuntu/systems/trading-system/data_store/cron_marks/output_retention.done
+
 # db_retention  [02:30 daily]
 30 2 * * 1-6 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/db_retention.py >> logs/cron-db-retention.log 2>&1; rc=$?; mkdir -p /home/ubuntu/systems/trading-system/data_store/cron_marks; echo "$rc $(date -Iseconds)" > /home/ubuntu/systems/trading-system/data_store/cron_marks/db_retention.done
 
