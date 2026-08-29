@@ -414,7 +414,7 @@ alerts:                       # TG12/AW11 — alert subsystem settings
     host: "smtp.gmail.com"
     port: 587
     use_tls: true
-    username: "ramakrishnan031@gmail.com"
+    username: "pythonsystemalerts@gmail.com"
     # G.3 (2026-04-25): password is read from the env var named here at
     # alert_watcher boot. Plaintext `password:` field is no longer set in
     # this committed config; if you need it for local-only testing, override
@@ -422,9 +422,9 @@ alerts:                       # TG12/AW11 — alert subsystem settings
     # ALERT_SMTP_PASSWORD on the alert_watcher host (systemd EnvironmentFile
     # or the user shell rc).
     password_env: "ALERT_SMTP_PASSWORD"
-    from_address: "ramakrishnan031@gmail.com"
+    from_address: "pythonsystemalerts@gmail.com"
     to_addresses:
-      - "ramakrishnan031@gmail.com"
+      - "pythonsystemalerts@gmail.com"
     timeout_sec: 30
 
 logging:                      # FIX-099 — logging subsystem settings
