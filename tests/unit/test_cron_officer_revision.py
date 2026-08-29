@@ -118,15 +118,19 @@ def test_bug_a_heartbeat_now_detected(tmp_path):
     assert j.status == R.COMPLETED
 
 
-def test_daily_report_pending_redesign_never_critical(tmp_path):
-    # All heartbeat jobs present -> only daily_report is special; must NOT be CRITICAL.
+def _report_with(tmp_path, *, heartbeat_for_daily_report: bool):
+    """Build a real EOD report where every heartbeat job has fired, optionally
+    excluding daily_report -- so the only variable is daily_report's heartbeat."""
     store = StateStore(tmp_path / "t.db")
     reg = CronRegistry.load(_REAL)
     for j in reg.all_jobs():
-        if j.effective_detection_method == "heartbeat_db" and j.name != "daily_report":
-            store.insert_cron_heartbeat(job_name=j.name,
-                                        executed_at="2026-06-22T10:00:00+05:30",
-                                        status="SUCCESS", duration_sec=1.0, message=None)
+        if j.effective_detection_method != "heartbeat_db":
+            continue
+        if j.name == "daily_report" and not heartbeat_for_daily_report:
+            continue
+        store.insert_cron_heartbeat(job_name=j.name,
+                                    executed_at="2026-06-22T10:00:00+05:30",
+                                    status="SUCCESS", duration_sec=1.0, message=None)
     # markers for the exit_code_file jobs so nothing is MISSED/NO_SIGNAL-bad
     marks = tmp_path / "marks"; marks.mkdir()
     for j in reg.all_jobs():
@@ -136,9 +140,45 @@ def test_daily_report_pending_redesign_never_critical(tmp_path):
                           marks_dir=marks, audit_dir=tmp_path / "audit",
                           root=tmp_path)  # root w/o security_state -> watcher line only
     store.close()
+    return rep
+
+
+def test_daily_report_completes_like_any_other_heartbeat_job(tmp_path):
+    """The Bug-C deferral is gone: daily_report's heartbeat is READ.
+
+    While `daily_report` sat in _PENDING_REDESIGN_JOBS the classifier returned
+    before ever calling hb.get(), so the job rendered ⏸ Pending no matter what
+    the heartbeat said -- for two months after the heartbeat started landing.
+    """
+    rep = _report_with(tmp_path, heartbeat_for_daily_report=True)
     dr = next(j for j in rep.jobs if j.name == "daily_report")
-    assert dr.status == R.PENDING_REDESIGN
+    assert dr.status == R.COMPLETED
+    assert dr.status != R.PENDING_REDESIGN
     assert rep.failed == 0 and rep.missed == 0
+    # watcher_stale=False isolates job severity: this fixture has no
+    # security_state, so rep.severity is CRITICAL from the stale watcher alone
+    # and would be green here for the wrong reason.
+    assert co._compute_severity(rep.jobs, False) == "INFO"
+
+
+def test_daily_report_missing_heartbeat_now_escalates(tmp_path):
+    """The blind spot itself: with the deferral in place this case reported
+    ⏸ Pending and INFO. A silently dead daily_report was unreportable."""
+    rep = _report_with(tmp_path, heartbeat_for_daily_report=False)
+    dr = next(j for j in rep.jobs if j.name == "daily_report")
+    assert dr.status == R.MISSED
+    assert rep.missed >= 1
+    # watcher_stale=False, so the escalation can only come from daily_report --
+    # otherwise this passes on the stale watcher and proves nothing.
+    assert co._compute_severity(rep.jobs, False) == "CRITICAL"
+    assert co._compute_severity([dr], False) == "CRITICAL"
+
+
+def test_pending_redesign_set_is_empty_and_suppresses_nothing(tmp_path):
+    """Guards the set itself. The mechanism is retained deliberately, but any
+    name in it is un-alertable -- so an addition must be a conscious act, not a
+    leftover. If this goes red, something was silenced."""
+    assert co._PENDING_REDESIGN_JOBS == set()
 
 
 def test_marker_detection_states(tmp_path):

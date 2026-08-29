@@ -48,9 +48,20 @@ _ROOT = Path(__file__).resolve().parent.parent
 _MARKS_DIR = _ROOT / "data_store" / "cron_marks"
 _AUDIT_DIR = _ROOT / "data_store" / "cron_audit"
 
-# daily_report heartbeat is DEFERRED (lands with the xlsx redesign) — Bug C.
-# Until then it is shown as ⏸ Pending (never ❌/⚠️, never CRITICAL).
-_PENDING_REDESIGN_JOBS = {"daily_report"}
+# Jobs whose heartbeat is DEFERRED: rendered ⏸ Pending, never ❌/⚠️, never CRITICAL.
+#
+# EMPTY since 29-Aug-2026. `daily_report` was the only member -- Bug C, deferred
+# "until the xlsx redesign" -- but MEASURED: cron_heartbeat holds 44 consecutive
+# SUCCESS rows for it, 2026-06-30 through 2026-08-28, one per trading day. The
+# deferral outlived its reason by two months.
+#
+# ⛔ A NAME HERE IS A MONITORING BLIND SPOT, NOT A COSMETIC BADGE. The early
+# return in _classify precedes `hb.get(job.name)`, so a listed job's heartbeat is
+# NEVER READ -- it can never be FAILED or MISSED, and _compute_severity therefore
+# can never escalate it. The mechanism is kept for a future genuine deferral;
+# adding a name silences that job's alerting entirely, so do it deliberately and
+# remove it the moment the reason expires.
+_PENDING_REDESIGN_JOBS: set[str] = set()
 
 
 def get_preflight_complete_signal(now: datetime, briefing_time: time = time(9, 20)) -> bool:
