@@ -118,15 +118,24 @@ def test_bug_a_heartbeat_now_detected(tmp_path):
     assert j.status == R.COMPLETED
 
 
-def _report_with(tmp_path, *, heartbeat_for_daily_report: bool):
+# The subject is daily_trade_review, not daily_report: daily_report was RETIRED
+# on 29-Aug-2026 (enabled:false, monitored:false) and is no longer a heartbeat
+# job at all. The PROPERTY under test is unchanged and is the one that the
+# _PENDING_REDESIGN_JOBS blind spot defeated -- a monitored heartbeat job with no
+# heartbeat must classify MISSED and escalate -- so it is asserted on a job that
+# is still live rather than deleted along with the retired one.
+_HB_SUBJECT = "daily_trade_review"
+
+
+def _report_with(tmp_path, *, heartbeat_for_subject: bool):
     """Build a real EOD report where every heartbeat job has fired, optionally
-    excluding daily_report -- so the only variable is daily_report's heartbeat."""
+    excluding _HB_SUBJECT -- so the only variable is that job's heartbeat."""
     store = StateStore(tmp_path / "t.db")
     reg = CronRegistry.load(_REAL)
     for j in reg.all_jobs():
         if j.effective_detection_method != "heartbeat_db":
             continue
-        if j.name == "daily_report" and not heartbeat_for_daily_report:
+        if j.name == _HB_SUBJECT and not heartbeat_for_subject:
             continue
         store.insert_cron_heartbeat(job_name=j.name,
                                     executed_at="2026-06-22T10:00:00+05:30",
@@ -143,15 +152,15 @@ def _report_with(tmp_path, *, heartbeat_for_daily_report: bool):
     return rep
 
 
-def test_daily_report_completes_like_any_other_heartbeat_job(tmp_path):
-    """The Bug-C deferral is gone: daily_report's heartbeat is READ.
+def test_monitored_job_with_a_heartbeat_completes(tmp_path):
+    """A monitored heartbeat job whose heartbeat landed reports COMPLETED.
 
-    While `daily_report` sat in _PENDING_REDESIGN_JOBS the classifier returned
-    before ever calling hb.get(), so the job rendered ⏸ Pending no matter what
-    the heartbeat said -- for two months after the heartbeat started landing.
+    While a name sat in _PENDING_REDESIGN_JOBS the classifier returned before
+    ever calling hb.get(), so the job rendered ⏸ Pending no matter what the
+    heartbeat said -- for two months after the heartbeat started landing.
     """
-    rep = _report_with(tmp_path, heartbeat_for_daily_report=True)
-    dr = next(j for j in rep.jobs if j.name == "daily_report")
+    rep = _report_with(tmp_path, heartbeat_for_subject=True)
+    dr = next(j for j in rep.jobs if j.name == _HB_SUBJECT)
     assert dr.status == R.COMPLETED
     assert dr.status != R.PENDING_REDESIGN
     assert rep.failed == 0 and rep.missed == 0
@@ -161,14 +170,14 @@ def test_daily_report_completes_like_any_other_heartbeat_job(tmp_path):
     assert co._compute_severity(rep.jobs, False) == "INFO"
 
 
-def test_daily_report_missing_heartbeat_now_escalates(tmp_path):
-    """The blind spot itself: with the deferral in place this case reported
-    ⏸ Pending and INFO. A silently dead daily_report was unreportable."""
-    rep = _report_with(tmp_path, heartbeat_for_daily_report=False)
-    dr = next(j for j in rep.jobs if j.name == "daily_report")
+def test_monitored_job_missing_heartbeat_escalates(tmp_path):
+    """The blind spot itself: with a deferral in place this case reported
+    ⏸ Pending and INFO -- a silently dead job was unreportable."""
+    rep = _report_with(tmp_path, heartbeat_for_subject=False)
+    dr = next(j for j in rep.jobs if j.name == _HB_SUBJECT)
     assert dr.status == R.MISSED
     assert rep.missed >= 1
-    # watcher_stale=False, so the escalation can only come from daily_report --
+    # watcher_stale=False, so the escalation can only come from the subject --
     # otherwise this passes on the stale watcher and proves nothing.
     assert co._compute_severity(rep.jobs, False) == "CRITICAL"
     assert co._compute_severity([dr], False) == "CRITICAL"

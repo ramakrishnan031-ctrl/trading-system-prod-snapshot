@@ -90,8 +90,13 @@ _DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
 
 # (subdir, family globs, never-touch globs)
 SCOPES: list[tuple[str, list[str], list[str]]] = [
+    # daily_report_*.xlsx was dropped here on 29-Aug-2026 when the generator was
+    # retired. Nothing produces those files any more, so a keep-N family for them
+    # would manage a set that can only shrink. The handful already on disk now
+    # match no family and are therefore REFUSED and logged every run -- kept, not
+    # swept. Delete them by hand if and when you want them gone.
     ("reports/output",
-     ["daily_report_*.xlsx", "daily_trade_review_report_*.xlsx"],
+     ["daily_trade_review_report_*.xlsx"],
      [".gitkeep"]),
     ("logs",
      ["system_*.log", "debug_*.log", "trades_*.log", "reconciler_*.log",

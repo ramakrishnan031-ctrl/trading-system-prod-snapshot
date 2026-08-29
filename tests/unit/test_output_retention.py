@@ -46,16 +46,18 @@ def tree(tmp_path):
     excluded, undated and unknown files the job must never delete."""
     out = tmp_path / "reports" / "output"
     logs = tmp_path / "logs"
-    # 12 dated daily_report files, 2026-01-01 .. 2026-01-12
+    # 12 dated report files, 2026-01-01 .. 2026-01-12 (over-full family)
     for i in range(1, 13):
-        _mk(out / f"daily_report_2026-01-{i:02d}.xlsx", size=1000)
-    # a family smaller than the keep count
-    for i in range(1, 4):
-        _mk(out / f"daily_trade_review_report_2026-08-{i:02d}.xlsx", size=500)
+        _mk(out / f"daily_trade_review_report_2026-01-{i:02d}.xlsx", size=1000)
     _mk(out / ".gitkeep", size=36)                       # git-tracked
     _mk(out / "STRAY_REPORT.xlsx", size=10)              # matches no family
+    # A retired-generator artefact: daily_report_* left the family list on
+    # 29-Aug-2026, so these must be REFUSED, never swept.
+    _mk(out / "daily_report_2026-01-05.xlsx", size=900)
     for i in range(1, 10):                               # 9 dated system logs
         _mk(logs / f"system_2026-01-{i:02d}.log", size=2000)
+    for i in range(1, 4):                                # family below the floor
+        _mk(logs / f"trades_2026-01-{i:02d}.log", size=300)
     _mk(logs / "cron-officer.log", size=10)              # append-mode, excluded
     _mk(logs / ".holiday_notified_2026-06-07", size=11)  # state marker, excluded
     return tmp_path
@@ -67,7 +69,7 @@ def _fam(plan, pattern):
 
 def test_keeps_exactly_n_newest_by_filename_date(tree):
     plan = build_plan(root=tree)
-    fam = _fam(plan, "daily_report_*.xlsx")
+    fam = _fam(plan, "daily_trade_review_report_*.xlsx")
     assert len(fam.keep) == KEEP_PER_FAMILY
     assert len(fam.delete) == fam.present - KEEP_PER_FAMILY
     kept = sorted(file_date(p) for p in fam.keep)
@@ -83,13 +85,13 @@ def test_ranking_ignores_mtime_and_uses_filename_date(tree):
     keep it and drop a genuinely newer one; a filename-ranked reaper must not.
     """
     out = tree / "reports" / "output"
-    oldest = out / "daily_report_2026-01-01.xlsx"
-    newest = out / "daily_report_2026-01-12.xlsx"
+    oldest = out / "daily_trade_review_report_2026-01-01.xlsx"
+    newest = out / "daily_trade_review_report_2026-01-12.xlsx"
     os.utime(oldest, (time.time(), time.time()))                    # freshest mtime
     os.utime(newest, (time.time() - 90 * DAY, time.time() - 90 * DAY))  # stalest
 
     plan = build_plan(root=tree)
-    fam = _fam(plan, "daily_report_*.xlsx")
+    fam = _fam(plan, "daily_trade_review_report_*.xlsx")
     assert oldest in fam.delete, "oldest-by-name must be deleted despite a fresh mtime"
     assert newest in fam.keep, "newest-by-name must be kept despite a stale mtime"
 
@@ -97,8 +99,8 @@ def test_ranking_ignores_mtime_and_uses_filename_date(tree):
 def test_families_are_counted_independently_not_pooled(tree):
     """A large family must not consume another family's keep budget."""
     plan = build_plan(root=tree)
-    big = _fam(plan, "daily_report_*.xlsx")
-    small = _fam(plan, "daily_trade_review_report_*.xlsx")
+    big = _fam(plan, "daily_trade_review_report_*.xlsx")
+    small = _fam(plan, "trades_*.log")
     logs = _fam(plan, "system_*.log")
     assert len(big.keep) == KEEP_PER_FAMILY
     assert small.delete == [], "an under-full family is never trimmed"
@@ -108,7 +110,7 @@ def test_families_are_counted_independently_not_pooled(tree):
 
 def test_family_smaller_than_keep_is_untouched(tree):
     plan = build_plan(root=tree)
-    fam = _fam(plan, "daily_trade_review_report_*.xlsx")
+    fam = _fam(plan, "trades_*.log")
     assert fam.present < KEEP_PER_FAMILY
     assert fam.delete == []
 
@@ -117,11 +119,11 @@ def test_undated_member_is_refused_and_takes_no_keep_slot(tree):
     """A file matching a family but carrying no date cannot be ranked, so it is
     refused -- and must not displace a real, rankable file from the keep set."""
     out = tree / "reports" / "output"
-    _mk(out / "daily_report_FINAL.xlsx", size=10)
+    _mk(out / "daily_trade_review_report_FINAL.xlsx", size=10)
     plan = build_plan(root=tree)
-    fam = _fam(plan, "daily_report_*.xlsx")
-    assert "daily_report_FINAL.xlsx" in {p.name for p, _ in plan.refused}
-    assert "daily_report_FINAL.xlsx" not in {p.name for p in plan.to_delete}
+    fam = _fam(plan, "daily_trade_review_report_*.xlsx")
+    assert "daily_trade_review_report_FINAL.xlsx" in {p.name for p, _ in plan.refused}
+    assert "daily_trade_review_report_FINAL.xlsx" not in {p.name for p in plan.to_delete}
     assert len(fam.keep) == KEEP_PER_FAMILY
     assert fam.undated == 1
 
@@ -139,6 +141,18 @@ def test_unknown_file_is_refused_and_never_deleted(tree):
     assert "STRAY_REPORT.xlsx" not in {p.name for p in plan.to_delete}
 
 
+def test_retired_daily_report_artefacts_are_refused_not_swept(tree):
+    """daily_report_* left the family list when the generator was retired
+    (29-Aug-2026). Dropping a family must not silently promote its leftovers to
+    deletable -- an unmanaged file is refused and logged, never swept."""
+    plan = build_plan(root=tree)
+    leftover = "daily_report_2026-01-05.xlsx"
+    assert leftover in {p.name for p, _ in plan.refused}
+    assert leftover not in {p.name for p in plan.to_delete}
+    apply_plan(plan, logging.getLogger("test"))
+    assert (tree / "reports" / "output" / leftover).exists()
+
+
 def test_apply_deletes_exactly_the_plan_and_leaves_keep_n(tree):
     plan = build_plan(root=tree)
     planned = {p.name for p in plan.to_delete}
@@ -147,7 +161,7 @@ def test_apply_deletes_exactly_the_plan_and_leaves_keep_n(tree):
     assert deleted == len(planned)
     assert freed > 0
     out = tree / "reports" / "output"
-    assert len(list(out.glob("daily_report_*.xlsx"))) == KEEP_PER_FAMILY
+    assert len(list(out.glob("daily_trade_review_report_*.xlsx"))) == KEEP_PER_FAMILY
     assert (out / ".gitkeep").exists()
     assert (tree / "logs" / "cron-officer.log").exists()
     assert not (planned & {p.name for p in out.iterdir()})
@@ -161,7 +175,7 @@ def test_apply_is_idempotent(tree):
 def test_symlink_is_refused_not_followed(tree, tmp_path):
     outside = tmp_path / "outside_target.xlsx"
     outside.write_bytes(b"do not touch")
-    link = tree / "reports" / "output" / "daily_report_2025-01-01.xlsx"
+    link = tree / "reports" / "output" / "daily_trade_review_report_2025-01-01.xlsx"
     try:
         link.symlink_to(outside)
     except (OSError, NotImplementedError):

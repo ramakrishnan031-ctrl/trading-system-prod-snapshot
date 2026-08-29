@@ -248,14 +248,21 @@ class TestExpectedHeartbeats:
         assert "gemini_data_integrity_check" in names  # 17:00 <= 18:00 (Bug A: key renamed)
 
     def test_phase_c_cutover_expectations(self, tmp_path):
-        """Phase C: the redesigned daily_trade_review (monitored) IS expected; the retired
-        daily_review (DELETED from the registry entirely) is NOT — so the Officer raises no
-        false MISSED for it; daily_report stays expected during the bake-in."""
+        """Phase C, completed 29-Aug-2026: daily_trade_review (monitored) IS expected.
+        Neither retired report is — daily_review was deleted from the registry outright,
+        daily_report was switched to enabled:false/monitored:false with its module kept.
+
+        Both must be ABSENT for the same reason: the Officer expects a heartbeat from
+        every monitored job, so a retired job left marked monitored would be reported
+        MISSED every single day — a permanent false CRITICAL for work nobody expects
+        to run. The bake-in ended when daily_report's three unique sheets (Capital,
+        Candles, Telegram) were ported into daily_trade_review.
+        """
         reg = load_cron_registry(_REAL)
         names = {j.name for j in reg.expected_heartbeat_jobs(MON, tmp_path)}
-        assert "daily_trade_review" in names       # new monitored report (16:07)
+        assert "daily_trade_review" in names       # the surviving monitored report (16:07)
         assert "daily_review" not in names         # retired — deleted from the registry
-        assert "daily_report" in names             # kept in parallel during bake-in
+        assert "daily_report" not in names         # RETIRED 29-Aug-2026 — module kept, cron off
 
 
 # ── validation ───────────────────────────────────────────────────────────────

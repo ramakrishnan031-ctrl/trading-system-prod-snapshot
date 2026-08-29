@@ -12,9 +12,20 @@ NEW consolidated, DB-PURE report generator. Tab order (Dashboard first):
                     ranking (transparent confidence-weighted composite). Aggregates the trades truth layer.
   Slippage        — 6 blocks: summary + 3-leg decomposition, band ("tier") analysis, strategy-wise,
                     stock-wise, worst-20, 10-day trend. From trade_slippage_log (slippage_recorder).
+  Capital         — per-trade capital ledger with a running balance from the fm_ledger INIT
+                    opening. PORTED from the retired daily_report (29-Aug-2026). Deliberately
+                    does NOT restate Reconciliation's "3 · CAPITAL" invariant — one number,
+                    one place.
+  Candles         — entry candle vs our entry/SL/TGT, excursions, missed profit and tune
+                    hints. PORTED. DB-only: daily_report's data_store/candles/*.csv fallback
+                    was NOT carried across (it would break the guardrail below).
+  Telegram        — PORTED, and NOT a delivery log: alert history is not in the DB, so the
+                    rows are reconstructed from trade events and the sheet says so on its
+                    own first row. 'Sent At'/'Delivery'/'Retries' are derived or literal.
   Config          — sectioned key/value of the day's resolved AppConfig (W0 config_snapshots).
-Runs PARALLEL to reports/daily_report.py + reports/daily_review.py — it does NOT edit,
-retire, or re-cron them.
+daily_report.py is RETIRED as of 29-Aug-2026 (cron_registry enabled:false, module left in
+place); its three unique sheets are the three marked PORTED above. daily_review.py is
+untouched.
 
     Output: reports/output/daily_trade_review_report_<YYYY-MM-DD>.xlsx
 
@@ -2362,6 +2373,434 @@ def render_dashboard_sheet(wb: openpyxl.Workbook, data: Dict[str, Any]) -> None:
 
 
 # ═════════════════════════════════════════════════════════════════════════════════
+# Capital / Candles / Telegram  —  ported from reports/daily_report.py (retired
+# 29-Aug-2026). Those three sheets existed ONLY there, so retiring the generator
+# without them would have dropped the coverage outright.
+#
+# DB-ONLY, and that is the whole constraint. Every field below comes from
+# StateStore. Two things were deliberately NOT carried across:
+#
+#   1. daily_report's CANDLE CSV FALLBACK (`if not candle_map:` -> read
+#      data_store/candles/*.csv). It is a filesystem read and would break this
+#      module's guardrail. The DB path is the primary one and is healthy
+#      (analytics.db `candles`, reached through StateStore's ATTACH: 1.37M rows
+#      across 49 trading days). A date with no candle rows now renders "—"
+#      rather than silently sourcing a CSV.
+#   2. daily_report's "CAPITAL SUMMARY" block (Opening / Closing / Net Realized).
+#      The Reconciliation sheet's "3 · CAPITAL" already derives those from
+#      fm_ledger, and daily_report's own comment conceded that block was the
+#      lesser one. Two places computing one number can disagree; only the
+#      per-trade ledger it uniquely had is carried over.
+# ═════════════════════════════════════════════════════════════════════════════════
+
+_PORTED_CLOSED_STATUSES = ("CLOSED", "CLOSED_MANUAL")
+
+
+def _entry_order_for(orders: List[Dict[str, Any]], trade_id: str) -> Dict[str, Any]:
+    """The ENTRY leg for a trade, or {}. Mirrors daily_report's lookup."""
+    for o in orders:
+        if o.get("trade_id") == trade_id and (o.get("leg") or "").upper() == "ENTRY":
+            return o
+    return {}
+
+
+def build_capital_data(store: StateStore, date_iso: str) -> Tuple[List[Dict[str, Any]],
+                                                                 Dict[str, Any]]:
+    """Per-trade capital ledger with a running balance (DB-only).
+
+    Opening comes from the fm_ledger INIT row -- the same source the
+    Reconciliation sheet uses -- and the balance then walks trade by trade.
+    """
+    trades = store.get_trades_for_date(date_iso)
+    orders = store.get_orders_for_date(date_iso)
+    signals = store.get_signals_for_date(date_iso)
+    ledger = store.get_fm_ledger_for_date(date_iso)
+
+    init_rows = [r for r in ledger if (r.get("entry_type") or "") == "INIT"]
+    opening = _f(init_rows[0].get("balance_after")) if init_rows else None
+
+    signal_map = {s.get("signal_id"): s for s in signals}
+    running = opening or 0.0
+    rows: List[Dict[str, Any]] = []
+
+    for sl_no, trade in enumerate(
+            sorted(trades, key=lambda t: t.get("created_at") or ""), start=1):
+        tid = trade.get("trade_id", "")
+        sig = signal_map.get(trade.get("signal_id"), {})
+        direction = (trade.get("direction") or "LONG").upper()
+
+        entry_order = _entry_order_for(orders, tid)
+        if entry_order:
+            side = "BUY" if direction == "LONG" else "SELL"
+            if (entry_order.get("variety") == "co"
+                    or entry_order.get("product") == "CO"):
+                trade_label = f"{side} CO"
+            else:
+                trade_label = f"{side} {entry_order.get('order_type', '')}".strip()
+        else:
+            trade_label = "LIMIT"
+
+        entry = _f(trade.get("entry_actual_price")) or _f(trade.get("entry_target_price")) or 0.0
+        qty = trade.get("qty_filled") or trade.get("qty_planned") or 0
+        sl_price = _f(trade.get("sl_initial")) or 0.0
+        tgt_price = _f(trade.get("tgt_initial")) or 0.0
+        net = _f(trade.get("net_pnl")) or 0.0
+
+        if direction == "LONG":
+            sl_risk = (entry - sl_price) * qty if entry and sl_price else 0.0
+            tgt_profit = (tgt_price - entry) * qty if entry and tgt_price else 0.0
+        else:
+            sl_risk = (sl_price - entry) * qty if entry and sl_price else 0.0
+            tgt_profit = (entry - tgt_price) * qty if entry and tgt_price else 0.0
+
+        running += net
+        rows.append({
+            "date": date_iso,
+            "time": _fmt_time(trade.get("created_at")),
+            "sl_no": sl_no,
+            "strategy": trade.get("strategy") or sig.get("strategy") or "UNKNOWN",
+            "symbol": trade.get("symbol", ""),
+            "direction": direction,
+            "trade": trade_label,
+            "position_value": round(entry * qty, 2),
+            "margin": round(_f(trade.get("margin_reserved")) or 0.0, 2),
+            "sl_risk": round(abs(sl_risk), 2) if sl_price else "—",
+            "tgt_profit": round(abs(tgt_profit), 2) if tgt_price else "—",
+            "result": trade.get("exit_reason") or trade.get("status") or "",
+            "net": round(net, 2),
+            # Carried across unpopulated, exactly as in daily_report: no writer
+            # records mid-day fund additions, so inventing a source here would
+            # manufacture a number the DB does not hold.
+            "funds_added": "",
+            "balance": round(running, 2),
+        })
+
+    meta = {"n": len(rows), "opening": opening, "closing": round(running, 2),
+            "has_opening": opening is not None}
+    return rows, meta
+
+
+_CAPITAL_COLS: List[Tuple[str, str, str, int]] = [
+    ("Trading Date", "date", "text", 12), ("Time of Order", "time", "text", 14),
+    ("Sl.No", "sl_no", "int", 7), ("Strategy", "strategy", "text", 16),
+    ("Stock", "symbol", "text", 14), ("Direction", "direction", "text", 10),
+    ("Trade", "trade", "text", 14),
+    ("Position Value", "position_value", "money", 15),
+    ("Margin Blocked", "margin", "money", 15),
+    ("SL Risk", "sl_risk", "money", 12),
+    ("Target Profit", "tgt_profit", "money", 12),
+    ("Result", "result", "text", 16),
+    ("P&L (Net of Costs)", "net", "money", 16),
+    ("Additional Funds Added", "funds_added", "money", 20),
+    ("Funds After Adjustment", "balance", "money", 20),
+]
+
+
+def render_capital_sheet(wb: openpyxl.Workbook, rows: List[Dict[str, Any]],
+                         meta: Dict[str, Any]) -> None:
+    ws = wb.create_sheet(title="Capital")
+    for c, (title, _k, _f_, width) in enumerate(_CAPITAL_COLS, start=1):
+        cell = ws.cell(row=1, column=c, value=title)
+        cell.font = FONT_HEADER
+        cell.fill = FILL_HEADER
+        cell.alignment = ALIGN_CENTER
+        cell.border = BORDER_ALL
+        ws.column_dimensions[get_column_letter(c)].width = width
+    ws.freeze_panes = "A2"
+
+    r = 2
+    # Opening row: the fm_ledger INIT balance the ledger walks from.
+    opening_label = (meta["opening"] if meta["has_opening"]
+                     else "— no fm_ledger INIT row for this date")
+    ws.cell(row=r, column=1, value=meta.get("date", "")).border = BORDER_ALL
+    ws.cell(row=r, column=3, value="Opening").font = FONT_HEADER
+    ws.cell(row=r, column=7, value="Initial Capital").border = BORDER_ALL
+    oc = ws.cell(row=r, column=15, value=opening_label)
+    oc.border = BORDER_ALL
+    if meta["has_opening"]:
+        oc.number_format = NUM_FMT_CURRENCY
+    for c in range(1, len(_CAPITAL_COLS) + 1):
+        ws.cell(row=r, column=c).fill = FILL_GREY
+        ws.cell(row=r, column=c).border = BORDER_ALL
+    r += 1
+
+    first_data_row = r
+    for rec in rows:
+        for c, (_t, key, fmt, _w) in enumerate(_CAPITAL_COLS, start=1):
+            cell = ws.cell(row=r, column=c, value=rec.get(key))
+            cell.font = FONT_BODY
+            cell.border = BORDER_ALL
+            nf = _num_format(fmt)
+            if nf and isinstance(rec.get(key), (int, float)):
+                cell.number_format = nf
+            if key == "net" and isinstance(rec.get(key), (int, float)):
+                cell.fill = FILL_GREEN if rec[key] > 0 else (
+                    FILL_RED if rec[key] < 0 else cell.fill)
+        r += 1
+
+    if rows:
+        ws.cell(row=r, column=2, value="CLOSING (EOD)").font = FONT_HEADER
+        for c in (8, 9, 10, 11, 13):
+            col = get_column_letter(c)
+            cell = ws.cell(row=r, column=c,
+                           value=f"=SUM({col}{first_data_row}:{col}{r - 1})")
+            cell.number_format = NUM_FMT_CURRENCY
+        bal = ws.cell(row=r, column=15, value=meta["closing"])
+        bal.number_format = NUM_FMT_CURRENCY
+        for c in range(1, len(_CAPITAL_COLS) + 1):
+            ws.cell(row=r, column=c).fill = FILL_GREY
+            ws.cell(row=r, column=c).font = FONT_HEADER
+            ws.cell(row=r, column=c).border = BORDER_ALL
+
+
+def build_candles_data(store: StateStore, date_iso: str) -> Tuple[List[Dict[str, Any]],
+                                                                 Dict[str, Any]]:
+    """Entry-candle vs our levels, with excursions and tune hints (DB-only).
+
+    NOTE: no CSV fallback. daily_report read data_store/candles/*.csv when the DB
+    returned nothing; that is a filesystem read and cannot live in this module.
+    A date with no candle rows renders "—".
+    """
+    trades = store.get_trades_for_date(date_iso)
+    orders = store.get_orders_for_date(date_iso)
+    signals = store.get_signals_for_date(date_iso)
+    signal_map = {s.get("signal_id"): s for s in signals}
+
+    candle_map: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    for c in store.get_candles_for_date(date_iso):
+        ts = c.get("ts") or ""
+        hhmm = ts[11:16] if len(ts) >= 16 else ""
+        if hhmm:
+            candle_map[(c.get("symbol", ""), hhmm)] = c
+    excursions = {r.get("trade_id"): r
+                  for r in store.get_trade_excursions_for_date(date_iso)}
+
+    rows: List[Dict[str, Any]] = []
+    for trade in [t for t in trades if t.get("status") in _PORTED_CLOSED_STATUSES]:
+        tid = trade.get("trade_id", "")
+        sig = signal_map.get(trade.get("signal_id"), {})
+        direction = (trade.get("direction") or "LONG").upper()
+
+        our_entry = _f(trade.get("entry_actual_price")) or _f(trade.get("entry_target_price")) or 0.0
+        our_sl = _f(trade.get("sl_initial")) or 0.0
+        our_tgt = _f(trade.get("tgt_initial")) or 0.0
+        exit_price = _f(trade.get("exit_price")) or 0.0
+        exit_reason = trade.get("exit_reason") or ""
+
+        exc = excursions.get(tid, {})
+        max_fav = _f(exc.get("mfe_price")) or exit_price
+        max_adv = _f(exc.get("mae_price")) or exit_price
+
+        if direction == "LONG":
+            missed = our_tgt - max_fav if our_tgt > max_fav else 0.0
+        else:
+            missed = max_fav - our_tgt if our_tgt < max_fav else 0.0
+
+        tune = ""
+        if exit_reason in ("SL_HIT", "SL") and our_sl and exit_price:
+            drift = ((our_sl - exit_price) if direction == "LONG"
+                     else (exit_price - our_sl)) / our_sl
+            if drift > 0.003:
+                tune = (f"⚠️ SL hit at {exit_price:.2f} vs placed {our_sl:.2f} "
+                        f"— consider +0.5% SL buffer")
+        elif exit_reason == "EOD" and our_tgt:
+            gap_pct = abs(our_tgt - max_fav) / our_tgt * 100
+            if 0 < gap_pct <= 1.0:
+                tune = (f"ℹ️ TGT {our_tgt:.2f} not reached — max favourable "
+                        f"{max_fav:.2f} (missed ₹{missed:.2f})")
+        elif exit_reason in ("TGT_HIT", "TGT"):
+            tune = "✅ TGT hit perfectly — no tuning needed"
+
+        entry_hhmm = _fmt_time(trade.get("entry_time"))[:5]
+        candle = candle_map.get((trade.get("symbol", ""), entry_hhmm), {})
+
+        def _lvl(exc_key: str, candle_key: str):
+            return exc.get(exc_key) or candle.get(candle_key) or "—"
+
+        rows.append({
+            "date": date_iso,
+            "trade_id": (tid[:8] + "...") if len(tid) > 8 else tid,
+            "strategy": trade.get("strategy") or sig.get("strategy") or "",
+            "symbol": trade.get("symbol", ""),
+            "broker_order_id": _entry_order_for(orders, tid).get("order_id", ""),
+            "entry_time": _fmt_time(trade.get("entry_time")),
+            "open": _lvl("entry_candle_open", "open"),
+            "high": _lvl("entry_candle_high", "high"),
+            "low": _lvl("entry_candle_low", "low"),
+            "close": _lvl("entry_candle_close", "close"),
+            "synthetic": ("Yes" if candle.get("is_synthetic")
+                          else ("No" if candle else "N/A")),
+            "our_entry": round(our_entry, 2),
+            "our_sl": round(our_sl, 2),
+            "our_tgt": round(our_tgt, 2),
+            "matched": "Y" if exit_reason in ("TGT_HIT", "TGT") else "N",
+            "max_fav": round(max_fav, 2),
+            "max_adv": round(max_adv, 2),
+            "missed": round(missed, 2),
+            "tune": tune,
+        })
+
+    return rows, {"n": len(rows), "candle_rows": len(candle_map)}
+
+
+_CANDLE_COLS: List[Tuple[str, str, str, int]] = [
+    ("Trading Date", "date", "text", 12), ("Trade ID", "trade_id", "text", 14),
+    ("Strategy", "strategy", "text", 16), ("Symbol", "symbol", "text", 14),
+    ("Broker Order ID", "broker_order_id", "text", 18),
+    ("Entry Time", "entry_time", "text", 12),
+    ("Open", "open", "num2", 10), ("High", "high", "num2", 10),
+    ("Low", "low", "num2", 10), ("Close", "close", "num2", 10),
+    ("Synthetic?", "synthetic", "text", 11),
+    ("Our Entry", "our_entry", "num2", 11), ("Our SL", "our_sl", "num2", 11),
+    ("Our TGT", "our_tgt", "num2", 11), ("Matched?", "matched", "text", 10),
+    ("Max Favourable", "max_fav", "num2", 14),
+    ("Max Adverse", "max_adv", "num2", 14),
+    ("Missed Profit", "missed", "money", 14),
+    ("Tune Suggestion", "tune", "text", 60),
+]
+
+
+def render_candles_sheet(wb: openpyxl.Workbook, rows: List[Dict[str, Any]],
+                         meta: Dict[str, Any]) -> None:
+    ws = wb.create_sheet(title="Candles")
+    for c, (title, _k, _f_, width) in enumerate(_CANDLE_COLS, start=1):
+        cell = ws.cell(row=1, column=c, value=title)
+        cell.font = FONT_HEADER
+        cell.fill = FILL_HEADER
+        cell.alignment = ALIGN_CENTER
+        cell.border = BORDER_ALL
+        ws.column_dimensions[get_column_letter(c)].width = width
+    ws.freeze_panes = "A2"
+
+    r = 2
+    if not rows:
+        note = ("No closed trades for this date."
+                if meta.get("candle_rows") else
+                "No candle rows in the DB for this date — the CSV fallback is "
+                "deliberately not used here (DB-only guardrail).")
+        ws.cell(row=r, column=1, value=note).font = FONT_BODY
+        return
+
+    for rec in rows:
+        for c, (_t, key, fmt, _w) in enumerate(_CANDLE_COLS, start=1):
+            cell = ws.cell(row=r, column=c, value=rec.get(key))
+            cell.font = FONT_BODY
+            cell.border = BORDER_ALL
+            nf = _num_format(fmt)
+            if nf and isinstance(rec.get(key), (int, float)):
+                cell.number_format = nf
+        r += 1
+
+
+def build_telegram_data(store: StateStore, date_iso: str) -> Tuple[List[Dict[str, Any]],
+                                                                  Dict[str, Any]]:
+    """Ported VERBATIM from daily_report's 5_Telegram, including its own caveat.
+
+    ⛔ THIS IS NOT A DELIVERY LOG. Telegram alert history is not stored in the
+    database; the sheet reconstructs what an alert WOULD have carried, from
+    trades + signals. `module`, `delivery` and `retries` are literals in the
+    source and are kept as literals here -- they assert nothing about a real
+    send. The header rows carry that statement onto the sheet itself so the
+    caveat cannot be separated from the data. Real delivery evidence lives in
+    the CRITICAL sentinels, alert_watcher's log and F's per-channel records.
+    """
+    trades = store.get_trades_for_date(date_iso)
+    signals = store.get_signals_for_date(date_iso)
+    signal_map = {s.get("signal_id"): s for s in signals}
+
+    rows: List[Dict[str, Any]] = []
+    for trade in sorted(trades, key=lambda t: t.get("created_at") or ""):
+        tid = trade.get("trade_id", "")
+        _sig = signal_map.get(trade.get("signal_id"), {})
+        entry = _f(trade.get("entry_actual_price")) or _f(trade.get("entry_target_price")) or 0.0
+        qty = trade.get("qty_filled") or trade.get("qty_planned") or 0
+        net = _f(trade.get("net_pnl")) or 0.0
+        exit_reason = trade.get("exit_reason") or ""
+
+        alert_type = "ORDER_PLACED"
+        if exit_reason in ("SL_HIT", "SL"):
+            alert_type = "SL_HIT"
+        elif exit_reason in ("TGT_HIT", "TGT"):
+            alert_type = "TGT_HIT"
+        elif exit_reason == "EOD":
+            alert_type = "EOD_EXIT"
+
+        rows.append({
+            "date": date_iso,
+            "sent_at": _fmt_time(trade.get("entry_time") or trade.get("created_at")),
+            "module": "order_placer",          # literal in the source
+            "alert_type": alert_type,
+            "symbol": trade.get("symbol", ""),
+            "qty": qty,
+            "entry": round(entry, 2),
+            "sl": round(_f(trade.get("sl_initial")) or 0.0, 2),
+            "tgt": round(_f(trade.get("tgt_initial")) or 0.0, 2),
+            "total": round(entry * qty, 2),
+            "sl_hit": round(net, 2) if alert_type == "SL_HIT" else "",
+            "tgt_hit": round(net, 2) if alert_type == "TGT_HIT" else "",
+            "net": round(net, 2),
+            "trade_id": (tid[:12] + "...") if len(tid) > 12 else tid,
+            "delivery": "SENT",                # literal in the source
+            "retries": 0,                      # literal in the source
+            "message": (f"{trade.get('direction', '')} "
+                        f"{trade.get('symbol', '')} @ {entry:.2f}"),
+        })
+
+    return rows, {"n": len(rows)}
+
+
+_TELEGRAM_COLS: List[Tuple[str, str, str, int]] = [
+    ("Trading Date", "date", "text", 12), ("Sent At", "sent_at", "text", 12),
+    ("Module", "module", "text", 14), ("Alert Type", "alert_type", "text", 14),
+    ("Symbol", "symbol", "text", 14),
+    ("Qty", "qty", "int", 8), ("Entry Price", "entry", "num2", 12),
+    ("SL", "sl", "num2", 11), ("TGT", "tgt", "num2", 11),
+    ("Total Amount", "total", "money", 14),
+    ("SL Hit ₹", "sl_hit", "money", 12), ("TGT Hit ₹", "tgt_hit", "money", 12),
+    ("Net P&L ₹", "net", "money", 13), ("Trade ID", "trade_id", "text", 16),
+    ("Delivery", "delivery", "text", 10), ("Retries", "retries", "int", 9),
+    ("Full Message", "message", "text", 34),
+]
+
+
+def render_telegram_sheet(wb: openpyxl.Workbook, rows: List[Dict[str, Any]],
+                          meta: Dict[str, Any]) -> None:
+    ws = wb.create_sheet(title="Telegram")
+    # The caveat rides ON the sheet, exactly as daily_report placed it: the data
+    # must never be read as a delivery record.
+    warn = ws.cell(row=1, column=1,
+                   value="Telegram alert history is NOT stored in the database. "
+                         "Rows below are RECONSTRUCTED from trade events — "
+                         "'Sent At', 'Delivery' and 'Retries' are derived or "
+                         "literal, and are not evidence that any alert was sent.")
+    warn.font = FONT_HEADER
+    warn.fill = FILL_AMBER
+    warn.alignment = ALIGN_LEFT
+    ws.merge_cells(start_row=1, start_column=1,
+                   end_row=1, end_column=len(_TELEGRAM_COLS))
+
+    for c, (title, _k, _f_, width) in enumerate(_TELEGRAM_COLS, start=1):
+        cell = ws.cell(row=2, column=c, value=title)
+        cell.font = FONT_HEADER
+        cell.fill = FILL_HEADER
+        cell.alignment = ALIGN_CENTER
+        cell.border = BORDER_ALL
+        ws.column_dimensions[get_column_letter(c)].width = width
+    ws.freeze_panes = "A3"
+
+    r = 3
+    for rec in rows:
+        for c, (_t, key, fmt, _w) in enumerate(_TELEGRAM_COLS, start=1):
+            cell = ws.cell(row=r, column=c, value=rec.get(key))
+            cell.font = FONT_BODY
+            cell.border = BORDER_ALL
+            nf = _num_format(fmt)
+            if nf and isinstance(rec.get(key), (int, float)):
+                cell.number_format = nf
+        r += 1
+
+
+# ═════════════════════════════════════════════════════════════════════════════════
 # Entry point
 # ═════════════════════════════════════════════════════════════════════════════════
 
@@ -2373,15 +2812,24 @@ def generate(store: StateStore, date_iso: str, output_dir: Path) -> Path:
     sdata = build_strategy_data(store, date_iso, records, srecords, meta)
     slipdata = build_slippage_data(store, date_iso, records, meta)
     ddata = build_dashboard_data(store, date_iso, records, srecords, meta, smeta, sdata, slipdata, rmeta)
+    # Ported from the retired daily_report (29-Aug-2026): its only three
+    # non-duplicated sheets.
+    caprows, capmeta = build_capital_data(store, date_iso)
+    capmeta["date"] = date_iso
+    canrows, canmeta = build_candles_data(store, date_iso)
+    tgrows, tgmeta = build_telegram_data(store, date_iso)
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
-    # Render in the FINAL tab order (Dashboard first, then the six detail sheets).
+    # Render in the FINAL tab order (Dashboard first, then the detail sheets).
     render_dashboard_sheet(wb, ddata)
     render_reconciliation_sheet(wb, rblocks, rmeta)
     render_orders_sheet(wb, records, meta)
     render_signals_sheet(wb, srecords, smeta)
     render_strategies_sheet(wb, sdata)
     render_slippage_sheet(wb, slipdata)
+    render_capital_sheet(wb, caprows, capmeta)
+    render_candles_sheet(wb, canrows, canmeta)
+    render_telegram_sheet(wb, tgrows, tgmeta)
     render_config_sheet(wb, csections, cmeta)
     output_dir.mkdir(parents=True, exist_ok=True)
     out = output_dir / f"daily_trade_review_report_{date_iso}.xlsx"

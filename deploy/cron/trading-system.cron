@@ -108,9 +108,6 @@ SHELL=/bin/bash
 # generate_screened_csv  [16:01 Mon-Fri]
 1 16 * * 1-5 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && /home/ubuntu/systems/venv/bin/python scripts/generate_screened_stocks_csv.py >> logs/cron-screened-stocks.log 2>&1
 
-# daily_report  [16:05 Mon-Fri]
-5 16 * * 1-5 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && /home/ubuntu/systems/venv/bin/python -m reports.daily_report >> logs/daily_report.log 2>&1
-
 # daily_trade_review  [16:07 Mon-Fri]
 7 16 * * 1-5 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python reports/daily_trade_review.py >> logs/cron-daily-trade-review.log 2>&1
 

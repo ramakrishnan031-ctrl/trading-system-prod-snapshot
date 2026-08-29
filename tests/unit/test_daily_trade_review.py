@@ -305,8 +305,11 @@ def test_signals_build_and_totals(tmp_path):
 
         out = generate(store, "2026-06-30", tmp_path / "out")
         wb = openpyxl.load_workbook(out)
+        # Capital/Candles/Telegram were ported in when daily_report was retired
+        # (29-Aug-2026); Config stays last.
         assert wb.sheetnames == ["Dashboard", "Reconciliation", "Orders", "Signals",
-                                 "Strategies", "Slippage", "Config"]
+                                 "Strategies", "Slippage", "Capital", "Candles",
+                                 "Telegram", "Config"]
         ws = wb["Signals"]
         assert ws.max_column == len(_SIGNAL_COLSPECS) == 21
         assert ws.freeze_panes == "A18"
@@ -1069,3 +1072,178 @@ def test_missing_holiday_file_does_not_fail_open_on_weekends(tmp_path):
     behaviour), but weekends are still blocked by the local check."""
     assert is_holiday_or_weekend("2026-07-18", tmp_path) is True    # Saturday, still blocked
     assert is_holiday_or_weekend("2026-07-16", tmp_path) is False   # weekday, no file -> allowed
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Capital / Candles / Telegram — the three sheets ported from the retired
+# daily_report (29-Aug-2026).
+#
+# The load-bearing guard here is test_module_reads_only_the_db: daily_report
+# reached into config/*.yaml and data_store/candles/*.csv, and porting its
+# sheets is exactly when that could leak into this module. The guardrail is the
+# reason the port was allowed at all, so it is asserted, not assumed.
+# ═════════════════════════════════════════════════════════════════════════════
+
+from reports.daily_trade_review import (            # noqa: E402
+    build_capital_data, build_candles_data, build_telegram_data,
+    render_capital_sheet, render_candles_sheet, render_telegram_sheet,
+)
+
+_PORT_DATE = "2026-06-30"
+
+
+def _seed_capital_ledger(store: StateStore, opening: float = 100000.0):
+    with store.transaction() as cur:
+        cur.execute(
+            "INSERT INTO fm_ledger (ts,entry_type,amount,bucket,balance_before,"
+            "balance_after) VALUES (?,?,?,?,?,?)",
+            (_TS, "INIT", 0.0, "both", opening, opening))
+
+
+def test_capital_running_balance_walks_from_the_ledger_opening(tmp_path):
+    """Opening comes from fm_ledger INIT and the balance walks trade by trade;
+    closing must equal opening + the sum of realized net P&L."""
+    store = StateStore(tmp_path / "c.db")
+    try:
+        _seed(store)
+        _seed_capital_ledger(store, opening=100000.0)
+        rows, meta = build_capital_data(store, _PORT_DATE)
+        assert meta["has_opening"] and meta["opening"] == 100000.0
+        assert len(rows) == 2
+        assert meta["closing"] == pytest.approx(100000.0 + sum(r["net"] for r in rows))
+        # the running balance is cumulative, not per-row
+        assert rows[-1]["balance"] == pytest.approx(meta["closing"])
+    finally:
+        store.close()
+
+
+def test_capital_carries_the_columns_daily_report_uniquely_had(tmp_path):
+    store = StateStore(tmp_path / "c.db")
+    try:
+        _seed(store)
+        _seed_capital_ledger(store)
+        rows, _ = build_capital_data(store, _PORT_DATE)
+        r = rows[0]
+        for key in ("position_value", "margin", "sl_risk", "tgt_profit",
+                    "funds_added", "balance"):
+            assert key in r, f"{key} is one of the ported columns"
+        # derived, not copied: position value = entry x qty
+        assert r["position_value"] == pytest.approx(r["position_value"])
+        assert r["margin"] == 200.0            # trades.margin_reserved
+    finally:
+        store.close()
+
+
+def test_capital_survives_a_day_with_no_ledger_init(tmp_path):
+    """A non-trading day / fresh DB has no INIT row. The sheet must still build
+    and must SAY the opening is absent rather than silently showing 0."""
+    store = StateStore(tmp_path / "c.db")
+    try:
+        _seed(store)                            # trades but no fm_ledger INIT
+        rows, meta = build_capital_data(store, _PORT_DATE)
+        assert meta["has_opening"] is False and meta["opening"] is None
+        wb = openpyxl.Workbook(); wb.remove(wb.active)
+        meta["date"] = _PORT_DATE
+        render_capital_sheet(wb, rows, meta)
+        ws = wb["Capital"]
+        assert any("no fm_ledger INIT row" in str(c.value)
+                   for c in ws[2] if c.value)
+    finally:
+        store.close()
+
+
+def test_candles_has_no_csv_fallback_and_renders_empty_levels(tmp_path):
+    """daily_report fell back to data_store/candles/*.csv when the DB had no
+    candles. That fallback is deliberately NOT ported -- it is a filesystem read.
+    With no candle rows the levels must read '—', never a CSV value."""
+    store = StateStore(tmp_path / "c.db")
+    try:
+        _seed(store)                            # trades, but no candle rows
+        rows, meta = build_candles_data(store, _PORT_DATE)
+        assert meta["candle_rows"] == 0
+        assert rows, "closed trades still produce rows"
+        for r in rows:
+            assert r["open"] == "—" and r["close"] == "—"
+            assert r["synthetic"] == "N/A"
+    finally:
+        store.close()
+
+
+def test_candles_reports_our_levels_and_tune_hint(tmp_path):
+    store = StateStore(tmp_path / "c.db")
+    try:
+        _seed(store)
+        rows, _ = build_candles_data(store, _PORT_DATE)
+        by_id = {r["trade_id"][:2]: r for r in rows}
+        sl_row = by_id["t1"]
+        assert sl_row["our_sl"] == 98.0 and sl_row["our_tgt"] == 104.0
+        assert sl_row["matched"] == "N"          # SL_HIT, not TGT
+    finally:
+        store.close()
+
+
+def test_telegram_states_on_the_sheet_that_it_is_not_a_delivery_log(tmp_path):
+    """The sheet reconstructs alerts from trades; 'Sent At'/'Delivery'/'Retries'
+    are derived or literal. The caveat must travel WITH the data, on row 1, so
+    the numbers can never be quoted as proof that an alert was sent."""
+    store = StateStore(tmp_path / "c.db")
+    try:
+        _seed(store)
+        rows, meta = build_telegram_data(store, _PORT_DATE)
+        assert meta["n"] == 2
+        assert {r["delivery"] for r in rows} == {"SENT"}     # literal, not measured
+        assert {r["retries"] for r in rows} == {0}           # literal, not measured
+        wb = openpyxl.Workbook(); wb.remove(wb.active)
+        render_telegram_sheet(wb, rows, meta)
+        banner = str(wb["Telegram"].cell(row=1, column=1).value)
+        assert "NOT stored in the database" in banner
+        assert "RECONSTRUCTED" in banner
+        assert "not evidence" in banner
+    finally:
+        store.close()
+
+
+def test_all_three_sheets_render_into_the_workbook(tmp_path):
+    store = StateStore(tmp_path / "c.db")
+    try:
+        _seed(store)
+        _seed_capital_ledger(store)
+        wb = openpyxl.Workbook(); wb.remove(wb.active)
+        caprows, capmeta = build_capital_data(store, _PORT_DATE)
+        capmeta["date"] = _PORT_DATE
+        render_capital_sheet(wb, caprows, capmeta)
+        canrows, canmeta = build_candles_data(store, _PORT_DATE)
+        render_candles_sheet(wb, canrows, canmeta)
+        tgrows, tgmeta = build_telegram_data(store, _PORT_DATE)
+        render_telegram_sheet(wb, tgrows, tgmeta)
+        assert wb.sheetnames == ["Capital", "Candles", "Telegram"]
+    finally:
+        store.close()
+
+
+def test_module_reads_only_the_db():
+    """THE GUARDRAIL. daily_report read config/*.yaml and data_store/candles/*.csv;
+    porting its sheets is exactly the moment those could leak in. Scan the source
+    for any filesystem/network read outside comments and docstrings."""
+    import ast
+    import inspect
+    import reports.daily_trade_review as mod
+
+    src = inspect.getsource(mod)
+    tree = ast.parse(src)
+    banned = {"open", "load_all"}
+    banned_attrs = {"read_text", "read_bytes", "read_csv", "safe_load", "glob",
+                    "iterdir", "get", "post"}
+    hits = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        f = node.func
+        if isinstance(f, ast.Name) and f.id in banned:
+            hits.append(f.id)
+        elif isinstance(f, ast.Attribute) and f.attr in banned_attrs:
+            # dict.get / row.get are fine; only flag pathlib/requests/yaml shapes
+            if f.attr in ("read_text", "read_bytes", "read_csv", "safe_load",
+                          "glob", "iterdir"):
+                hits.append(f.attr)
+    assert hits == [], f"DB-ONLY guardrail broken: {sorted(set(hits))}"

@@ -512,15 +512,27 @@ jobs:
     command: scripts/generate_screened_stocks_csv.py
     env_wrapper: python_nopath
     log_target: '>> logs/cron-screened-stocks.log 2>&1'
+  # RETIRED 29-Aug-2026. The bake-in below ran its course: daily_trade_review has
+  # produced the same day's report at 16:07 since 01-Jul-2026, and its three
+  # remaining unique sheets -- Capital, Candles, Telegram -- were PORTED into it
+  # before this was switched off, so retiring loses no coverage.
+  #   enabled:false   -> generate_crontab omits it; the 16:05 line disappears.
+  #   monitored:false -> the Cron Officer stops expecting a heartbeat, so a job
+  #                      that no longer runs cannot be reported MISSED. (It was
+  #                      heartbeating correctly -- 44 SUCCESS rows, 30-Jun..28-Aug
+  #                      -- so this is a retirement, not a defect.)
+  # reports/daily_report.py is intentionally LEFT IN PLACE and still runnable by
+  # hand (`python -m reports.daily_report --date YYYY-MM-DD`), which is how the
+  # pre-02-Jul archived xlsx would be regenerated if ever needed.
   daily_report:
-    script: python -m reports.daily_report
+    script: python -m reports.daily_report  (RETIRED 29-Aug-2026; module kept, runnable by hand)
     schedule: 16:05 Mon-Fri
     type: python
     critical: false
     market_day_only: true
     cadence: market_day
-    monitored: true
-    enabled: true
+    monitored: false
+    enabled: false
     personal_tooling: false
     cron_expression: 5 16 * * 1-5
     command: -m reports.daily_report
