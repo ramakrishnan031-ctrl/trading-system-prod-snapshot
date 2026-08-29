@@ -1601,3 +1601,124 @@ the **explicit refspec `c90aa00:refs/heads/main`**, ⛔ never `git push origin m
 3. **Deployment order matters**: this branch is based on `2bfe9e2`. If `origin/main`
    has moved by tomorrow evening, this needs a refit onto the new tip, its own
    verification run, and a new exact SHA — ⛔ never deploy the pre-refit hash.
+
+---
+
+## WINDOW: 29-Aug-2026 (Sat) — F/D-1b, alert email move, output retention, cron-officer hygiene, sats cleanup
+
+**Branch:** `fix/mis-autosquareoff-28aug`, off `effff24` (= `origin/main` at window open).
+**Base at window open:** `origin/main` = `effff24`.
+⛔ Rollback TREE stays `52ccb4f` throughout — none of the 8 commits below touch the
+rollback anchor.
+
+### Entry 21 — 8 commits, one session, ⛔ NOT PUSHED, ⛔ NOT DEPLOYED
+
+**Date/time:** 2026-08-29 (Sat)
+**Pushed: NO · Deployed: NO**
+
+In commit order, oldest → newest:
+
+1. **`38de90f`** refactor(mis): extract the timing contract to core/ so F need not
+   import the orchestrator.
+   Moved the MIS square-off timing contract to `core/mis_squareoff_timing.py` so F
+   (below) can be built without importing the orchestrator module.
+   **Gate:** Δ0. 📄 Per the FILE 56 card (prior session) — not independently
+   re-measured this session.
+
+2. **`22a143f`** feat(alerts): F/D-1b — human-facing delivery for the MIS
+   square-off CRITICALs.
+   Built F (`alerts/mis_squareoff_notifier.py`) — two independent channels
+   (email + Telegram), 08:15 boot self-test + ~15:05 pre-cutover self-test, wired
+   into `main.py` ahead of the orchestrator so an orchestrator failure can't take F
+   down with it.
+   **Gate:** Δ+29 (F's own test suite). 📄 Per the FILE 56 card — not
+   independently re-measured this session.
+
+3. **`0823b75`** config(alerts): the alert email path leaves the operator's
+   personal address.
+   `alerts.smtp` moved `username`/`from_address`/`to_addresses[0]` from
+   `ramakrishnan031@gmail.com` to `pythonsystemalerts@gmail.com` — 3 lines,
+   config only.
+   **Gate:** 🔬 10F/5985P/4S — identical failing set to the `22a143f` baseline,
+   Δ0.
+   🔴 **ALREADY LIVE — not waiting for Sunday.** The VM's `.env` and deployed
+   `config/system_config.yaml` were patched manually, out-of-band, in this same
+   session, and both the live `alert_watcher` path and F's email channel were
+   proven with real sends received in the new inbox (confirmed by Rama, no spam).
+   Re-measured just now: VM `alerts.smtp.username` = `pythonsystemalerts@gmail.com`.
+   Sunday's `checkout -f` will overwrite the VM's config with this commit's
+   content — a **no-op** for this file, confirmed by md5 match at commit time.
+
+4. **`12c4ab1`** feat(ops): keep-N retention for reports/output and logs,
+   registered and monitored.
+   New `scripts/output_retention.py` — keeps the newest 7 files per family,
+   ranked by **filename date** (not mtime, which drifts), in `reports/output/`
+   and `logs/`; registered in `cron_registry.yaml` at 02:10 daily,
+   `monitored: true` with its own heartbeat (success + failure paths).
+   **Gate:** 🔬 10F/5996P/5S — identical failing set, Δ = +11P/+1S (new tests).
+   🔴 **PENDING SUNDAY — genuinely not live.** Re-measured just now: VM crontab
+   has **0** `output_retention` lines. The job does not exist on the VM until
+   Sunday's push installs the regenerated crontab.
+
+5. **`1a1cb25`** fix(cron-officer): drop the "daily_report heartbeat is pending"
+   line — it is false.
+   Removed a hardcoded EOD-report line claiming daily_report had no heartbeat.
+   🔬 MEASURED false since 30-Jun-2026 (44 consecutive SUCCESS rows,
+   `cron_heartbeat` table).
+   **Gate:** 🔬 10F/5996P/5S — identical, Δ0 (text-only).
+
+6. **`dee5fcf`** fix(cron-officer): daily_report can be reported FAILED or
+   MISSED again.
+   Removed `daily_report` from `_PENDING_REDESIGN_JOBS` — closes the blind spot
+   where the classifier returned **before ever reading the heartbeat**, so the
+   job could never be reported FAILED/MISSED. The suppression set is now empty;
+   the mechanism itself is kept for a future genuine deferral.
+   **Gate:** 🔬 10F/5998P/5S — identical, Δ = +2 net tests (1 pinning test
+   replaced by 3 guards; verified RED against the old behaviour before being
+   accepted).
+
+7. **`bee9755`** feat(reports): port Capital/Candles/Telegram into
+   daily_trade_review, retire daily_report.
+   Ported daily_report's 3 sheets that had no counterpart (verified **DB-only**
+   sourceable BEFORE any code moved — the target module carries a DB-ONLY
+   guardrail) into daily_trade_review; then retired daily_report
+   (`enabled: false, monitored: false` in the registry; `reports/daily_report.py`
+   left in place, still runnable by hand); dropped `daily_report_*` from
+   `output_retention`'s families.
+   **Gate:** 🔬 **FIRST RUN WAS RED** — 12F/6005P/5S. Two tests broke on the
+   retirement (an escalation guard and a registry-expectation test, both still
+   assuming daily_report was a live heartbeat job) and were corrected, not
+   suppressed. Re-gated: 10F/6007P/5S — identical to baseline, Δ = +9P.
+   🔴 **PENDING SUNDAY — genuinely not live.** Re-measured just now: VM crontab
+   **still runs** `daily_report` at 16:05 Mon–Fri. Retirement takes effect only
+   when Sunday's push installs the regenerated crontab.
+
+8. **`be79490`** chore(sats): delete venvs, archive 27 KB, correct runbooks.
+   Deleted the 415 MB `sats/` static-analysis tool venvs (git-ignored, never
+   deployed, untouched for 68 days); archived the 27 KB real work product to
+   `docs/archive/sats_20260622/` (now tracked for the first time); corrected the
+   PATHS.md / SYSTEM_MAP.md runbook sections to match.
+   **Gate:** 🔬 10F/6007P/5S — identical, Δ0 (docs + archive only).
+
+### 🔴 THREE THAT CHANGE LIVE BEHAVIOUR ON BOOT — read before Sunday
+
+| # | Domain | Commit(s) | Status right now (re-measured 29-Aug) |
+|---|---|---|---|
+| 1 | Email destination | `0823b75` | ✅ **ALREADY LIVE** — manual out-of-band VM change, this session. Sunday's push is a no-op for it. |
+| 2 | File retention | `12c4ab1` | ⏸ **PENDING** — new nightly 02:10 deletion job. VM crontab confirmed to have zero `output_retention` lines right now. |
+| 3 | daily_report's alerting status | `1a1cb25` → `dee5fcf` → `bee9755` | ⏸ **PENDING** — net effect is retirement (`bee9755`). VM crontab confirmed still running it at 16:05 right now. |
+
+⚠️ **Item 3 is a 3-commit arc, not one commit — and they must land together.**
+`1a1cb25` + `dee5fcf` make daily_report's heartbeat honest and its silence
+escalatable; `bee9755` then retires the job outright, which is what actually
+changes what runs at boot Monday. A daily_report that is monitored but not
+retired (or retired with the stale blind-spot logic shipped separately) is
+exactly the "partially accepted" shape this ledger exists to catch — ⛔ do not
+split this push.
+
+### origin/main
+🔴 **`origin/main` = `effff24` — unmoved all day, re-measured at window close.**
+All 8 commits ride Sunday's push together, as one unit, in the order above.
+⛔ **Never resolve `origin/main` from this entry at push time** — measure it
+fresh with `git push --dry-run origin be79490:refs/heads/main` at the moment of
+push, per the standing rule (M8 / gate-time measurement, never a card's SHA).
