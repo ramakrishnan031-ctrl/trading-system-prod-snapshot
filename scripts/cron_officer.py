@@ -695,8 +695,7 @@ def build_report(registry: CronRegistry, store: StateStore, today: date,
     added, removed = _change_log(registry, today, audit_dir) if is_eod else ([], [])
     excluded = [(j.name, j.excluded_reason or "")
                 for j in registry.all_jobs() if j.excluded_reason]
-    extra = [wline,
-             "Known: daily_report heartbeat is pending the xlsx redesign (shown ⏸ Pending)."]
+    extra = [wline]
     if is_eod:
         extra.append(_tier_mode_line(config_dir))  # Diary #4: sizing-mode badge
         extra.append(_output_retention_line())     # the live 7d window, stated
