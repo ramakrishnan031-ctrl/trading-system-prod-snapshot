@@ -524,31 +524,39 @@ VM:  bare repo post-receive hook  →  git checkout -f  →  /home/ubuntu/system
 - Git remotes (PC): `origin` **and** `vm` both point to `trading-vm:~/trading-system.git` (duplicate; see Issues).
 - SSH host alias `trading-vm` (key `trading_vm_secure`, passwordless).
 
-### SATS — Static Analysis (PC-only, manual; never deploys)
-`sats/` is **git-ignored** (the scanners never reach the VM). Two pre-installed isolated
-venvs hold the tools; run the scan `.bat`s **on demand** — no hooks, no automation:
-| What | Path |
-|---|---|
-| SATS root | `D:\Projects\trading-system\sats\` |
-| Bandit exe | `sats\bandit-env\Scripts\bandit.exe` (1.9.4) |
-| Semgrep exe | `sats\semgrep-env\Scripts\semgrep.exe` (1.167.0) |
-| Scan scripts | `sats\scripts\scan_bandit.bat`, `sats\scripts\scan_semgrep.bat` |
-| Reports | `sats\reports\{bandit,semgrep}_<yyyyMMdd_HHmmss>.txt` |
-| Semgrep baseline | `sats\semgrep_baseline.txt` (pinned commit; only findings NEW since it are reported) |
+### SATS — Static Analysis · 🗑️ TOOLING REMOVED 29-Aug-2026 (scripts archived)
+🔴 **`sats/` NO LONGER EXISTS.** The two isolated tool venvs — `semgrep-env` (373 MB,
+Semgrep 1.167.0) and `bandit-env` (43 MB, Bandit 1.9.4), 415 MB and 10,152 files
+between them — were deleted on 29-Aug-2026. Created 22-Jun-2026, run once, untouched
+for 68 days. `sats/` was git-ignored throughout (`.gitignore:92`, added the same day by
+`d79c186`), so it **never deployed**, `git log -- sats/` was **empty**, and its removal
+changed nothing on the VM and nothing tracked.
 
-- Both scan the repo root (`-r` / target = `D:\Projects\trading-system`), **exclude `venv,sats,.git`**,
-  and write a timestamped txt report + echo it to the console (`chcp 65001`, locale-independent
-  PowerShell timestamp, auto-create `reports\`, tool run ONCE via `-o`/`--output` then `type`).
-- Semgrep rulesets `p/python` + `p/security-audit` (login-free; first run downloads, cached after).
-- Bandit reports all severities; add `-ll` to filter to medium+ if noisy.
-- Bandit `-x` uses **absolute** paths — `bandit/core/manager.py` matches each token both as an
-  fnmatch glob **and** as a path substring.
-- **Windows UTF-8:** both `.bat`s set `PYTHONUTF8=1` — without it Semgrep/Bandit **crash** writing the
-  report (`UnicodeEncodeError`); `chcp 65001` fixes only the console, not Python's cp1252 file writes.
-- **Semgrep baseline:** if `sats\semgrep_baseline.txt` exists, `scan_semgrep.bat` adds
-  `--baseline-commit <hash>` (and runs from the repo root for git) so only findings **NEW** since that
-  commit are shown; delete the file for a full scan. Pinned at `65439ff` (2026-06-22 SATS triage).
-- ⚠️ **Do not** modify / activate / reinstall the two venvs.
+**KEPT — the 27 KB work product, now tracked** in `docs/archive/sats_20260622/`:
+| What | File |
+|---|---|
+| Scan scripts | `scan_bandit.bat`, `scan_semgrep.bat` |
+| The only scan ever produced | `semgrep_20260622_203318.txt` — 22 findings, the 22-Jun triage |
+| Semgrep baseline | `semgrep_baseline.txt` — pinned `65439ff` |
+
+- ⚠️ **THE BASELINE IS STALE, AND THAT MAKES A NAIVE RE-RUN MISLEADING.** `scan_semgrep.bat`
+  adds `--baseline-commit 65439ff` (2026-06-22) when `semgrep_baseline.txt` is present, so it
+  reports only findings **NEW since that commit**. Every change after 22-Jun is outside that
+  window. **Re-pin or delete the baseline before trusting any future scan** — an unchanged
+  baseline would report a near-empty diff and read as "clean" when nothing was really examined.
+- ⚠️ **Bandit appears never to have run** — a 43 MB venv was installed for it, but the archive
+  holds only a *semgrep* report. No `bandit_*.txt` was ever produced.
+- **To reinstate:** `pip install bandit semgrep` into fresh venvs, restore the two `.bat`s from
+  the archive, and repoint their hardcoded `sats\{bandit,semgrep}-env\Scripts\` exe paths. The
+  deleted 415 MB was entirely reconstructible from PyPI — that is why it was not kept.
+- The scripts' own mechanics are preserved verbatim in the archived `.bat`s: repo-root scan,
+  `exclude venv,sats,.git`, `PYTHONUTF8=1` (without it Semgrep/Bandit **crash** writing the
+  report — `chcp 65001` fixes only the console, not Python's cp1252 file writes), rulesets
+  `p/python` + `p/security-audit`, Bandit `-x` needing **absolute** paths.
+- 💭 `_PYC_SCAN_EXCLUDED_DIRS = ("venv", "sats")` in `scripts/system_manager.py` still lists
+  `"sats"`. It is **STALE but INERT** — the excluded directory no longer exists, so the entry
+  silences nothing, exactly as the `venv` entry is already inert on the VM. Left deliberately:
+  removing it edits a live monitoring check for no behavioural gain.
 
 ---
 

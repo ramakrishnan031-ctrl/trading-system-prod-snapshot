@@ -1,0 +1,6 @@
+# Semgrep baseline commit. scan_semgrep.bat reports ONLY findings that are NEW
+# since this commit; the pre-existing findings here were all reviewed in the
+# 2026-06-22 SATS triage (22 false positives + 1 reviewed insecure-file-permissions
+# on a directory chmod). Delete/rename this file to run a FULL scan instead.
+# To re-baseline: replace the hash below with a newer commit AFTER reviewing its scan.
+65439ffa6a0a18fb4b9ce0c7e04859222625c0d1

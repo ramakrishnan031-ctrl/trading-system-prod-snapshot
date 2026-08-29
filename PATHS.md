@@ -483,22 +483,40 @@ Detail: memory `c1_secret_remediation_02jul` + `post_rotation_creds_02jul`.
 
 Detail: `docs/SYSTEM_MAP.md` security-watcher row · memory `ssh_key_rebaseline_28jun`.
 
-## SATS — static analysis (PC-only, manual; `sats/` is git-ignored, never deploys)
+## SATS — static analysis · 🗑️ TOOLING REMOVED 29-Aug-2026 (scripts archived)
+🔴 **`D:\Projects\trading-system\sats\` NO LONGER EXISTS.** The two tool venvs
+(`semgrep-env` 373 MB + `bandit-env` 43 MB = 415 MB, 10,152 files) were deleted on
+29-Aug-2026. They were created 22-Jun-2026, run once, and never touched again.
+`sats/` was always git-ignored (`.gitignore:92`) and never deployed, so nothing on
+the VM changed and nothing tracked was lost — `git log -- sats/` was empty.
+
+**What was KEPT** (27 KB — the work product, now tracked):
 | What | Path |
 |---|---|
-| SATS root | `D:\Projects\trading-system\sats\` |
-| Bandit venv exe | `sats\bandit-env\Scripts\bandit.exe` (1.9.4) |
-| Semgrep venv exe | `sats\semgrep-env\Scripts\semgrep.exe` (1.167.0) |
-| Scan scripts | `sats\scripts\scan_bandit.bat`, `sats\scripts\scan_semgrep.bat` |
-| Scan reports | `sats\reports\{bandit,semgrep}_<yyyyMMdd_HHmmss>.txt` |
-| Semgrep baseline | `sats\semgrep_baseline.txt` (pinned `65439ff`; only NEW findings reported) |
+| Archive root | `docs/archive/sats_20260622/` |
+| Scan scripts | `scan_bandit.bat`, `scan_semgrep.bat` |
+| The one scan ever produced | `semgrep_20260622_203318.txt` (22 findings, 22-Jun triage) |
+| Semgrep baseline | `semgrep_baseline.txt` (pinned `65439ff`) |
 
-On-demand only (no hooks/automation) — double-click a `.bat`. Both scan the repo root,
-exclude `venv,sats,.git`, write a timestamped txt report **and** echo it to the console.
-Both `.bat`s set `PYTHONUTF8=1` (else Semgrep/Bandit crash writing the report on Windows cp1252).
-Semgrep rulesets `p/python` + `p/security-audit` (login-free; first run downloads, cached after);
-`scan_semgrep.bat` honours `semgrep_baseline.txt` (delete it for a full scan).
-Bandit reports all severities — add `-ll` for medium+. **Do not** touch the two venvs.
+⚠️ **A future scan needs re-baselining before it means anything.** `scan_semgrep.bat`
+passes `--baseline-commit 65439ff` (22-Jun-2026) so it reports only findings NEWER than
+that commit. Everything since — months of work — sits outside that window, so running
+the script as-archived would under-report. Delete `semgrep_baseline.txt` for a full scan,
+or re-pin it to the commit you actually want to diff against.
+
+**To use it again:** create fresh venvs (`pip install bandit semgrep`), restore the two
+`.bat`s from the archive, and fix their hardcoded `sats\...-env\Scripts\` exe paths to
+wherever the new venvs live. Nothing else is needed — the 415 MB was entirely
+reconstructible, which is why it was not kept.
+
+⚠️ Bandit apparently never ran: only a **semgrep** report exists in the archive, despite a
+43 MB Bandit venv having been installed for it.
+
+💭 `"sats"` remains in `_PYC_SCAN_EXCLUDED_DIRS` (`scripts/system_manager.py`). It is now
+**STALE but inert** — the directory it excluded is gone, so it silences nothing. Left in
+place deliberately: removing it is a code change to a monitoring check for no behavioural
+benefit. (The same file's comment warns against adding entries speculatively; this one is
+a leftover, not a speculative addition.)
 
 ## Pre-flight (`scripts/preflight/`) — daily pre-market readiness, ALERT-ONLY
 3 phases via cron Mon-Fri: **A 08:30** (infra) · **B 09:14** (engine readiness) · **C 09:15→09:20**

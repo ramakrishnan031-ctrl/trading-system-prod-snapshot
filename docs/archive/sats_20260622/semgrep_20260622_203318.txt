@@ -1,0 +1,221 @@
+                    
+                    
+┌──────────────────┐
+│ 22 Code Findings │
+└──────────────────┘
+                                                      
+    D:\Projects\trading-system\broker\auth_recovery.py
+    ❯❱ python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
+          ❰❰ Blocking ❱❱
+          Detected a dynamic value being used with urllib. urllib supports 'file://' schemes, so a dynamic    
+          value controlled by a malicious actor may allow them to read arbitrary files. Audit uses of urllib  
+          calls to ensure user data cannot control the URLs, or consider using the 'requests' library instead.
+          Details: https://sg.run/dKZZ                                                                        
+                                                                                                              
+           73┆ with urllib.request.urlopen(url, timeout=timeout) as resp:  # noqa: S310
+                                                
+    D:\Projects\trading-system\data\live_feed.py
+    ❯❱ python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
+          ❰❰ Blocking ❱❱
+          Detected a python logger call with a potential hardcoded secret "LiveFeedManager init: paper_mode=%s
+          api_key_set=%s token_set=%s" being logged. This may lead to secret credentials being exposed. Make  
+          sure that the logger is not logging  sensitive information.                                         
+          Details: https://sg.run/ydNx                                                                        
+                                                                                                              
+           62┆ logger.info(
+           63┆     "LiveFeedManager init: paper_mode=%s api_key_set=%s token_set=%s",
+           64┆     paper_mode,
+           65┆     bool(api_key),
+           66┆     bool(access_token),
+           67┆ )
+                                      
+    D:\Projects\trading-system\main.py
+    ❯❱ python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
+          ❰❰ Blocking ❱❱
+          Detected a dynamic value being used with urllib. urllib supports 'file://' schemes, so a dynamic    
+          value controlled by a malicious actor may allow them to read arbitrary files. Audit uses of urllib  
+          calls to ensure user data cannot control the URLs, or consider using the 'requests' library instead.
+          Details: https://sg.run/dKZZ                                                                        
+                                                                                                              
+          206┆ with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
+            ⋮┆----------------------------------------
+          238┆ with urllib.request.urlopen(req, timeout=5.0):
+                                                            
+    D:\Projects\trading-system\scripts\auto_refresh_token.py
+    ❯❱ python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
+          ❰❰ Blocking ❱❱
+          Detected a python logger call with a potential hardcoded secret "auto_refresh_token.twofa_retry: %s"
+          being logged. This may lead to secret credentials being exposed. Make sure that the logger is not   
+          logging  sensitive information.                                                                     
+          Details: https://sg.run/ydNx                                                                        
+                                                                                                              
+          207┆ log.warning("auto_refresh_token.twofa_retry: %s", message)
+            ⋮┆----------------------------------------
+    ❯❱ python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
+          ❰❰ Blocking ❱❱
+          Detected a python logger call with a potential hardcoded secret "auto_refresh_token.network_retry 
+          attempt=%d/%d error=%s" being logged. This may lead to secret credentials being exposed. Make sure
+          that the logger is not logging  sensitive information.                                            
+          Details: https://sg.run/ydNx                                                                      
+                                                                                                            
+          265┆ log.warning(
+          266┆     "auto_refresh_token.network_retry attempt=%d/%d error=%s",
+          267┆     attempt, _NETWORK_RETRIES, exc,
+          268┆ )
+            ⋮┆----------------------------------------
+    ❯❱ python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
+          ❰❰ Blocking ❱❱
+          Detected a python logger call with a potential hardcoded secret "auto_refresh_token.telegram_failed:
+          %s" being logged. This may lead to secret credentials being exposed. Make sure that the logger is   
+          not logging  sensitive information.                                                                 
+          Details: https://sg.run/ydNx                                                                        
+                                                                                                              
+          290┆ log.warning("auto_refresh_token.telegram_failed: %s", exc)
+            ⋮┆----------------------------------------
+    ❯❱ python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
+          ❰❰ Blocking ❱❱
+          Detected a python logger call with a potential hardcoded secret                                  
+          "auto_refresh_token.heartbeat_failed: %s" being logged. This may lead to secret credentials being
+          exposed. Make sure that the logger is not logging  sensitive information.                        
+          Details: https://sg.run/ydNx                                                                     
+                                                                                                           
+          304┆ log.warning("auto_refresh_token.heartbeat_failed: %s", exc)
+            ⋮┆----------------------------------------
+    ❯❱ python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
+          ❰❰ Blocking ❱❱
+          Detected a python logger call with a potential hardcoded secret                                  
+          "auto_refresh_token.account_resolve_failed: %s" being logged. This may lead to secret credentials
+          being exposed. Make sure that the logger is not logging  sensitive information.                  
+          Details: https://sg.run/ydNx                                                                     
+                                                                                                           
+          342┆ log.error("auto_refresh_token.account_resolve_failed: %s", exc)
+            ⋮┆----------------------------------------
+    ❯❱ python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
+          ❰❰ Blocking ❱❱
+          Detected a python logger call with a potential hardcoded secret "auto_refresh_token.missing_creds
+          account=%s missing=%s" being logged. This may lead to secret credentials being exposed. Make sure
+          that the logger is not logging  sensitive information.                                           
+          Details: https://sg.run/ydNx                                                                     
+                                                                                                           
+          361┆ log.error("auto_refresh_token.missing_creds account=%s missing=%s", acct, missing)
+            ⋮┆----------------------------------------
+    ❯❱ python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
+          ❰❰ Blocking ❱❱
+          Detected a python logger call with a potential hardcoded secret "auto_refresh_token.dry_run       
+          account=%s totp=%s*** (no login)" being logged. This may lead to secret credentials being exposed.
+          Make sure that the logger is not logging  sensitive information.                                  
+          Details: https://sg.run/ydNx                                                                      
+                                                                                                            
+          371┆ log.info("auto_refresh_token.dry_run account=%s totp=%s*** (no login)", acct, totp[:3])
+            ⋮┆----------------------------------------
+    ❯❱ python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
+          ❰❰ Blocking ❱❱
+          Detected a python logger call with a potential hardcoded secret "auto_refresh_token.failed         
+          account=%s: %s" being logged. This may lead to secret credentials being exposed. Make sure that the
+          logger is not logging  sensitive information.                                                      
+          Details: https://sg.run/ydNx                                                                       
+                                                                                                             
+          378┆ log.error("auto_refresh_token.failed account=%s: %s", acct, exc, exc_info=True)
+            ⋮┆----------------------------------------
+    ❯❱ python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
+          ❰❰ Blocking ❱❱
+          Detected a python logger call with a potential hardcoded secret "auto_refresh_token.success     
+          account=%s duration=%.1fs" being logged. This may lead to secret credentials being exposed. Make
+          sure that the logger is not logging  sensitive information.                                     
+          Details: https://sg.run/ydNx                                                                    
+                                                                                                          
+          384┆ log.info("auto_refresh_token.success account=%s duration=%.1fs", acct, duration)
+                                                                     
+    D:\Projects\trading-system\scripts\gemini_data_integrity_check.py
+    ❯❱ python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
+          ❰❰ Blocking ❱❱
+          Detected a python logger call with a potential hardcoded secret "integrity_check: instruments table
+          not found in DB — token lookup skipped for %s"                 " (O8: instruments is CSV-based, not
+          in schema.sql)" being logged. This may lead to secret credentials being exposed. Make sure that the
+          logger is not logging  sensitive information.                                                      
+          Details: https://sg.run/ydNx                                                                       
+                                                                                                             
+          120┆ log.warning(
+          121┆     "integrity_check: instruments table not found in DB — token lookup skipped for %s"
+          122┆     " (O8: instruments is CSV-based, not in schema.sql)",
+          123┆     symbol,
+          124┆ )
+            ⋮┆----------------------------------------
+    ❯❱ python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
+          ❰❰ Blocking ❱❱
+          Detected a python logger call with a potential hardcoded secret "integrity_check: cannot read token
+          for %s" being logged. This may lead to secret credentials being exposed. Make sure that the logger 
+          is not logging  sensitive information.                                                             
+          Details: https://sg.run/ydNx                                                                       
+                                                                                                             
+          136┆ log.warning("integrity_check: cannot read token for %s", symbol)
+                                                           
+    D:\Projects\trading-system\scripts\load_test_signals.py
+    ❯❱ python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
+          ❰❰ Blocking ❱❱
+          Detected a dynamic value being used with urllib. urllib supports 'file://' schemes, so a dynamic    
+          value controlled by a malicious actor may allow them to read arbitrary files. Audit uses of urllib  
+          calls to ensure user data cannot control the URLs, or consider using the 'requests' library instead.
+          Details: https://sg.run/dKZZ                                                                        
+                                                                                                              
+          110┆ with urllib.request.urlopen(req, timeout=10) as resp:
+                                                                 
+    D:\Projects\trading-system\scripts\preflight\checks\engine.py
+    ❯❱ python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
+          ❰❰ Blocking ❱❱
+          Detected a dynamic value being used with urllib. urllib supports 'file://' schemes, so a dynamic    
+          value controlled by a malicious actor may allow them to read arbitrary files. Audit uses of urllib  
+          calls to ensure user data cannot control the URLs, or consider using the 'requests' library instead.
+          Details: https://sg.run/dKZZ                                                                        
+                                                                                                              
+           34┆ with urllib.request.urlopen(url, timeout=timeout) as resp:
+                                                             
+    D:\Projects\trading-system\scripts\reconcile_positions.py
+    ❯❱ python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
+          ❰❰ Blocking ❱❱
+          Detected a python logger call with a potential hardcoded secret "reconcile_positions: token for %s
+          looks stale/mismatched "                 "(is_token_valid=False); proceeding with the present     
+          access_token" being logged. This may lead to secret credentials being exposed. Make sure that the 
+          logger is not logging  sensitive information.                                                     
+          Details: https://sg.run/ydNx                                                                      
+                                                                                                            
+          123┆ log.warning(
+          124┆     "reconcile_positions: token for %s looks stale/mismatched "
+          125┆     "(is_token_valid=False); proceeding with the present access_token",
+          126┆     account_id,
+          127┆ )
+            ⋮┆----------------------------------------
+    ❯❱ python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
+          ❰❰ Blocking ❱❱
+          Detected a python logger call with a potential hardcoded secret "reconcile_positions: credential 
+          resolution failed: %s" being logged. This may lead to secret credentials being exposed. Make sure
+          that the logger is not logging  sensitive information.                                           
+          Details: https://sg.run/ydNx                                                                     
+                                                                                                           
+          405┆ log.error("reconcile_positions: credential resolution failed: %s", exc)
+                                                      
+    D:\Projects\trading-system\scripts\test_webhook.py
+    ❯❱ python.flask.security.audit.app-run-param-config.avoid_app_run_with_bad_host
+          ❰❰ Blocking ❱❱
+          Running flask app with host 0.0.0.0 could expose the server publicly.
+          Details: https://sg.run/eLby                                         
+                                                                               
+           13┆ app.run(host='0.0.0.0', port=5000)
+                                                          
+    D:\Projects\trading-system\signals\webhook_receiver.py
+    ❯❱ python.flask.security.audit.hardcoded-config.avoid_hardcoded_config_TESTING
+          ❰❰ Blocking ❱❱
+          Hardcoded variable `TESTING` detected. Use environment variables or config files instead
+          Details: https://sg.run/ndZ2                                                            
+                                                                                                  
+          152┆ self.app.config["TESTING"] = False
+                                                      
+    D:\Projects\trading-system\utils\startup_checks.py
+    ❯❱ python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
+          ❰❰ Blocking ❱❱
+          Detected a python logger call with a potential hardcoded secret "check_required_secrets: missing env
+          var %s" being logged. This may lead to secret credentials being exposed. Make sure that the logger  
+          is not logging  sensitive information.                                                              
+          Details: https://sg.run/ydNx                                                                        
+                                                                                                              
+          1022┆ logger.warning("check_required_secrets: missing env var %s", key)
