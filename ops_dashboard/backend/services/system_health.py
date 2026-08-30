@@ -815,6 +815,64 @@ def _trends(cfg: dict) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 # The screen
 # ─────────────────────────────────────────────────────────────────────────────
+def _throughput(cfg: dict, today: str) -> dict:
+    """The artwork's THROUGHPUT panel: signals in, entry orders out, entries filled.
+
+    ⭐ Three series that ALREADY EXIST as a reader — `activity_pulse`, per
+    MINUTE, keyed on the instant each thing actually happened. ⛔ No new query,
+    ⛔ no new table, and ⛔ nothing derived from a capped row list, which would
+    make a busy hour look calm on exactly the day that mattered.
+
+    ⚠️ THE THIRD SERIES IS `trades.entry_time`, ⛔ NOT an order status. A trade
+    row exists once its ENTRY actually filled, so it is the honest count of
+    fills; reading `orders.status` instead would count a broker acknowledgement
+    as a fill.
+
+    ⛔ AN EMPTY CHART HERE IS A REAL ZERO, ⛔ not an instrumentation gap. All
+    three tables are read live and a day on which nothing traded genuinely has
+    no bars — which is why `instrumented` is True and the screen says NO
+    ACTIVITY. Saying NOT INSTRUMENTED would claim the system cannot count its
+    own orders, and ⭐ that claim would be false.
+
+    ⚠️ The artwork labels the axis PER MINUTE. A whole session is ~375 minutes
+    and will not fit that panel, so the per-minute counts are SUMMED INTO HOURS
+    and the panel says so (`bucket`). ⛔ The label follows the aggregation; it is
+    not inherited from the drawing.
+    """
+    try:
+        pulse = db_reader.activity_pulse(cfg, today) or {}
+    except Exception:                                    # pragma: no cover
+        pulse = {}
+
+    # signals → Signals Received  ·  orders → Orders Created (ENTRY placed)
+    # trades  → Orders Filled (the entry actually filled)
+    buckets: dict = {}
+    for src, key in (("signals", "signals"), ("orders", "orders"), ("trades", "fills")):
+        for hhmm, n in (pulse.get(src) or {}).items():
+            if not hhmm or len(str(hhmm)) < 2:
+                continue
+            label = str(hhmm)[:2] + ":00"
+            b = buckets.setdefault(label, {"label": label, "signals": 0,
+                                           "orders": 0, "fills": 0})
+            b[key] += int(n)
+    series = [buckets[k] for k in sorted(buckets)]
+
+    return {
+        "measured": bool(series),
+        # ⭐ True even when empty: these three ARE instrumented and persisted.
+        "instrumented": True,
+        "bucket": "hour",
+        "series": series,
+        "reason": (None if series else
+                   "no signal, entry order or filled entry is recorded for %s. "
+                   "⭐ The three source tables are read live, so an empty chart "
+                   "here is a REAL ZERO — ⛔ not a missing feed" % today),
+        "note": ("signals by `signals.received_at` · orders by ENTRY "
+                 "`orders.placed_at` · fills by `trades.entry_time` — the "
+                 "per-minute counts summed into hourly buckets"),
+    }
+
+
 def build_system_health(cfg, status_filter=None, kind_filter=None) -> dict:
     """Screen 12. A live operational snapshot — ⛔ not a historical query."""
     import time
@@ -926,6 +984,7 @@ def build_system_health(cfg, status_filter=None, kind_filter=None) -> dict:
         "recovery": _recovery(cfg, today),
         "readiness": readiness,
         "trends": _trends(cfg),
+        "throughput": _throughput(cfg, today),
 
         # ⚠️ This note is derived from the RUNNING HOST, ⛔ not hard-coded — the
         # old fixed text claimed CPU/RAM/Network were uninstrumented, which
@@ -1057,5 +1116,9 @@ def export_sheets(payload: dict) -> list:
         ("Service Events", ["At", "Type", "Label", "Status", "Detail"],
          [[e["at"], e["type"], e["label"], e["status"], e["detail"]]
           for e in payload["events"]]),
+        ("Throughput", ["Bucket", "Signals Received", "Orders Created",
+                        "Orders Filled"],
+         [[b["label"], b["signals"], b["orders"], b["fills"]]
+          for b in (payload.get("throughput") or {}).get("series") or []]),
         ("Summary", ["Measure", "Value"], [list(x) for x in summary]),
     ]

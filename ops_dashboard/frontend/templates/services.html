@@ -52,16 +52,48 @@
   <div class="sysh-top">
     <section class="panel sysh-overall" :class="'sysh-bg-' + ov('status')">
       <span class="sysh-ov-k">Overall Status</span>
-      <b class="sysh-ov-v" :class="txt(ov('status'))" x-text="ov('status') || '—'"></b>
+      <span class="sysh-ov-row">
+        <span class="sysh-ov-ico" :class="txt(ov('status'))" aria-hidden="true">⛉</span>
+        <b class="sysh-ov-v" :class="txt(ov('status'))" x-text="ov('status') || '—'"></b>
+      </span>
       <span class="sysh-ov-note" x-text="ov('note') || ''"></span>
     </section>
 
-    {% call kpi_row() %}
-      {{ kpi_card("Healthy Services", "cnt('HEALTHY')", tone="pos")  }}
-      {{ kpi_card("Warning Services", "cnt('WARNING')", tone="warn") }}
-      {{ kpi_card("Failed Services",  "cnt('FAILED')",  tone="neg")  }}
-      {{ kpi_card("Unknown",          "cnt('UNKNOWN')", tone="info") }}
-    {% endcall %}
+    {# THE THREE COUNT CARDS. Together with Overall Status and Uptime beside
+       them these are the artwork's FIVE-card band.
+       + There is deliberately no UNKNOWN card. Unknown is a real SERVICE STATUS
+       and keeps its place in the table, the status filter and the legend - but
+       the band is the primary summary, and a host that cannot resolve systemd
+       is not a reason to promote its own blind spot into the headline.
+       + The percentage is of TOTAL SERVICES, so the three read as shares of one
+       fleet; `pctOf` returns an em dash rather than 0.00% when the fleet is
+       unknown, because a confident 0% would be a fabricated denominator. #}
+    <div class="kpi-row sysh-kpis">
+      <div class="kpi-card kpi-pos sysh-kpi">
+        <span class="sysh-kpi-body">
+          <span class="kpi-label">Healthy Services</span>
+          <span class="kpi-val num" x-text="cnt('HEALTHY')"></span>
+          <span class="sysh-kpi-pct num-pos" x-text="pctOf('HEALTHY')"></span>
+        </span>
+        <span class="sysh-kpi-ico num-pos" aria-hidden="true">♥</span>
+      </div>
+      <div class="kpi-card kpi-warn sysh-kpi">
+        <span class="sysh-kpi-body">
+          <span class="kpi-label">Warning Services</span>
+          <span class="kpi-val num" x-text="cnt('WARNING')"></span>
+          <span class="sysh-kpi-pct num-warn" x-text="pctOf('WARNING')"></span>
+        </span>
+        <span class="sysh-kpi-ico num-warn" aria-hidden="true">⚠</span>
+      </div>
+      <div class="kpi-card kpi-neg sysh-kpi">
+        <span class="sysh-kpi-body">
+          <span class="kpi-label">Failed Services</span>
+          <span class="kpi-val num" x-text="cnt('FAILED')"></span>
+          <span class="sysh-kpi-pct num-neg" x-text="pctOf('FAILED')"></span>
+        </span>
+        <span class="sysh-kpi-ico num-neg" aria-hidden="true">✖</span>
+      </div>
+    </div>
 
     <section class="panel sysh-uptime">
       <h3 class="panel-title">Uptime <span class="panel-sub">(system)</span></h3>
@@ -77,6 +109,34 @@
           <span x-text="data.uptime.reason"></span>
         </div>
       </template>
+      {# VM RESOURCE STRIP. The artwork nests CPU / RAM / Disk / Network / Load
+         inside the uptime+system card rather than in a side rail, so that is
+         where they now live. + IDENTICAL bindings and the same `gapCell`
+         honesty - only the PLACEMENT changed. RAM available has no row in the
+         artwork but is a genuinely measured value, so it is kept rather than
+         dropped: losing a real number to a layout change is a silent
+         regression. #}
+      <div class="sysh-vmstrip">
+        <div class="sysh-vm-row"><span class="sysh-vm-ico" aria-hidden="true">▣</span>
+          <span class="sysh-vm-k">CPU</span>
+          <span class="sysh-vm-v" x-html="gapCell(vm('cpu_pct'))"></span></div>
+        <div class="sysh-vm-row"><span class="sysh-vm-ico" aria-hidden="true">▥</span>
+          <span class="sysh-vm-k">RAM</span>
+          <span class="sysh-vm-v" x-html="gapCell(vm('ram_pct'))"></span></div>
+        <div class="sysh-vm-row"><span class="sysh-vm-ico" aria-hidden="true">▤</span>
+          <span class="sysh-vm-k">RAM available</span>
+          <span class="sysh-vm-v" x-html="gapCell(vm('ram_available_mb'))"></span></div>
+        <div class="sysh-vm-row"><span class="sysh-vm-ico" aria-hidden="true">⛁</span>
+          <span class="sysh-vm-k">Disk</span>
+          <span class="sysh-vm-v" x-html="gapCell(vm('disk_pct'))"></span></div>
+        <div class="sysh-vm-row"><span class="sysh-vm-ico" aria-hidden="true">⇅</span>
+          <span class="sysh-vm-k">Network</span>
+          <span class="sysh-vm-v" x-html="gapCell(vm('network'))"></span></div>
+        <div class="sysh-vm-row"><span class="sysh-vm-ico" aria-hidden="true">◷</span>
+          <span class="sysh-vm-k">System Load</span>
+          <span class="sysh-vm-v" x-html="gapCell(vm('system_load'))"></span></div>
+      </div>
+      <div class="sysh-note sysh-gapnote" x-text="data.instrumentation_note || ''"></div>
       <div class="sysh-note sysh-hc">
         <span>Last health check —</span>
         <span>engine <b x-text="hhmmss(lhc('trader'))"></b></span>
@@ -189,40 +249,33 @@
       </div>
     </section>
 
-    <aside class="sysh-rail">
-      <section class="panel">
-        <h3 class="panel-title">VM / System Health</h3>
-        <table class="cap-table sysh-kv"><tbody>
-          <tr><td class="lbl">CPU %</td><td class="ctr" x-html="gapCell(vm('cpu_pct'))"></td></tr>
-          <tr><td class="lbl">RAM %</td><td class="ctr" x-html="gapCell(vm('ram_pct'))"></td></tr>
-          <tr><td class="lbl">RAM available</td><td class="ctr" x-html="gapCell(vm('ram_available_mb'))"></td></tr>
-          <tr><td class="lbl">Disk %</td><td class="ctr" x-html="gapCell(vm('disk_pct'))"></td></tr>
-          <tr><td class="lbl">Network</td><td class="ctr" x-html="gapCell(vm('network'))"></td></tr>
-          <tr><td class="lbl">System Load</td><td class="ctr" x-html="gapCell(vm('system_load'))"></td></tr>
-        </tbody></table>
-        <div class="sysh-note sysh-gapnote" x-text="data.instrumentation_note || ''"></div>
-      </section>
-
-    </aside>
   </div>
+
+  {# EXTERNAL DEPENDENCIES - the artwork's row of five pictorial cards, given
+     a band of its own because five cards do not fit legibly in a third of the
+     page. + Same `data.dependencies` binding, same five names, same statuses
+     and the same probe text on hover; only the presentation changed. #}
+  <section class="panel sysh-depband">
+    <h3 class="panel-title">External Dependencies</h3>
+    <div class="sysh-depcards">
+      <template x-for="d in (data.dependencies || [])" :key="d.name">
+        <div class="sysh-depcard" :class="'sysh-bg-' + d.status" :title="d.source">
+          <span class="sysh-depcard-ico" :class="txt(d.status)"
+                aria-hidden="true" x-text="depIcon(d.name)"></span>
+          <span class="sysh-depcard-t">
+            <span class="sysh-depcard-n" x-text="d.name"></span>
+            <b class="sysh-depcard-s" :class="txt(d.status)" x-text="d.status"></b>
+          </span>
+        </div>
+      </template>
+    </div>
+    <div class="sysh-note">Hover a dependency for the probe it reads.
+      ⛔ A dependency is never Healthy merely because it is configured.</div>
+  </section>
 
   <!-- ═══ BOTTOM ANALYTICS ZONE — one continuous band ═══ -->
   <div class="sysh-zone">
     <div class="sysh-zone-row sysh-zone-a">
-      <section class="panel">
-        <h3 class="panel-title">External Dependencies</h3>
-        <ul class="sysh-deps">
-          <template x-for="d in (data.dependencies || [])" :key="d.name">
-            <li :title="d.source">
-              <i class="dot" :class="'sysh-dot-' + d.status"></i>
-              <span class="sysh-dep-n" x-text="d.name"></span>
-              <b :class="txt(d.status)" x-text="d.status"></b>
-            </li>
-          </template>
-        </ul>
-        <div class="sysh-note">Hover a dependency for the probe it reads.
-          ⛔ A dependency is never Healthy merely because it is configured.</div>
-      </section>
       <section class="panel">
         <h3 class="panel-title">Service Events</h3>
         <ul class="sysh-events">
@@ -365,6 +418,39 @@
         </template>
       </section>
 
+      {# THROUGHPUT - in the PNG, absent from the design TXT. Bound to the
+         EXISTING `activity_pulse` reader: signals by `received_at`, entry orders
+         by `placed_at`, fills by the trade's `entry_time`.
+         + AN EMPTY CHART HERE IS A REAL ZERO, not a gap - the three tables are
+         read live, and a day on which nothing traded genuinely has no bars.
+         That is why it renders NO ACTIVITY and never NOT INSTRUMENTED, which
+         would claim the system cannot count its own orders. #}
+      <section class="panel">
+        <h3 class="panel-title">Throughput
+          <span class="panel-sub" x-text="tpSub()"></span></h3>
+        <div class="sysh-tp-legend">
+          <span><i class="sysh-sw sysh-sw-sig"></i>Signals Received</span>
+          <span><i class="sysh-sw sysh-sw-ord"></i>Orders Created</span>
+          <span><i class="sysh-sw sysh-sw-fil"></i>Orders Filled</span>
+        </div>
+        <template x-if="!tp().measured">
+          <div class="sysh-gapbox sysh-trend-gap">
+            <b class="num-warn">NO ACTIVITY</b>
+            <span x-text="tp().reason"></span>
+          </div>
+        </template>
+        <template x-if="tp().measured">
+          <div>
+            <div class="curve-wrap sysh-curve-wrap">
+              <svg class="curve-svg sysh-curve" viewBox="0 0 560 180" aria-hidden="true">
+                <g x-html="pulseMarkup()"></g>
+              </svg>
+            </div>
+            <div class="sysh-note" x-text="tp().note || ''"></div>
+          </div>
+        </template>
+      </section>
+
       <section class="panel">
         <h3 class="panel-title">Status Guide</h3>
         <ul class="sysh-guide">
@@ -384,10 +470,21 @@
     </div>
   </div>
 
-  <div class="sysh-foot">
-    <span>ℹ</span> All times are IST. This page auto-updates on the dashboard's
-    own refresh cycle.
-    <span class="sysh-err" x-show="loadError" x-cloak x-text="loadError"></span>
+  {# The artwork's bottom export bar - the S09/S11 `pnl-exportbar` shape,
+     scoped to `.sysh-page`. + Both buttons call the EXISTING
+     /api/export/system-health route with the page's own filter params, so the
+     workbook can never describe a different population from the screen. #}
+  <div class="sysh-foot sysh-exportbar">
+    <span class="sysh-foot-note">
+      <span>ℹ</span> All times are IST. This page auto-updates on the
+      dashboard's own refresh cycle.
+      <span class="sysh-err" x-show="loadError" x-cloak x-text="loadError"></span>
+    </span>
+    <button class="btn-export" type="button" @click="exportXlsx()"
+            :title="'Exports the CURRENT VIEW — ' + rows().length + ' of '
+                    + (data.total_services ?? 0) + ' service(s)'">
+      ⭳ Export Current View</button>
+    <button class="btn-export" type="button" @click="exportXlsx()">⭳ Export XLSX</button>
   </div>
 </div>
 
@@ -495,6 +592,26 @@ function systemHealthPage() {
     recEvents() { return (this.data.recovery || {}).events || []; },
     lhc(k) { return (this.data.last_health_check || {})[k]; },
     tr() { return (this.data.trends || {})[this.trend] || {measured:false, reason:"", series:[]}; },
+    tp() { return this.data.throughput || {measured:false, series:[], reason:"", note:""}; },
+    tpSub() { const t = this.tp(); return t.bucket ? "(per " + t.bucket + ")" : ""; },
+
+    /* A status count as a share of the WHOLE fleet. + An em dash, never 0.00%,
+       when the denominator is unknown - a confident zero would be a fabricated
+       percentage of a fleet nobody counted. */
+    pctOf(status) {
+      const c = this.data.counts || {};
+      const total = Number(this.data.total_services)
+                    || Object.keys(c).reduce((a, k) => a + (Number(c[k]) || 0), 0);
+      if (!total) return "\u2014";
+      return ((Number(c[status]) || 0) * 100 / total).toFixed(2) + "%";
+    },
+
+    /* The artwork gives each dependency a pictorial mark. Keyed on the five
+       names the backend actually emits; anything else falls back rather than
+       rendering an empty box. */
+    DEP_ICONS: { "Chartink": "\u25c9", "Broker API": "\u26c9", "Database": "\u25a4",
+                 "Tailscale": "\u2632", "Internet": "\u25cc" },
+    depIcon(name) { return this.DEP_ICONS[name] || "\u25cb"; },
 
     /* ── SEMANTIC COLOUR. One function, so a status and its text can never
          disagree, and every panel uses the SAME mapping. ── */
@@ -618,6 +735,58 @@ function systemHealthPage() {
         out += '<text class="sysh-axis" x="' + xf(i).toFixed(1) + '" y="164" '
              + 'text-anchor="middle">' + this.esc(this.hhmmss(s[i].ts).slice(0, 5))
              + "</text>";
+      });
+      return out;
+    },
+
+    /* —— throughput. Grouped bars, the same <g x-html> device the trend chart
+         uses for the same reason: `<template x-for>` inside <svg> is parsed
+         into the SVG namespace and renders NOTHING. —— */
+    pulseMarkup() {
+      const s = this.tp().series || [];
+      const X0 = 46, X1 = 548, Y0 = 24, Y1 = 142;
+      if (!s.length) {
+        return '<text class="sysh-axis" x="300" y="86" text-anchor="middle">'
+               + "No activity recorded</text>";
+      }
+      const SER = [{ k: "signals", c: "sysh-bar-sig" },
+                   { k: "orders",  c: "sysh-bar-ord" },
+                   { k: "fills",   c: "sysh-bar-fil" }];
+      let top = 0;
+      s.forEach(b => SER.forEach(x => { const v = Number(b[x.k]) || 0; if (v > top) top = v; }));
+      top = Math.max(1, top * 1.25);
+      const yf = v => Y1 - (Y1 - Y0) * (v / top);
+      let out = "";
+      for (let i = 0; i <= 3; i++) {
+        const v = top * i / 3, y = yf(v).toFixed(1);
+        out += '<line class="sysh-gl" x1="42" y1="' + y + '" x2="552" y2="' + y + '"></line>'
+             + '<text class="sysh-axis" x="38" y="' + (Number(y) + 4).toFixed(1)
+             + '" text-anchor="end">' + Math.round(v) + "</text>";
+      }
+      /* Bars are sized from the group, so a 2-bucket day and a 24-bucket day
+         both stay inside the plot instead of overflowing the axis. */
+      const gw = (X1 - X0) / s.length;
+      const bw = Math.max(1.5, Math.min(10, (gw - 6) / 3));
+      s.forEach((b, i) => {
+        const gx = X0 + gw * i + (gw - bw * 3) / 2;
+        SER.forEach((x, j) => {
+          const v = Number(b[x.k]) || 0;
+          if (v <= 0) return;                 /* a real zero draws no bar */
+          const y = yf(v);
+          out += '<rect class="' + x.c + '" x="' + (gx + j * bw).toFixed(1)
+               + '" y="' + y.toFixed(1) + '" width="' + Math.max(1, bw - 1).toFixed(1)
+               + '" height="' + Math.max(0.5, Y1 - y).toFixed(1) + '"><title>'
+               + this.esc(b.label + "  " + x.k + ": " + v) + "</title></rect>";
+        });
+      });
+      /* + Only STEPPED labels here, with no forced final one: the buckets are
+         uniform, so stepping alone cannot collide - which is exactly the
+         overlap the trend axis above had to correct for. */
+      const step = Math.max(1, Math.ceil(s.length / 8));
+      s.forEach((b, i) => {
+        if (i % step) return;
+        out += '<text class="sysh-axis" x="' + (X0 + gw * i + gw / 2).toFixed(1)
+             + '" y="164" text-anchor="middle">' + this.esc(b.label) + "</text>";
       });
       return out;
     },

@@ -806,7 +806,8 @@ def test_export_carries_every_panel_and_respects_the_view(client):
     assert r.status_code == 200
     wb = load_workbook(io.BytesIO(r.data))
     assert wb.sheetnames == ["Services", "Readiness", "Dependencies", "Alerts",
-                             "Auto-Recovery", "Service Events", "Summary"]
+                             "Auto-Recovery", "Service Events", "Throughput",
+                             "Summary"]
     ws = wb["Services"]
     header = [c.value for c in ws[1]]
     assert header[:3] == ["Service", "Kind", "Status"]
@@ -1009,3 +1010,142 @@ class TestHealthTrendXAxisCollision:
         assert 'viewBox="0 0 560 180"' in _tpl(), (
             "the trend viewBox changed — the 1.0 scale that keeps 13px "
             "rendered is no longer guaranteed; re-measure before editing this")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# THE 30-Aug PASS AGAINST THE ORIGINAL ARTWORK
+# ⛔ These pin the APPROVED COMPOSITION, ⛔ not merely "some markup exists".
+# ═════════════════════════════════════════════════════════════════════════════
+def test_the_top_band_is_five_cards_and_unknown_is_not_one_of_them(client):
+    """⭐ Overall · Healthy · Warning · Failed · Uptime — and ⛔ NO Unknown card.
+
+    ⚠️ Unknown is a REAL service status and must not vanish from the screen;
+    what it must not be is a headline KPI. So BOTH halves are asserted: gone
+    from the band, still present where the distribution is actually read.
+    """
+    t = _tpl()
+    band = t[t.index('class="kpi-row sysh-kpis"'):t.index("sysh-uptime")]
+    for label in ("Healthy Services", "Warning Services", "Failed Services"):
+        assert label in band
+    assert "cnt('UNKNOWN')" not in band          # ⛔ the sixth card, in any form
+    assert 'kpi_card("Unknown"' not in t
+    # ⭐ BUT UNKNOWN SURVIVES EVERYWHERE IT CARRIES MEANING. ⛔ Dropping the
+    # card must not quietly drop the STATE: it stays in the legend, in the
+    # colour map, in the counts and in the status filter's own options.
+    assert '<i class="dot sysh-dot-UNKNOWN"></i>Unknown' in t
+    assert 'UNKNOWN: "sysh-unknown"' in t
+    d = _h(client, "")
+    assert "UNKNOWN" in d["counts"]
+    assert "UNKNOWN" in d["filters"]["options"]["status"]
+
+
+def test_every_band_card_carries_its_icon_and_its_share():
+    t = _tpl()
+    assert t.count("sysh-kpi-ico") == 3          # one per count card
+    assert t.count("sysh-kpi-pct") == 3
+    assert "sysh-ov-ico" in t                    # the artwork's overall shield
+    for st in ("HEALTHY", "WARNING", "FAILED"):
+        assert "pctOf('%s')" % st in t
+
+
+def test_a_share_of_an_unknown_fleet_is_a_dash_not_zero_percent():
+    """⛔ 0.00% of nothing is a fabricated denominator, ⭐ so the guard is real."""
+    js = _tpl()[_tpl().index("pctOf(status)"):]
+    assert "if (!total) return" in js.split("},")[0]
+    assert "u2014" in js.split("},")[0]          # an em dash, ⛔ not "0.00%"
+
+
+def test_the_vm_metrics_are_nested_in_the_uptime_card_and_the_rail_is_gone():
+    """⭐ The artwork nests them; the separate rail panel no longer exists.
+
+    ⛔ The point is not that a strip exists somewhere — it is that the metrics
+    moved INSIDE the uptime card and that NOTHING was lost on the way.
+    """
+    t = _tpl()
+    assert 'class="sysh-rail"' not in t
+    assert "VM / System Health" not in t
+    card = t[t.index('class="panel sysh-uptime"'):
+             t.index("</section>", t.index("sysh-vmstrip"))]
+    for field in ("cpu_pct", "ram_pct", "ram_available_mb", "disk_pct",
+                  "network", "system_load"):
+        assert "vm('%s')" % field in card, field
+    # ⛔ still routed through gapCell — a moved metric must not become a bare
+    # number, which is exactly how a NOT INSTRUMENTED value would turn green.
+    assert card.count("gapCell(vm(") == 6
+
+
+def test_dependencies_are_five_icon_cards_not_a_list():
+    t = _tpl()
+    assert 'class="sysh-deps"' not in t          # the old vertical list is gone
+    assert "sysh-depcards" in t and "sysh-depcard-ico" in t
+    assert "depIcon(d.name)" in t
+    # ⭐ the icon map covers exactly the names the BACKEND emits, so a renamed
+    # dependency cannot silently render an empty box
+    names = {d["name"] for d in sh._dependencies(
+        {"units": []}, None, [], {"reachable": True}, "2026-08-30")}
+    assert len(names) == 5
+    icons = t[t.index("DEP_ICONS:"):t.index("depIcon(name)")]
+    for n in names:
+        assert '"%s":' % n in icons, n
+
+
+def test_the_bottom_export_bar_is_wired_to_the_real_route():
+    """⛔ Not a gated placeholder — S12 owns a real export route."""
+    t = _tpl()
+    assert "sysh-exportbar" in t
+    assert "Export Current View" in t and "Export XLSX" in t
+    assert "/api/export/system-health" in t
+
+
+# ── THROUGHPUT — in the PNG, absent from the design TXT ─────────────────────
+def test_throughput_reads_the_existing_pulse_and_buckets_it(monkeypatch):
+    monkeypatch.setattr(sh.db_reader, "activity_pulse", lambda cfg, today: {
+        "signals": {"09:15": 3, "09:47": 2, "10:05": 4},
+        "orders":  {"09:20": 1, "10:59": 5},
+        "trades":  {"10:00": 2},
+    })
+    tp = sh._throughput({}, "2026-08-30")
+    assert tp["measured"] is True and tp["bucket"] == "hour"
+    assert tp["series"] == [
+        {"label": "09:00", "signals": 5, "orders": 1, "fills": 0},
+        {"label": "10:00", "signals": 4, "orders": 5, "fills": 2},
+    ]
+
+
+def test_an_empty_throughput_is_a_real_zero_never_an_instrumentation_gap(monkeypatch):
+    """⛔ THE WHOLE POINT OF THE PANEL'S HONESTY. Saying NOT INSTRUMENTED over
+    three tables the system demonstrably writes would be a false claim about
+    the system itself — the opposite failure to charting a sentinel."""
+    monkeypatch.setattr(sh.db_reader, "activity_pulse", lambda cfg, today: {})
+    tp = sh._throughput({}, "2026-08-30")
+    assert tp["measured"] is False
+    assert tp["instrumented"] is True            # ⛔ never False
+    assert "REAL ZERO" in tp["reason"]
+    assert "NOT INSTRUMENTED" not in tp["reason"]
+
+
+def test_the_third_series_is_the_fill_not_an_order_acknowledgement():
+    """⚠️ `trades.entry_time` — a trade row exists once the ENTRY filled.
+    Reading `orders.status` would count a broker ACK as a fill."""
+    src = inspect.getsource(sh._throughput)
+    assert "entry_time" in src
+    assert "orders.status" not in src.split('"""')[2]   # ⛔ not in the code body
+
+
+def test_the_throughput_panel_renders_no_activity_not_not_instrumented():
+    t = _tpl()
+    panel = t[t.index('<h3 class="panel-title">Throughput'):t.index("Status Guide")]
+    assert "NO ACTIVITY" in panel
+    assert "NOT INSTRUMENTED" not in panel
+    assert "pulseMarkup()" in panel
+    for legend in ("Signals Received", "Orders Created", "Orders Filled"):
+        assert legend in panel
+
+
+def test_throughput_is_in_the_payload_and_in_the_workbook(client):
+    d = _h(client, "")
+    assert "throughput" in d and d["throughput"]["instrumented"] is True
+    from openpyxl import load_workbook
+    wb = load_workbook(io.BytesIO(client.get("/api/export/system-health").data))
+    assert [c.value for c in wb["Throughput"][1]] == [
+        "Bucket", "Signals Received", "Orders Created", "Orders Filled"]
