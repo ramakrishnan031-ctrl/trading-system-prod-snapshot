@@ -295,6 +295,53 @@
         </section>
 
       </div>
+
+      {# ── TRADE REPLAY ────────────────────────────────────────────────────
+         🔬 This fills a MEASURED blank region: the rail runs 543px past the
+         bottom of `.tlg-row3`, leaving 1222 x 559 px of dead left column.
+         ⛔ It is deliberately INSIDE `.tlg-left`, not below both columns — a
+         full-page-width band underneath would have left that hole exactly
+         where it was and simply made the page taller.
+         ⛔ No new data: the stages are `detail.timeline`, the very same eight
+         the TRADE TIMELINE above renders. #}
+      <section class="panel tlg-replaypanel">
+        <div class="tlg-panel-head">
+          <h3 class="panel-title">TRADE REPLAY
+            <span class="panel-sub"
+                  x-text="detail.found ? (detail.stages_measured + ' of ' + detail.stages_total + ' stages recorded') : ''"></span>
+          </h3>
+          <span class="tlg-rp-who" x-show="detail.found" x-cloak>
+            <b class="mono" x-text="detail.trade_id"></b>
+            <span x-text="detail.symbol"></span>
+            <span class="tlg-dim" x-text="detail.strategy"></span>
+            <span class="tlg-dim" x-text="detail.direction"></span>
+          </span>
+          <button class="btn-primary tlg-rp-go" type="button" @click="replay()"
+                  :disabled="!detail.found || rpRunning"
+                  x-text="rpRunning ? '● Replaying…' : '▶ Replay Trade Lifecycle'"></button>
+        </div>
+        <div class="tlg-note">Reconstruct complete trade flow visually.
+          ⛔ Only stages this trade actually recorded are stepped through.</div>
+
+        <div class="tlg-d-empty tlg-rp-empty" x-show="!detail.found" x-cloak>
+          Select an event with a Trade ID to reconstruct its lifecycle.
+        </div>
+
+        <ol class="tlg-rp-flow" x-show="detail.found" x-cloak>
+          <template x-for="(s, i) in (detail.timeline || [])" :key="s.stage">
+            <li class="tlg-rp-node" :class="rpClass(s, i)">
+              <span class="tlg-rp-dot"></span>
+              <span class="tlg-rp-stage" x-text="s.stage"></span>
+              <span class="tlg-rp-time mono" x-show="s.measured" x-text="s.time"></span>
+              <span class="tlg-rp-na tlg-ni" x-show="!s.measured && s.gap" x-cloak
+                    >NOT INSTRUMENTED</span>
+              <span class="tlg-rp-na" x-show="!s.measured && !s.gap" x-cloak
+                    x-text="rpWhy(s, i)"></span>
+              <span class="tlg-rp-why" x-text="s.gap || s.note || ''"></span>
+            </li>
+          </template>
+        </ol>
+      </section>
     </div>
 
     {# ── RIGHT RAIL ──────────────────────────────────────────────────────── #}
@@ -617,12 +664,70 @@ function tradeLogsPage() {
                               { credentials: "same-origin" });
       if (res.ok) this.detail = await res.json();
     },
-    clearSel() { this.sel = null; this.detail = { found: false }; },
+    clearSel() { this.sel = null; this.detail = { found: false };
+                 this.rpAt = -1; this.rpRunning = false; },
+
+    /* ── TRADE REPLAY ────────────────────────────────────────────────────
+       ⭐ `rpAt` is the stage currently lit. ⛔ It only ever takes the index of
+       a MEASURED stage, which is what makes a fabricated transition
+       impossible rather than merely discouraged. ── */
+    rpAt: -1,
+    rpRunning: false,
+    _rpTimer: null,
+
+    /* The last stage with a real stored timestamp = this trade's TERMINAL
+       point. Everything after it was never reached. */
+    rpLast() {
+      const t = this.detail.timeline || [];
+      let k = -1;
+      t.forEach((s, i) => { if (s.measured) k = i; });
+      return k;
+    },
+    rpWhy(s, i) {
+      /* The SHORT state label only. ⛔ Never a timestamp, never a guess.
+         ⚠️ It must not repeat the note — the `.tlg-rp-why` line below already
+         carries that, and returning it here printed "position still open"
+         twice on the same node. ⭐ A stage past the terminal that HAS a note is
+         PENDING (the trade is still live); one with no note was simply never
+         reached. */
+      if (i > this.rpLast()) return s.note ? "pending" : "not reached";
+      return "—";
+    },
+    rpClass(s, i) {
+      const c = [];
+      if (s.measured) c.push("is-on");
+      else if (s.gap) c.push("is-gap");
+      else c.push(i > this.rpLast() ? "is-unreached" : "is-off");
+      if (i === this.rpAt) c.push("is-live");
+      if (i === this.rpLast()) c.push("is-terminal");
+      return c.join(" ");
+    },
     replay() {
-      if (!this.sel || !this.sel.trade_id) return;
-      this.tab = "details";
-      const el = document.querySelector(".tlg-timeline");
+      if (!this.detail.found) return;
+      const t = this.detail.timeline || [];
+      /* ⭐ ONLY the measured stages become steps. A rejected trade therefore
+         stops at its real terminal stage, a pending one at its last recorded
+         point, and a completed one runs through — ⛔ all three without a single
+         special case, and ⛔ with no way to invent a transition. */
+      const steps = t.map((s, i) => (s.measured ? i : -1)).filter(i => i >= 0);
+      if (!steps.length) return;
+      if (this._rpTimer) clearInterval(this._rpTimer);
+      const el = document.querySelector(".tlg-replaypanel");
       if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+      this.rpRunning = true;
+      let k = 0;
+      this.rpAt = steps[0];
+      this._rpTimer = setInterval(() => {
+        k += 1;
+        if (k >= steps.length) {
+          clearInterval(this._rpTimer);
+          this._rpTimer = null;
+          this.rpRunning = false;
+          this.rpAt = steps[steps.length - 1];   /* rest on the terminal stage */
+          return;
+        }
+        this.rpAt = steps[k];
+      }, 520);
     },
 
     detailRows() {

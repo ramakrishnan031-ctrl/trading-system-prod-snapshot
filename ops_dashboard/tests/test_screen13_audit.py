@@ -663,9 +663,19 @@ def test_every_filter_select_is_one_width():
 
 
 def test_the_pass_touched_no_other_screen():
-    """🔬 Every rule the pass added is `.aud-page`-scoped."""
+    """🔬 Every rule the S13 pass added is `.aud-page`-scoped.
+
+    ⚠️ THE WINDOW MUST END AT THE NEXT SCREEN'S BANNER. The first version read
+    to END-OF-FILE, so the very next screen to append its own correctly-scoped
+    block failed this test — 🔬 S14's `.tlg-page .tlg-row4` did exactly that.
+    ⛔ That was the test's window being wrong, ⛔ not the other screen; the
+    assertion itself is right and stays.
+    """
     css = _css()
     block = css[css.index("SCREEN 13 — the pass against the original artwork"):]
+    nxt = re.search(r"SCREEN \d+ . the pass against the original artwork", block[1:])
+    if nxt:
+        block = block[:nxt.start() + 1]
     for line in block.splitlines():
         line = line.strip()
         if "{" in line and not line.startswith(("/*", "*", "@")):

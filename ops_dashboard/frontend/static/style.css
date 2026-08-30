@@ -6231,3 +6231,80 @@ th[draggable="true"] { cursor: grab; }
 /* -- C3: one width for every filter select, so a long option string cannot
       make its control twice the width of its neighbours -------------------- */
 .aud-page .aud-frow .aud-f > .sel { width: 168px; }
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SCREEN 14 — the pass against the original artwork (30-Aug-2026).
+   Additive and scoped to `.tlg-page`; ⛔ nothing here reaches another screen.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ⚠️ AUTO-RECOVERY HISTORY and RECENT ERRORS were both cut off — their own
+   headings rendered as "RECOVERE…" and "RESOLU… STATUS". 🔬 CAUSE: both carry
+   the long literal `NOT INSTRUMENTED` in two columns, while the EXPORT panel —
+   a caption and one button — held .8fr it does not use. ⭐ REBALANCE ONLY.
+   ⛔ NOT by wrapping the cells: 🔬 measured, `white-space: normal` did clear the
+   clip but turned every RECENT ERRORS row into THREE lines, which is worse than
+   the defect. ⛔ And ⛔ not by shortening the honest wording. Each panel keeps
+   its own `overflow-x: auto` scroll container — the house pattern for wide
+   content — so anything still too wide scrolls INSIDE the panel rather than
+   pushing the page. */
+.tlg-page .tlg-row4 {
+  grid-template-columns: minmax(0, 1.75fr) minmax(0, 1.75fr) minmax(0, 300px);
+}
+
+
+/* -- TRADE REPLAY -----------------------------------------------------------
+   🔬 Sized for the region it was built to fill: 1222 x ~559 px of dead left
+   column. The flow lays 8 stages across that width and wraps rather than
+   scrolling, so no stage is ever hidden from a forensic reconstruction. */
+.tlg-page .tlg-replaypanel { display: flex; flex-direction: column; }
+.tlg-page .tlg-rp-who { display: flex; align-items: center; gap: 10px;
+  font-size: 13px; color: var(--muted); margin-left: 14px; }
+.tlg-page .tlg-rp-who .tlg-dim { color: var(--dim); }
+.tlg-page .tlg-rp-go { margin-left: auto; white-space: nowrap; }
+.tlg-page .tlg-rp-empty { margin-top: 18px; }
+
+.tlg-page .tlg-rp-flow { list-style: none; margin: 16px 0 0; padding: 0;
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px 26px; }
+@media (max-width: 1250px) {
+  .tlg-page .tlg-rp-flow { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+.tlg-page .tlg-rp-node { position: relative; display: flex; flex-direction: column;
+  gap: 3px; padding: 11px 13px; border: 1px solid var(--border);
+  border-radius: 10px; background: var(--surface); min-width: 0; }
+/* the connector: an arrow between adjacent nodes on the same row */
+.tlg-page .tlg-rp-node::after { content: "→"; position: absolute; right: -20px;
+  top: 50%; transform: translateY(-50%); color: var(--border); font-size: 15px; }
+.tlg-page .tlg-rp-node:nth-child(4n)::after,
+.tlg-page .tlg-rp-node:last-child::after { content: ""; }
+@media (max-width: 1250px) {
+  .tlg-page .tlg-rp-node:nth-child(4n)::after { content: "→"; }
+  .tlg-page .tlg-rp-node:nth-child(2n)::after { content: ""; }
+  .tlg-page .tlg-rp-node:last-child::after { content: ""; }
+}
+
+.tlg-page .tlg-rp-dot { width: 9px; height: 9px; border-radius: 50%;
+  background: var(--border); }
+.tlg-page .tlg-rp-stage { font-size: 13px; font-weight: 700; }
+.tlg-page .tlg-rp-time { font-size: 13px; font-variant-numeric: tabular-nums; }
+.tlg-page .tlg-rp-na { font-size: 13px; color: var(--dim); }
+.tlg-page .tlg-rp-why { font-size: 13px; color: var(--dim); line-height: 1.35; }
+
+/* ⭐ FOUR STATES, and they must not look alike:
+   recorded · NOT INSTRUMENTED (the system never writes it) ·
+   not reached (this trade stopped earlier) · currently replaying. */
+.tlg-page .tlg-rp-node.is-on   { border-color: rgba(46,160,67,.5); }
+.tlg-page .tlg-rp-node.is-on   .tlg-rp-dot { background: var(--green); }
+.tlg-page .tlg-rp-node.is-on   .tlg-rp-time { color: var(--green); }
+.tlg-page .tlg-rp-node.is-gap  { border-style: dashed; }
+.tlg-page .tlg-rp-node.is-gap  .tlg-rp-dot { background: var(--gray); }
+.tlg-page .tlg-rp-node.is-off,
+.tlg-page .tlg-rp-node.is-unreached { opacity: .55; }
+.tlg-page .tlg-rp-node.is-unreached .tlg-rp-dot { background: transparent;
+  border: 1px solid var(--border); }
+.tlg-page .tlg-rp-node.is-terminal { border-color: var(--blue); }
+.tlg-page .tlg-rp-node.is-live { border-color: var(--blue);
+  box-shadow: 0 0 0 2px rgba(56,139,253,.28); opacity: 1; }
+.tlg-page .tlg-rp-node.is-live .tlg-rp-dot { background: var(--blue); }

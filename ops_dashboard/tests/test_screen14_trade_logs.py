@@ -647,3 +647,73 @@ class TestNoPageLevelOverflow:
             sel = m.group(1).strip()
             if "tlg-row4" in sel:
                 assert ".tlg-page" in sel, "unscoped .tlg-row4 rule: %s" % sel[:70]
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# TRADE REPLAY — the 30-Aug panel that fills the measured dead band
+# ═════════════════════════════════════════════════════════════════════════════
+def test_the_replay_panel_lives_in_the_left_column_not_below_both():
+    """🔬 The blank region was 1222x559 INSIDE `.tlg-left` — the rail ran 543px
+    past `.tlg-row3`. ⛔ A full-page-width band appended below both columns
+    would have left that hole exactly where it was and only made the page
+    taller, so placement is the whole correction, ⛔ not a detail."""
+    t = _tpl()
+    left = t[t.index('<div class="tlg-left">'):t.index('<aside class="tlg-rail">')]
+    assert "tlg-replaypanel" in left, "replay panel is not inside .tlg-left"
+    assert t.index("tlg-replaypanel") > t.index('class="tlg-row3"')
+
+
+def test_the_replay_reuses_the_timeline_evidence_and_adds_no_new_source():
+    """⛔ No new endpoint, no new field: the stages ARE `detail.timeline`, the
+    same eight the TRADE TIMELINE renders from the same detail response."""
+    t = _tpl()
+    panel = t[t.index("tlg-replaypanel"):t.index("RIGHT RAIL")]
+    assert "detail.timeline" in panel
+    assert "detail.stages_measured" in panel and "detail.stages_total" in panel
+    # ⛔ nothing fetched of its own
+    assert "fetch(" not in panel
+
+
+def test_the_replay_steps_only_through_measured_stages():
+    """⭐ THE RULE THAT MAKES FABRICATION IMPOSSIBLE. An unmeasured stage is
+    never a step, so a rejected trade stops at its real terminal, a pending one
+    at its last recorded point, and a completed one runs through — ⛔ with no
+    special-casing and ⛔ no way to invent a transition."""
+    t = _tpl()
+    fn = t[t.index("    replay() {"):]
+    fn = fn[:fn.index("\n    },")]
+    assert "s.measured ? i : -1" in fn and "filter(i => i >= 0)" in fn
+    # ⛔ the terminal stage is where it rests, never a later one
+    assert "steps[steps.length - 1]" in fn
+
+
+def test_the_replay_never_prints_a_timestamp_it_does_not_have():
+    t = _tpl()
+    panel = t[t.index("tlg-replaypanel"):t.index("RIGHT RAIL")]
+    # a time is shown ONLY when the stage is measured
+    assert 'x-show="s.measured" x-text="s.time"' in panel
+    # the gap keeps the system's own wording, and the reason travels with it
+    assert "NOT INSTRUMENTED" in panel and 's.gap || s.note' in panel
+    why = t[t.index("    rpWhy(s, i) {"):]
+    why = why[:why.index("\n    },")]
+    assert '"pending"' in why and '"not reached"' in why
+    # ⚠️ rpWhy returns a LABEL only — returning the note duplicated it on the node
+    assert "return s.note;" not in why
+
+
+def test_the_replay_has_an_honest_empty_state():
+    t = _tpl()
+    panel = t[t.index("tlg-replaypanel"):t.index("RIGHT RAIL")]
+    assert "Select an event with a Trade ID to reconstruct its lifecycle." in panel
+    assert 'x-show="!detail.found"' in panel
+
+
+def test_the_replay_added_no_scanner_and_no_unscoped_css():
+    t, css = _tpl(), _css()
+    panel = t[t.index("tlg-replaypanel"):t.index("RIGHT RAIL")]
+    assert "scanner" not in panel.lower()
+    block = css[css.index("-- TRADE REPLAY ---"):]
+    for line in block.splitlines():
+        line = line.strip()
+        if "{" in line and not line.startswith(("/*", "*", "@")):
+            assert line.startswith(".tlg-page"), "unscoped selector: %s" % line
