@@ -113,7 +113,8 @@ _MEASURED_STAGES = tuple(s["key"] for s in _STAGES if s["measured"])
 # Filterable dimensions. ⛔ Scanner is absent on purpose: strategy IS the scanner
 # identity on this system (Rama, 14-Aug; measured on Screen 07 — signals.scanner
 # EQUALS trades.strategy on all 603 trades and all 127,246 signals).
-_EXEC_FILTERS = ("strategy", "symbol", "trade_type", "direction", "status")
+_EXEC_FILTERS = ("strategy", "symbol", "trade_type", "direction", "status",
+                 "trade_state")
 
 # ── TRADE STATE, which is a DIFFERENT axis from execution status ─────────────
 # `status` above grades the execution SPEED (fast/moderate/slow). This grades
@@ -388,11 +389,35 @@ def _apply_filters(rows: list, f: dict) -> list:
         out = [r for r in out if (r.get("direction") or "") == f["direction"].upper()]
     if f.get("status"):
         out = [r for r in out if r.get("status") == f["status"].upper()]
+    # TRADE STATE — ⛔ NOT the same axis as `status` above. That one is the DELAY
+    # BAND (fast/moderate/slow); this is the trade's LIFECYCLE position (closed/
+    # open/pending/rejected). Both are rendered as columns, so both are filterable.
+    if f.get("trade_state"):
+        out = [r for r in out if r.get("trade_state") == f["trade_state"].upper()]
     return out
 
 
 def _measured(rows: list) -> list:
     return [r for r in rows if r.get("total_sec") is not None]
+
+
+def _pipeline_label(tt: str) -> str:
+    """MIS/CO/BO -> Intraday · CNC -> Delivery · UNKNOWN stays UNKNOWN.
+
+    ⛔ The rule is NOT invented here: it is the same one the capital path uses —
+    `capital.pipeline_policy.pipeline_for_product` treats anything that is not the
+    delivery product as intraday. Restating it as a second, different rule on a
+    screen would be exactly the drift this project keeps catching.
+
+    ⛔ UNKNOWN is NOT folded into Intraday. A trade with no ENTRY order row has no
+    product (see `_trade_type`), and silently counting it as intraday would put a
+    fabricated dimension into an analysis whose whole point is to separate the two
+    books. It stays VISIBLE and countable as its own row.
+    """
+    t = (tt or "UNKNOWN").upper()
+    if t == "UNKNOWN":
+        return "UNKNOWN"
+    return "Delivery" if t == "CNC" else "Intraday"
 
 
 def _rank(rows: list, key: str, label: str) -> list:
@@ -654,7 +679,8 @@ def _status_counts(rows: list) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 def build_execution_analytics(cfg, period="today", from_date=None, to_date=None, *,
                               strategy=None, symbol=None, trade_type=None,
-                              direction=None, status=None, limit=None) -> dict:
+                              direction=None, status=None, trade_state=None,
+                              limit=None) -> dict:
     """Screen 11. One filtered population feeds every panel."""
     frm, to = freshness.resolve_period(period, from_date, to_date)
 
@@ -669,9 +695,13 @@ def build_execution_analytics(cfg, period="today", from_date=None, to_date=None,
         "trade_type": sorted({r["trade_type"] for r in all_rows}),
         "direction": sorted({r["direction"] for r in all_rows if r.get("direction")}),
         "status": list(_STATUSES),
+        # ⭐ The full lifecycle vocabulary, ⛔ not just the values present in this
+        # period — otherwise the option to isolate REJECTED would silently vanish
+        # on a clean day, which is exactly when an operator goes looking for it.
+        "trade_state": list(_TRADE_STATES),
     }
     active = {"strategy": strategy, "symbol": symbol, "trade_type": trade_type,
-              "direction": direction, "status": status}
+              "direction": direction, "status": status, "trade_state": trade_state}
     rows = _apply_filters(all_rows, active)
 
     counts = _status_counts(rows)
@@ -732,6 +762,14 @@ def build_execution_analytics(cfg, period="today", from_date=None, to_date=None,
 
         "per_strategy": _rank(rows, "strategy", "strategy"),
         "per_symbol": _rank(rows, "symbol", "symbol"),
+        # INTRADAY & DELIVERY EXECUTION ANALYSIS — the panel that occupies the
+        # former Scanner-ranking footprint. ⛔ Not a new aggregation: the SAME
+        # generic _rank over a pipeline label derived from the ENTRY product, so
+        # its averages, "measured" counts and sort order are identical in kind to
+        # the strategy and symbol rankings beside it.
+        "per_trade_type": _rank(
+            [dict(r, pipeline=_pipeline_label(r.get("trade_type"))) for r in rows],
+            "pipeline", "pipeline"),
         "distribution": _distribution(rows),
         "throughput": {"series": series, "totals": tp_totals},
         "throughput_note": (
@@ -851,6 +889,7 @@ def export_sheets(payload: dict) -> list:
 
     strat_h, strat_r = _rank(payload.get("per_strategy") or [], "Strategy", "strategy")
     sym_h, sym_r = _rank(payload.get("per_symbol") or [], "Symbol", "symbol")
+    tt_h, tt_r = _rank(payload.get("per_trade_type") or [], "Trade Type", "pipeline")
 
     overview = [
         ("Period", payload.get("period")), ("From", payload.get("from")),
@@ -882,6 +921,7 @@ def export_sheets(payload: dict) -> list:
         ("Delay Summary", [h for h, _k in _SUMMARY_COLS], summary_rows),
         ("Strategy Ranking", strat_h, strat_r),
         ("Symbol Ranking", sym_h, sym_r),
+        ("Intraday vs Delivery", tt_h, tt_r),
         ("Delay Distribution", ["Bucket", "Orders", "% of measured"],
          [[b.get("bucket"), b.get("orders"), b.get("pct")]
           for b in payload.get("distribution") or []]),

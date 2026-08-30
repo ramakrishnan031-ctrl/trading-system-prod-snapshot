@@ -11,6 +11,11 @@
       panel the reference carries. Strategy IS the scanner identity on this
       system (Rama, 14-Aug; measured on Screen 07: signals.scanner EQUALS
       trades.strategy on all 603 trades). ⛔ Do not reintroduce any of the three.
+      30-Aug: the freed footprint now carries INTRADAY & DELIVERY EXECUTION
+      ANALYSIS, between Strategy and Symbol exactly where the reference puts
+      Scanner. Same `_rank`, keyed on a pipeline label derived from the ENTRY
+      product by the SAME rule the capital path uses (not-CNC ⇒ intraday).
+      ⛔ UNKNOWN is shown as its own row, never folded into Intraday.
 
    2. THE RETIRED SECOND-SCORE LABEL IS NOT A COLUMN — System Score (ACHIEVED)
       + Score Threshold, as Screens 04/05/06/07/10 do. Not spelled out anywhere
@@ -129,6 +134,14 @@
           <template x-for="o in opt('status')" :key="o">
             <option :value="o" x-text="stLabel(o)"></option></template>
         </select></label>
+      {# TRADE STATE - the LIFECYCLE axis. Deliberately adjacent to Execution
+         Status because the two are easy to confuse: that one is the DELAY BAND,
+         this one is where the trade IS. Both are table columns; both filter. #}
+      <label class="exec-f"><span>Trade State</span>
+        <select class="flt" x-model="f.trade_state">
+          <option value="">All Trade States</option>
+          <template x-for="o in opt('trade_state')" :key="o"><option :value="o" x-text="o"></option></template>
+        </select></label>
       <span class="exec-fbtns">
         <button class="rt-btn" type="button" @click="resetFilters()">Reset Filters</button>
         <button class="rt-btn rt-active" type="button" @click="applyFilters()">Apply Filters</button>
@@ -218,7 +231,7 @@
     </section>
   </div><!-- /exec-main -->
 
-  <!-- RAIL: ONLY the two rankings, so it cannot outgrow the table.
+  <!-- RAIL: the three rankings, so it cannot outgrow the table.
        ⛔ Scanner Execution Ranking removed (ruling 1). -->
   <aside class="exec-rail">
     <section class="panel">
@@ -238,6 +251,31 @@
       </tbody></table></div>
     </section>
 
+    <!-- INTRADAY & DELIVERY EXECUTION ANALYSIS — occupies the footprint the
+         reference gives Scanner Execution Ranking (between Strategy and Symbol),
+         with the same card/table treatment. ⛔ Not a new dataset: the same
+         `_rank` over the ENTRY product, so nothing here is fabricated.
+         ⚠️ An UNKNOWN row means trades with NO ENTRY order row — it is shown,
+         ⛔ never folded into Intraday. -->
+    <section class="panel">
+      <div class="exec-panel-head"><h3 class="panel-title">Intraday &amp; Delivery Execution Analysis</h3>
+        <button class="btn-export" type="button" @click="exportXlsx()">⭳ Export XLSX</button></div>
+      <div class="exec-rank-scroll"><table class="cap-table"><thead><tr>
+        <th class="lbl">Trade Type</th><th>Orders</th><th>Avg Delay</th><th>Worst Delay</th><th>Fastest</th>
+      </tr></thead><tbody>
+        <template x-for="r in (data.per_trade_type || [])" :key="r.pipeline">
+          <tr><td :title="r.pipeline === 'UNKNOWN' ? 'Trades with no ENTRY order row — no product recorded' : r.pipeline"
+                  x-text="r.pipeline"></td>
+            <td class="ctr" x-text="r.executions"></td>
+            <td class="ctr" :class="tone(r.avg_delay_sec)" x-text="sec(r.avg_delay_sec)"></td>
+            <td class="ctr num-neg" x-text="sec(r.worst_delay_sec)"></td>
+            <td class="ctr num-pos" x-text="sec(r.fastest_sec)"></td></tr>
+        </template>
+        <tr x-show="!(data.per_trade_type||[]).length" x-cloak>
+          <td colspan="5" class="exec-empty">No executions.</td></tr>
+      </tbody></table></div>
+    </section>
+
     <section class="panel">
       <div class="exec-panel-head"><h3 class="panel-title">Symbol Execution Ranking</h3>
         <button class="btn-export" type="button" @click="exportXlsx()">⭳ Export XLSX</button></div>
@@ -253,8 +291,6 @@
         <tr x-show="!(data.per_symbol||[]).length" x-cloak>
           <td colspan="4" class="exec-empty">No executions.</td></tr>
       </tbody></table></div>
-      <div class="exec-note">Scanner ranking omitted — strategy is the scanner
-        identity on this system.</div>
     </section>
   </aside>
   </div><!-- /exec-grid -->
@@ -410,11 +446,25 @@
     </div>
   </div>
 
-  <div class="exec-foot">
-    <span>ℹ</span> All values are read-only and auto-update with the page.
-    <span x-show="data.row_cap_applied" x-cloak class="exec-cap-warn">
-      ⚠ Row cap in force — totals may be truncated.</span>
-    <span class="exec-err" x-show="loadError" x-cloak x-text="loadError"></span>
+  {# BOTTOM EXPORT BAR - the artwork's footer control. The PNG carries "Export
+     Current View" and "Export XLSX" here and S11 had neither; the four in-panel
+     buttons were the only export affordance.
+     Both drive the SAME filtered export the panels already offer, so "current
+     view" means the ACTIVE FILTER SET and nothing else - the note on the left
+     says which. Live handlers, NOT the gated export_button macro: S11 owns a
+     real /api/export/execution route and its own buttons already call it.
+     Layout mirrors S09's approved pnl-exportbar - note left, controls right. #}
+  <div class="exec-foot exec-exportbar">
+    <span class="exec-foot-note">
+      <span>ℹ</span> All values are read-only and auto-update with the page.
+      <span x-show="data.row_cap_applied" x-cloak class="exec-cap-warn">
+        ⚠ Row cap in force — totals may be truncated.</span>
+      <span class="exec-err" x-show="loadError" x-cloak x-text="loadError"></span>
+    </span>
+    <button class="btn-export" type="button" @click="exportXlsx()"
+            :title="'Exports the CURRENT FILTER SET — ' + (data.execution_count ?? 0) + ' execution(s)'">
+      ⭳ Export Current View</button>
+    <button class="btn-export" type="button" @click="exportXlsx()">⭳ Export XLSX</button>
   </div>
 </div>
 
@@ -443,7 +493,7 @@ function executionPage() {
       { key:"time",   label:"Time", group:"Common info",
         title:"signals.received_at (IST) — the signal instant; falls back to trade creation when the trade has no signal row" },
       { key:"strategy", label:"Strategy", group:"Common info", lbl:true },
-      { key:"symbol", label:"Symbol", group:"Common info" },
+      { key:"symbol", label:"Symbol", group:"Common info", lbl:true },
       { key:"trade_type", label:"Trade Type", group:"Common info",
         title:"Product on the ENTRY order; UNKNOWN when the trade has no ENTRY order row" },
       { key:"direction", label:"Direction", group:"Common info" },
@@ -480,8 +530,8 @@ function executionPage() {
     BUCKET_ARC: ["exec-arc-b0","exec-arc-b1","exec-arc-b2","exec-arc-b3","exec-arc-b4"],
 
     pPeriod: "today", pFrom: "", pTo: "", pick: "today",
-    f: { strategy:"", symbol:"", trade_type:"", direction:"", status:"" },
-    applied: { strategy:"", symbol:"", trade_type:"", direction:"", status:"" },
+    f: { strategy:"", symbol:"", trade_type:"", direction:"", status:"", trade_state:"" },
+    applied: { strategy:"", symbol:"", trade_type:"", direction:"", status:"", trade_state:"" },
 
     boot() { this.initCols(); this.load(); },
     /* THE POLL PATH (ops-refresh). ⛔ Must not reset the pager, the sort, the
@@ -563,7 +613,7 @@ function executionPage() {
     },
     applyFilters() { this.applied = Object.assign({}, this.f); this.reload(); },
     resetFilters() {
-      this.f = { strategy:"", symbol:"", trade_type:"", direction:"", status:"" };
+      this.f = { strategy:"", symbol:"", trade_type:"", direction:"", status:"", trade_state:"" };
       this.applied = Object.assign({}, this.f); this.reload();
     },
     isFiltered() { return Object.keys(this.applied).some(k => this.applied[k]); },

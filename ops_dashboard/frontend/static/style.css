@@ -2795,6 +2795,12 @@ table td.ctr { text-align: center !important; }
 .exec-page .exec-rail .cap-table td:first-child { max-width: 130px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .exec-page .exec-foot { margin-top: 14px; color: var(--dim); font-size: 13px; }
+/* The artwork's footer bar: note LEFT, export controls RIGHT. Same shape as
+   S09's approved .pnl-exportbar, scoped to .exec-page so no other screen moves. */
+.exec-page .exec-exportbar { display: flex; align-items: center; gap: 10px;
+  justify-content: flex-end; padding: 9px 12px; background: var(--panel);
+  border: 1px solid var(--border); border-radius: 10px; }
+.exec-page .exec-exportbar .exec-foot-note { margin: 0 auto 0 0; }
 .exec-page .exec-cap-warn { color: var(--yellow); margin-left: 10px; }
 
 /* -- draggable column headers: the Screens 04/05/07 affordance, reused ----- */

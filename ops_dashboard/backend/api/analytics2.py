@@ -223,6 +223,9 @@ def _execution_kwargs() -> dict:
         "trade_type": _arg("trade_type", upper=True),
         "direction": _arg("direction", upper=True),
         "status": _arg("status", upper=True),
+        # Lifecycle position (CLOSED/OPEN/PENDING/REJECTED/UNKNOWN) - a DIFFERENT
+        # axis from `status`, which is the delay band.
+        "trade_state": _arg("trade_state", upper=True),
     }
 
 

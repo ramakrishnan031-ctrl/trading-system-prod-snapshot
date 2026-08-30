@@ -130,8 +130,49 @@ def test_scanner_absent_from_the_screen(client):
     assert "Scanner Execution Ranking" not in html
     assert 'label:"Scanner"' not in html
     body = html.split("exec-page", 1)[1]
-    assert body.count("Scanner") == 1                 # only the "why" note
-    assert "Scanner ranking omitted" in body
+    # 30-Aug: the "why" note is GONE, so the bar rises from one mention to ZERO.
+    # It existed to explain an EMPTY footprint; that footprint now carries the
+    # Intraday & Delivery panel, which makes the note both obsolete and the last
+    # piece of user-facing Scanner wording on the screen.
+    assert body.count("Scanner") == 0
+    assert "Intraday &amp; Delivery Execution Analysis" in body
+
+
+def test_trade_state_filter_narrows_the_whole_screen(client):
+    """TRADE STATE is a SECOND, different axis from Execution Status.
+
+    ⛔ `status` is the DELAY BAND (fast/moderate/slow/unmeasured); `trade_state`
+    is the LIFECYCLE position (closed/open/pending/rejected). Both are rendered
+    as columns, so both must filter — otherwise "show me only the CLOSED ones"
+    is impossible on a screen that displays the column.
+    """
+    base = _month(client)
+    closed = _month(client, "&trade_state=CLOSED")
+    assert closed["execution_count"] <= base["execution_count"]
+    # every surviving row really is CLOSED - the gate, not just the label
+    assert {r["trade_state"] for r in closed["rows"]} <= {"CLOSED"}
+    # and it is the SINGLE gate: the rankings narrow with the table, so no panel
+    # can describe a different population
+    assert sum(r["executions"] for r in closed["per_trade_type"]) == closed["execution_count"]
+    assert closed["filters"]["active"]["trade_state"] == "CLOSED"
+
+
+def test_trade_state_is_offered_as_the_full_vocabulary(client):
+    """⛔ Not just the values present this period - the option to isolate REJECTED
+    must not vanish on a clean day, which is exactly when it is looked for."""
+    opts = _month(client)["filters"]["options"]["trade_state"]
+    assert set(opts) >= {"CLOSED", "OPEN", "PENDING", "REJECTED"}
+    assert "trade_state" in _month(client)["filters"]["keys"]
+
+
+def test_trade_state_and_execution_status_are_independent_axes(client):
+    """Filtering one must not silently apply the other."""
+    # `active` carries only the filters actually SET (falsy values are dropped),
+    # so independence means the other key is ABSENT, not present-and-None.
+    a = _month(client, "&trade_state=CLOSED")["filters"]["active"]
+    b = _month(client, "&status=FAST")["filters"]["active"]
+    assert a.get("trade_state") == "CLOSED" and "status" not in a
+    assert b.get("status") == "FAST" and "trade_state" not in b
 
 
 def test_scanner_filter_is_not_silently_accepted(client):
@@ -181,7 +222,10 @@ def test_label_columns_declared_left_and_data_columns_centred():
                           "Trade Type", "Direction"]
     assert "Scanner" not in labels
     left = [lbl for _k, lbl, rest in entries if "lbl:true" in rest]
-    assert left == ["Trading Date", "Strategy"]
+    # Symbol is a LEFT label column (design TXT + the 30-Aug production
+    # instruction). `lbl` drives BOTH sides — th gains `lbl`, td drops `ctr` —
+    # so the heading and every data cell move together.
+    assert left == ["Trading Date", "Strategy", "Symbol"]
     assert 'class="ctr"' in t
 
 
@@ -635,14 +679,44 @@ def test_analytics_live_in_one_zone_not_two_tiers():
         assert dead not in css and dead not in t, dead
 
 
-def test_the_rail_holds_only_the_two_rankings():
-    """The rail outgrowing the table is what opened the dead column. Warnings and
-    the status guide moved into the bottom zone."""
+def test_the_rail_holds_the_three_rankings_and_nothing_else():
+    """The rail outgrowing the table is what opened the dead column, so what it
+    may hold stays pinned. 30-Aug: it is THREE rankings — the Intraday & Delivery
+    panel takes the footprint the reference gives Scanner, BETWEEN Strategy and
+    Symbol. Warnings and the status guide stay in the bottom zone: those are the
+    two that made the rail outgrow the table, and this is the assertion that
+    keeps them out."""
     t = _tpl()
     rail = t.split('class="exec-rail"', 1)[1].split("</aside>", 1)[0]
-    assert rail.count("<section") == 2
+    assert rail.count("<section") == 3
     assert "Strategy Execution Ranking" in rail and "Symbol Execution Ranking" in rail
+    assert "Intraday &amp; Delivery Execution Analysis" in rail
     assert "Recent Execution Warnings" not in rail and "Status Guide" not in rail
+    # ⛔ Position matters: the replacement must sit where Scanner sat, between the
+    # two rankings — not appended after Symbol, which would be a different layout.
+    assert (rail.index("Strategy Execution Ranking")
+            < rail.index("Intraday &amp; Delivery Execution Analysis")
+            < rail.index("Symbol Execution Ranking"))
+
+
+def test_intraday_delivery_panel_is_real_data_and_keeps_unknown_visible(client):
+    """The panel replacing Scanner must be the SAME aggregation as the rankings
+    beside it, ⛔ not a second one — and UNKNOWN must stay its own row.
+
+    ⛔ Folding UNKNOWN into Intraday would put a fabricated product into the one
+    analysis whose job is to separate the two books; a trade with no ENTRY order
+    row has no product at all (see `_trade_type`)."""
+    rows = _month(client)["per_trade_type"]
+    assert rows, "the panel must render from the execution spine, not a stub"
+    labels = {r["pipeline"] for r in rows}
+    assert labels <= {"Intraday", "Delivery", "UNKNOWN"}
+    # every group carries the same shape the other two rankings do
+    for r in rows:
+        assert set(r) >= {"pipeline", "executions", "measured",
+                          "avg_delay_sec", "worst_delay_sec", "fastest_sec"}
+        assert r["executions"] >= 1
+    # the split is a PARTITION of the filtered set — nothing invented, nothing lost
+    assert sum(r["executions"] for r in rows) == _month(client)["execution_count"]
 
 
 # ── TREND ────────────────────────────────────────────────────────────────────
@@ -769,7 +843,8 @@ def test_export_is_the_filtered_set_and_carries_every_panel(client):
     assert r.status_code == 200
     wb = load_workbook(io.BytesIO(r.data))
     assert wb.sheetnames == ["Executions", "Delay Summary", "Strategy Ranking",
-                             "Symbol Ranking", "Delay Distribution", "Overview"]
+                             "Symbol Ranking", "Intraday vs Delivery",
+                             "Delay Distribution", "Overview"]
     ws = wb["Executions"]
     header = [c.value for c in ws[1]]
     assert header[:6] == ["Trading Date", "Time", "Strategy", "Symbol",
