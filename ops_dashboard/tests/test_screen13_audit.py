@@ -612,3 +612,61 @@ def test_the_page_declares_its_instrumentation_gaps_in_words(client):
         assert p["gaps"][key]["measured"] is False, key
         assert len(p["gaps"][key]["reason"]) > 30, key
     assert "OBSERVED" in p["note"] or "observed" in p["note"]
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# THE 30-Aug PASS AGAINST THE ORIGINAL ARTWORK
+# ⛔ These pin the three corrections. Each names a string absent before the pass.
+# ═════════════════════════════════════════════════════════════════════════════
+def test_critical_changes_sits_with_the_lower_analytics_not_in_the_table_rail():
+    """⭐ The design TXT is explicit: *"the original PNG places this as a
+    right-side panel aligned with the lower analytics area. Preserve that
+    relationship."*
+
+    ⚠️ It is also a DEAD-SPACE fix. 🔬 With a record selected the rail stood
+    1474px against a 528px table — 946px of void beside it, visible only AFTER
+    a row is clicked, which is why an unselected screenshot never showed it.
+    """
+    t = _tpl()
+    rail = t[t.index('<aside class="aud-rail">'):t.index("</aside>")]
+    assert "aud-critical" not in rail, "CRITICAL CHANGES is back in the table rail"
+    lower = t[t.index('<div class="aud-lower">'):t.index('<div class="aud-footer">')]
+    assert "aud-critical" in lower and "aud-zone" in lower
+    # ⭐ the lower band must MIRROR .aud-main, or the panel stops lining up
+    # underneath AUDIT DETAILS and the whole point of the move is lost.
+    css = _css()
+    main = css[css.index(".aud-page .aud-main {"):]
+    main = main[:main.index("}")]
+    low = css[css.index(".aud-page .aud-lower {"):]
+    low = low[:low.index("}")]
+    assert "minmax(0, 1fr) 330px" in main and "minmax(0, 1fr) 330px" in low
+
+
+def test_the_bottom_export_bar_keeps_the_note_left_and_the_buttons_right():
+    """⚠️ The rule was ALREADY `space-between`. `flex-wrap: wrap` plus the long
+    honesty note wrapped the buttons onto their own line at the LEFT, so the
+    bar read nothing like the artwork. ⛔ `nowrap` is the load-bearing part."""
+    t, css = _tpl(), _css()
+    foot = t[t.index('<div class="aud-footer">'):]
+    assert foot.count('class="btn-export"') == 2, "not the shared S09/S11/S12 control"
+    assert "Export Current View" in foot and "Export XLSX" in foot
+    assert "/api/export/audit-screen" in t or "exportUrl()" in foot
+    rule = css[css.index(".aud-page .aud-footer { flex-wrap: nowrap"):]
+    assert "nowrap" in rule[:80]
+
+
+def test_every_filter_select_is_one_width():
+    """⛔ Action rendered ~2x its siblings purely because its option strings are
+    longer — a control's width must not encode its data."""
+    css = _css()
+    assert ".aud-page .aud-frow .aud-f > .sel { width: 168px; }" in css
+
+
+def test_the_pass_touched_no_other_screen():
+    """🔬 Every rule the pass added is `.aud-page`-scoped."""
+    css = _css()
+    block = css[css.index("SCREEN 13 — the pass against the original artwork"):]
+    for line in block.splitlines():
+        line = line.strip()
+        if "{" in line and not line.startswith(("/*", "*", "@")):
+            assert line.startswith(".aud-page"), "unscoped selector: %s" % line

@@ -268,32 +268,16 @@
         <div class="aud-note" x-text="timelineWhy()"></div>
       </section>
 
-      {# ── CRITICAL CHANGES ────────────────────────────────────────────────── #}
-      <section class="panel aud-critical">
-        <div class="aud-panel-head">
-          <h3 class="panel-title">CRITICAL CHANGES</h3>
-          <span class="aud-crit-n" x-text="(data.critical || []).length + ' in range'"></span>
-        </div>
-        <ul class="aud-crit">
-          <template x-for="c in (data.critical || [])" :key="c.ref_id">
-            <li @click="pickRef(c.ref_id)" tabindex="0" @keyup.enter="pickRef(c.ref_id)">
-              <i class="aud-crit-i" :class="'aud-cd-' + critTone(c)"></i>
-              <span class="aud-crit-b">
-                <b class="aud-crit-t" :class="txt(critTone(c))" x-text="c.action"></b>
-                <span class="aud-crit-d" x-text="critLine(c)"></span>
-              </span>
-              <span class="aud-crit-ts mono" x-text="c.time || '—'"></span>
-            </li>
-          </template>
-          <li x-show="!(data.critical || []).length" x-cloak class="aud-empty">
-            No risk, capital, control or failed changes in this range.</li>
-        </ul>
-      </section>
     </aside>
   </div>
 
   {# ── BOTTOM ROW: donut · line · top users · retention ─────────────────────── #}
-  <div class="aud-zone">
+  {# LOWER BAND — the analytics with CRITICAL CHANGES beside them. ⭐ The
+     column geometry deliberately MATCHES `.aud-main` above (fluid + 330px), so
+     the critical panel lands directly beneath AUDIT DETAILS — the relationship
+     the original artwork draws and the design TXT asks to preserve. #}
+  <div class="aud-lower">
+    <div class="aud-zone">
     <section class="panel aud-dist">
       <h3 class="panel-title">AUDIT CATEGORY DISTRIBUTION</h3>
       <div class="aud-dist-body">
@@ -401,6 +385,29 @@
       </tbody></table>
       <div class="aud-note" x-text="(data.retention || {}).scope_note || ''"></div>
     </section>
+    </div>
+
+    {# ── CRITICAL CHANGES ────────────────────────────────────────────────── #}
+    <section class="panel aud-critical">
+      <div class="aud-panel-head">
+        <h3 class="panel-title">CRITICAL CHANGES</h3>
+        <span class="aud-crit-n" x-text="(data.critical || []).length + ' in range'"></span>
+      </div>
+      <ul class="aud-crit">
+        <template x-for="c in (data.critical || [])" :key="c.ref_id">
+          <li @click="pickRef(c.ref_id)" tabindex="0" @keyup.enter="pickRef(c.ref_id)">
+            <i class="aud-crit-i" :class="'aud-cd-' + critTone(c)"></i>
+            <span class="aud-crit-b">
+              <b class="aud-crit-t" :class="txt(critTone(c))" x-text="c.action"></b>
+              <span class="aud-crit-d" x-text="critLine(c)"></span>
+            </span>
+            <span class="aud-crit-ts mono" x-text="c.time || '—'"></span>
+          </li>
+        </template>
+        <li x-show="!(data.critical || []).length" x-cloak class="aud-empty">
+          No risk, capital, control or failed changes in this range.</li>
+      </ul>
+    </section>
   </div>
 
   <div class="aud-footer">
@@ -409,9 +416,14 @@
       ⛔ Who changed a setting is <b>not captured</b> anywhere in this system —
       GUI login/logout is never persisted, so the Authentication category has no
       source and the User column shows the recorded PROCESS or an explicit gap.</span>
+    {# ⭐ `.btn-export` — the SAME control S09/S11/S12 carry on their bottom
+       bars, so the four approved screens cannot drift apart. ⛔ Still the
+       existing `exportUrl()`; ⛔ no new route. #}
     <span class="aud-foot-btns">
-      <a class="rt-btn" :href="exportUrl()">⇩ Export Current View</a>
-      <a class="rt-btn rt-active" :href="exportUrl()">⇩ Export XLSX</a>
+      <a class="btn-export" :href="exportUrl()"
+         :title="'Exports the CURRENT VIEW — ' + (data.total_records ?? 0) + ' record(s)'"
+         >⭳ Export Current View</a>
+      <a class="btn-export" :href="exportUrl()">⭳ Export XLSX</a>
     </span>
   </div>
 </div>
