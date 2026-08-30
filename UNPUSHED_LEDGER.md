@@ -1991,3 +1991,121 @@ red; reverted. Full dashboard suite: 🔬 **2100 passed, 1 failed** —
 on a pristine checkout. 🔬 Every added CSS selector is `.aud-page`-scoped, pinned
 by a test that walks the added block. ⛔ No console messages; ⛔ no horizontal
 overflow.
+
+
+### Entry 25 — S14 TRADE LOGS APPROVED. ⛔ NOT PUSHED
+
+**Date/time:** 30-Aug-2026, approved ~22:4x IST · **Branch:** `feat/screen10-slippage-analytics`
+**Build:** `3885208` · **Pushed: NO · Deployed: NO**
+
+⭐ **S14 WAS ALREADY FULLY BUILT** — 12 panels, all bindings, 83 tests — and ⭐
+**Scanner was ALREADY REMOVED, and DEFENDED AT THREE LAYERS**: the rendered page
+AND the JSON payload · the export header · **the SQL itself** (`signals.scanner`
+exists in the schema and is ⛔ deliberately UNREAD). ⭐ The link to the SEPARATE
+**Scanner Attribution** screen is correctly untouched — a different thing, ⛔ not
+a leak. ⇒ this was a **visual pass**, ⛔ not a rebuild.
+
+#### 1. ⭐ THE TRADE REPLAY PANEL — built into a MEASURED hole
+
+🔬 **The defect was measured before anything was built:** `.tlg-rail` runs
+**543px past** the bottom of `.tlg-row3`, leaving a blank region of
+**1222 × 559 px** INSIDE `.tlg-left`, between TRADE TIMELINE / EVENT DETAILS and
+the AUTO-RECOVERY / RECENT ERRORS / EXPORT row.
+
+⚠️ ⭐ **That measurement drove the PLACEMENT, and the placement was the whole
+correction.** A full-page-width band appended below both columns would have left
+the hole **exactly where it was** and ⛔ merely made the page taller. The panel
+therefore sits INSIDE `.tlg-left`. 🔬 Dead band **559px → 16px** (the normal grid
+gap); panel **1222 × 345**.
+
+⛔ **NO NEW BACKEND.** The eight stages ARE `detail.timeline` — the same ones the
+TRADE TIMELINE above renders, from the same detail response. ⭐ The service's own
+docstring already anticipated it: *"Replay reconstructs the REAL lifecycle: each
+stage is filled only from a real stored timestamp."*
+
+⭐⭐ **THE ANIMATION STEPS ONLY THROUGH `measured` STAGES.** That ONE rule makes a
+fabricated transition **structurally impossible** rather than merely
+discouraged — an unmeasured stage is never a step — and it delivers all three
+required behaviours with ⛔ no special-casing:
+🔬 **VERIFIED LIVE ON TWO TRADES:**
+  · **completed** — stepped `Signal Received → Validation → Order → Fill →
+    Position → Exit`, ⭐ **SKIPPING Risk and Capital** because neither has a
+    timestamp.
+  · **zero-fill `TRD-2026-000807`** — **Order 10:58:34 marked TERMINAL**;
+    Fill and Position **not reached**; Exit **pending / position still open**.
+    ⭐ RECENT ERRORS corroborates at the same instant: *"Cancelled with zero fill
+    on timeout"*.
+
+⭐ **Four states drawn distinctly, because they MEAN different things:**
+recorded · **NOT INSTRUMENTED** (carrying the system's own reason) · not
+reached · currently replaying.
+
+#### 2. The lower row rebalanced — ⚠️ and my first attempt was worse
+
+AUTO-RECOVERY HISTORY and RECENT ERRORS were **both clipped** ("RECOVERE…",
+"RESOLU… STATUS", "NOT INSTR…") while the EXPORT panel held `.8fr` it does not
+use.
+⚠️ ⭐ **RECORDED HONESTLY: the first fix was worse than the defect.** Wrapping the
+cells cleared the clip but turned every RECENT ERRORS row into **three lines**.
+🔬 Measured, reverted, kept the **width change only** — each panel retains its own
+`overflow-x: auto`, the house pattern for wide content. ⛔ The honest wording was
+never shortened and ⛔ the 13px floor was never breached.
+
+#### 3. An S13 test of mine, fixed at root
+
+S13's *touched-no-other-screen* check scanned to **END-OF-FILE**, so the very
+next screen to append a correctly-scoped block failed it — 🔬 S14's
+`.tlg-page .tlg-row4` did exactly that. ⭐ **The WINDOW was wrong, ⛔ not the
+assertion**; it is now bounded to its own block and ⭐ re-proved RED-capable.
+
+#### ⭐ THE EVIDENCE SOURCE — the brief's *VM > review*
+
+🔬 Inspected `/home/ubuntu/systems/trading-system/reports/log_review/eod_review_2026-08-28.md`
+(the latest available) and **reproduced** it. ⭐ The payload's counts land on the
+file **exactly**: **Signal Received 4,686 · Signal Accepted 16 · Capital Rejected
+58 · Order Created 16 · Position Closed 5 (TGT 1 / SL 3)** — plus the real
+symbols, the real rejection reasons, both slippage-guard figures verbatim, and
+both kill-switch instants. ⭐ **The REAL 28-Aug date is kept** — it falls inside
+S14's own default 7-day window, so ⛔ no re-dating was needed.
+
+⚠️ ⭐ One demo-data defect I caused and fixed: my first generator placed
+*Signal Received* AFTER its own *Order*. ⛔ A forensic console showing that is not
+reviewable. Signals are now derived BACKWARDS from the order they produced.
+
+#### ⚠️ SEVEN GAPS THE SCREEN SURFACES — ⛔ the demo does NOT paper over them
+
+- 🔴 **NO error-code scheme exists in this system** — a repo-wide search for an
+  `XXX-0000` code returns **ZERO** ⇒ the artwork's `EXCH-1016` / `RISK-2001` /
+  `CAP-3002` ⛔ **CANNOT be built**. Renders NOT INSTRUMENTED.
+- 🔴 **A PASSING risk or capital gate writes NO ROW** ⇒ *Risk Passed* and
+  *Capital Passed* show **NOT INSTRUMENTED, ⛔ never 0** — ⭐ a 0 would wrongly
+  read as *nothing ever passed*.
+- **Risk and Capital have no timestamp of their own** ⇒ the timeline reads
+  *"n of 8 stages recorded"* and names the two gaps.
+- ⛔ **No resolution state** ⇒ the artwork's *Resolved* column has no source.
+- ⛔ **No *Recovered In*** ⇒ the artwork's *18 sec* cannot be built.
+- ⛔ **No retention policy** on signals/trades/orders ⇒ the artwork's *67 Days* is
+  NOT INSTRUMENTED. ⚠️ The log file's own *"90 days"* governs OTHER tables — ⭐ the
+  service is right to refuse it.
+- ⛔ **No human attribution anywhere** ⇒ User is NOT INSTRUMENTED.
+
+#### ⛔ WHAT THE APPROVAL DOES NOT MEAN
+
+🔴 **S14 IS NOT `VERIFIED LIVE`.** It was approved on data **reproduced from the
+28-Aug log review** through the out-of-repo harness on **:8501** — ⛔ no repo
+edit, ⛔ no demo DB, ⛔ no config pointer, ⛔ nothing to revert.
+
+#### Gate
+
+🔬 **89 S14 tests pass (+6 this window)**, pinning the replay's honesty rules —
+placement inside `.tlg-left`, reuse of `detail.timeline` with ⛔ no fetch of its
+own, measured-only stepping, ⛔ no timestamp it does not have, the honest empty
+state, and ⛔ no Scanner / ⛔ no unscoped CSS. ⭐ RED-capability proven by
+**mutation**: letting the replay step through EVERY stage turned the guard red;
+reverted. Full dashboard suite: 🔬 **2104 passed, 1 failed** —
+`test_c_venv_has_no_kiteconnect`, the environment artifact.
+
+⚠️ **A nuisance, ⛔ not a page defect:** screenshot capture timed out three times
+on this screen. It carries **9,428** client-side rows, which strains the renderer
+during capture; ⭐ the page itself stayed responsive and every measurement came
+back clean.
