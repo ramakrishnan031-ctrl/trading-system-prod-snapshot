@@ -1601,3 +1601,89 @@ the **explicit refspec `c90aa00:refs/heads/main`**, ⛔ never `git push origin m
 3. **Deployment order matters**: this branch is based on `2bfe9e2`. If `origin/main`
    has moved by tomorrow evening, this needs a refit onto the new tip, its own
    verification run, and a new exact SHA — ⛔ never deploy the pre-refit hash.
+
+---
+
+## WINDOW: 14→28-Aug-2026 — THE GUI BUILD-OUT AND THE VISUAL-APPROVAL CAMPAIGN
+
+**Branch:** `feat/screen10-slippage-analytics` (continues `feat/screen06-positions`)
+**Base at window open:** merge-base `6fa8a1c` (14-Aug).
+**Pushed: NO · Deployed: NO** — 🔬 re-measured 30-Aug: `git ls-remote origin
+feat/screen10-slippage-analytics` returns **0 refs**. Nothing of this window has
+ever left the PC.
+
+### Entry 21 — ALL 22 SCREENS BUILT · 8 VISUALLY APPROVED · ⛔ NOT PUSHED
+
+**Date/time:** 14-Aug → 28-Aug-2026 · **HEAD `d0a4054`**
+**Commits since Entry 20 (`8bebcd8`): 90** — 🔬 measured, not counted by hand.
+**Pushed: NO · Deployed: NO**
+
+#### What the 90 commits contain
+
+| dates | work |
+|---|---|
+| 14–15 Aug | **S09** P&L Analytics · **S10** Slippage Analytics · **S11** Execution Analytics · **S12** System Health (UNKNOWN as a first-class state) · **S13** Audit · **S14** Trade Logs · **S15** System Logs |
+| 16–17 Aug | **S18** Live Activity · **S19** Strategy Ranking · **S20** Strategy Health · **S21** Scanner Attribution · **S22** Holdings · **S17** Controls |
+| 18–20 Aug | The **visual-approval campaign** — 32 commits on 19-Aug alone. S01–S05 approved; S06 approved on its pre-correction render; the 13px-floor decision re-opened all 22 |
+| 24 Aug | **S08** Capital & Risk — a **FULL REBUILD**, ⛔ not a patch (`c479b40`), then approved |
+| 27 Aug | **S09** heatmaps rebuilt as the artwork's two-row matrix (`292a750`); approved |
+| 28 Aug | **S10** Export panel + genuinely column-driven table (`c37e718`); approved (`d0a4054`) |
+
+⭐ Also in this window, and it is the one structural change rather than a screen:
+**`efeb0b7` — the column reorder became ONE implementation, not fifteen.**
+`colDragMixin()` in `static/components.js:95`. `Object.assign` places page members
+LAST, so the existing screens keep their own overrides and are unchanged.
+🔬 **Measured 30-Aug: 16 of 30 screen templates use the mixin, and ALL 16 iterate
+`cols` inside `<tbody>` ⇒ 16/16 genuinely move the DATA, 0 header-only.**
+⚠️ That matters because wiring alone is not the feature: a table with POSITIONAL
+`<td>`s moves the LABEL and leaves the DATA behind.
+
+#### 🔴 APPROVAL STANDING — 🔬 from `VISUAL_APPROVAL_LEDGER_19-Aug-2026.md` at HEAD
+
+| state | n | screens |
+|---|---|---|
+| 🟢 **VISUALLY APPROVED** | **8** | S01 · S02 · S03 · S04 · S05 · S08 · S09 · S10 |
+| ⏳ **QUALIFIED** | **2** | **S06** — approved on the **PRE-correction** render; the correction (`b47e148`) is verified and re-rendered but ⛔ never seen. **S07** — approved 14-Aug under the PREVIOUS ledger; `66fc82e` landed after it, unseen; the 13px-floor decision makes this a **RE-approval** |
+| ⏳ **NEVER SHOWN** | **12** | S11 – S22 |
+
+⛔ **The recorded figure "9 approved / 13 awaiting a first approval" was WRONG in
+both halves** and is corrected here: it is **8 / 12**, with 2 in a qualified state.
+
+#### ⚠️ WHAT THE GREEN ONES DO **NOT** MEAN
+
+- ⛔ **Neither S09 nor S10 is `VERIFIED LIVE`.**
+- **S09** was approved on **SEEDED DEMO data** — 🔬 the local DB holds **0 closed
+  trades** (last written 03-Aug), so the render used **75 demo trades**.
+  ⭐ Composition/colour/alignment are confirmed; ⛔ the populated PRODUCTION
+  appearance is not.
+- **S10** was approved on a **read-only extract of real VM data** (2.5 MB).
+  ⚠️ Its amber/red slippage status path is **LIVE BUT NEVER EXERCISED** —
+  🔬 real slippage is ~₹0.00–0.02, **100% within limit**, 0 near, 0 exceeded.
+- **S04** owes Q1·Q2 · **S05** owes Q3·Q4 · **S08** carries **2 post-approval
+  restorations** (gauge geometry, gated export button) that ⛔ have not been seen.
+- ✅ **DEMO-DB HYGIENE HELD:** the `gui_config.local.yaml` pointer was reverted
+  **byte-identically** (that file forbids leaving one), the demo DB lives OUTSIDE
+  the repo, and 🔬 the real DB's mtime is unchanged at **03-Aug 16:08** ⇒ it was
+  never opened for writing.
+
+#### ✅ THE REFIT IS STILL ESSENTIALLY FREE — 🔬 RE-MEASURED 30-Aug
+
+- **89 ahead / 39 behind `effff24`.** ⚠️ The previously recorded *"37 behind"* was
+  measured against `52ccb4f`, ⛔ not `effff24` — a different comparand, ⛔ not drift.
+- 🔬 **ZERO COLLISIONS, whole tree:** 135 gui09 files vs 68 main files since the
+  merge-base, **0 overlap**.
+- 🔬 main has touched `ops_dashboard/` in **0** files since `6fa8a1c`; gui09 in **87**.
+- ⇒ ⭐ A **rebase**, ⛔ not a merge fight. ⚠️ But it only grows more behind with
+  every main push — after the 30-Aug push it becomes **48 behind** `39292d3`.
+
+#### ⛔ WHAT IS NOT DONE
+
+- ⛔ **NOT PUSHED, NOT DEPLOYED.** 0 remote refs.
+- ⛔ **S11–S22 have never been shown for approval.** ⭐ S11 Execution Analytics is
+  BUILT (`3979b1b`, 15-Aug) — ⛔ what it needs is its FIRST visual approval, ⛔ not
+  a build.
+- ⛔ **S06 and S07 need Rama's eyes on renders that already exist** — ⭐ the
+  cheapest two wins on the board, because the work is done and only the sight is
+  missing.
+- ⛔ No rebase attempted. ⛔ `origin/main` must be re-measured at refit time, ⛔ never
+  taken from this document.
