@@ -1903,3 +1903,91 @@ untouched ⇒ ⛔ no other screen's `kpi_card` render moves.
   the time. Pre-existing; ⛔ left alone under the freeze.
 · **The PNG's "View All" links** are absent — this build uses real filters and
   pagination instead. Pre-existing, ⛔ not part of this pass.
+
+
+### Entry 24 — S13 AUDIT APPROVED. ⛔ NOT PUSHED
+
+**Date/time:** 30-Aug-2026, approved ~20:1x IST · **Branch:** `feat/screen10-slippage-analytics`
+**Build:** `3fa2e78` · **Pushed: NO · Deployed: NO**
+
+⭐ **S13 WAS ALREADY FULLY BUILT.** Every panel the PNG draws existed and was
+bound to real audit readers ⇒ this was a **visual pass**, ⛔ not a rebuild.
+⛔ No backend, ⛔ no readers, ⛔ no bindings, ⛔ no export route touched.
+
+#### The three corrections
+
+1. **CRITICAL CHANGES moved out of the table-row rail** to sit beside the lower
+   analytics — the relationship the design TXT names verbatim (*"the original PNG
+   places this as a right-side panel aligned with the lower analytics area.
+   Preserve that relationship."*).
+   ⚠️ ⭐ **It is ALSO a measured defect fix.** With a record selected the rail
+   stood 🔬 **1474px against a 528px table — 946px of dead space** beside it,
+   page height 2457px. After: 🔬 **448px**, page **2074px**.
+   🔴 **The void appeared ONLY AFTER a row was clicked** — ⛔ which is exactly why
+   an unselected screenshot never showed it, and why the brief's "no unintended
+   vertical dead space" check has to be run on a SELECTED record.
+   ⭐ The new `.aud-lower` band deliberately **mirrors `.aud-main`**
+   (`minmax(0,1fr) 330px`) so the panel lands directly beneath AUDIT DETAILS.
+   ⭐ A test pins BOTH rules to the same columns: if they drift the panel stops
+   lining up and the whole point of the move is lost.
+
+2. **The bottom export bar** — note-left / buttons-right with the shared
+   `.btn-export`, matching S09/S11/S12. ⚠️ The rule was **ALREADY
+   `space-between`**; `flex-wrap: wrap` plus the long honesty note wrapped the
+   buttons onto a second line at the LEFT, so the bar read nothing like the
+   artwork. ⭐ `nowrap` is the load-bearing part, ⛔ not the alignment.
+
+3. **One width for every filter select.** Action rendered ~2× its siblings purely
+   because its option strings are longer — ⛔ a control's width must not encode
+   its data. 🔬 All five now exactly 168px.
+
+⏸ **REPORTED, ⛔ NOT CHANGED — 👤 Rama's ruling owed:** the artwork puts OLD/NEW in
+a right sub-COLUMN of Audit Details. 🔬 Its rail is ~412 CSS px against our 330.
+The design TXT specifies the **stack itself** — *OLD VALUE ↓ NEW VALUE* — which is
+exactly what renders; only beside-vs-below differs, and widening the rail would
+squeeze a nine-column table.
+
+#### ⚠️ SIX REAL INSTRUMENTATION GAPS THIS SCREEN SURFACES
+
+⛔ The demo does **not** paper over any of them.
+
+- 🔴 **WHO changed a setting is NOT CAPTURED ANYWHERE IN THE SCHEMA.** ⇒ the PNG's
+  `ramakrishnan` User column ⛔ cannot be built. The column shows the recorded
+  **PROCESS** or an explicit gap, and Top Users states *"all recorded actors are
+  PROCESSES, not people"* and **EXCLUDES** the unattributed records rather than
+  assigning them to anyone.
+- **TIMELINE — only ONE instant per record exists.** Applied is real; Requested,
+  Validated and Confirmed render NOT INSTRUMENTED. ⛔ Never manufactured.
+- **SOURCE** — only an inbound webhook proves its own origin (API).
+  Dashboard/Scheduler/Recovery Engine are not recorded.
+- **RETENTION PERIOD** — no audit retention policy exists. The real oldest→newest
+  span is shown and labelled a **MEASUREMENT**, ⛔ never a policy.
+- **CONTROL HISTORY** — `kill_switch_state` is a single row ⇒ current state only.
+- **AUTHENTICATION** — no source at all.
+
+⭐ **THE OLD→NEW VALUES ARE GENUINE.** They are produced by the real
+`_config_changes` diff of **consecutive config snapshots** — the SAME code path
+production uses — ⛔ not written by hand.
+
+#### ⛔ WHAT THE APPROVAL DOES NOT MEAN
+
+🔴 **S13 IS NOT `VERIFIED LIVE`. It was approved on DEMO DATA.**
+🔬 The real VM snapshot holds **3** audit records across the whole of July–August,
+and 30-Aug is a Sunday (system correctly in SOFT_KILL). ⛔ Three rows cannot show
+whether a 10-row table, an 8-slice donut, a 7-day chart or a paginator reads
+correctly.
+
+⭐ The fill ran through the **out-of-repo review harness on :8501**, feeding **RAW
+TABLE ROWS** to the real readers so `build_audit` performed its own diffing,
+filtering and aggregation on top — ⛔ no repo edit, ⛔ no demo DB, ⛔ no config
+pointer, ⛔ nothing to revert.
+
+#### Gate
+
+🔬 **77 S13 tests pass (+4 this window).** ⭐ RED-capability proven by **mutation**:
+restoring `flex-wrap: wrap` and changing the select width turned both new tests
+red; reverted. Full dashboard suite: 🔬 **2100 passed, 1 failed** —
+`test_c_venv_has_no_kiteconnect`, the environment artifact that fails identically
+on a pristine checkout. 🔬 Every added CSS selector is `.aud-page`-scoped, pinned
+by a test that walks the added block. ⛔ No console messages; ⛔ no horizontal
+overflow.
