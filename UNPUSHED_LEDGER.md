@@ -1687,3 +1687,91 @@ both halves** and is corrected here: it is **8 / 12**, with 2 in a qualified sta
   missing.
 - ⛔ No rebase attempted. ⛔ `origin/main` must be re-measured at refit time, ⛔ never
   taken from this document.
+
+### Entry 22 — S11 EXECUTION ANALYTICS APPROVED. ⛔ NOT PUSHED
+
+**Date/time:** 30-Aug-2026, approved ~15:5x IST · **Branch:** `feat/screen10-slippage-analytics`
+**Pushed: NO · Deployed: NO**
+
+⭐ S11 was already BUILT (`3979b1b`, 15-Aug) and Scanner was already removed
+(15-Aug, ruling 1). This window is the **visual-approval pass** and the three
+corrections it produced. ⛔ The screen was NOT rebuilt.
+
+#### The three changes
+
+1. **INTRADAY & DELIVERY EXECUTION ANALYSIS** now occupies the footprint the
+   reference gives Scanner Execution Ranking — **between Strategy and Symbol**,
+   exactly where the artwork places it. ⭐ ⛔ NOT a new aggregation: the SAME
+   generic `_rank` the two rankings beside it use, keyed on a pipeline label
+   derived from the ENTRY product by the SAME rule the capital path uses
+   (`pipeline_for_product`: not-CNC ⇒ intraday). ⛔ **UNKNOWN is its own row** —
+   a trade with no ENTRY order has no product, and folding it into Intraday
+   would put a fabricated dimension into the one analysis whose job is to
+   separate the books.
+   🔬 On the REAL-VM snapshot: Intraday 187 · Delivery 84 · UNKNOWN 36 =
+   **307 = execution_count exactly**, a true partition.
+
+2. **Symbol became a LEFT label column** (`lbl:true`) — heading AND every data
+   cell move together. ⛔ The column SET is unchanged, so `COLS_KEY` stays v1 and
+   no operator's saved column order is discarded.
+
+3. **A TRADE STATE filter**, new this window. ⚠️ The screen rendered TWO
+   status-like columns and only one was filterable:
+     · `status`      = the DELAY BAND (fast/moderate/slow/unmeasured)
+     · `trade_state` = the LIFECYCLE position (closed/open/pending/rejected)
+   ⇒ *"show me only the CLOSED ones"* was impossible on a screen that displays
+   the column. It runs through the SAME single filter gate every panel reads, so
+   the KPI deck, table, rankings, distribution, throughput, warnings AND the XLSX
+   export narrow together — ⛔ no panel can describe a different population.
+   ⭐ The dropdown offers the FULL vocabulary, ⛔ not just the states present this
+   period: the option to isolate REJECTED must not vanish on a clean day, which
+   is exactly when it is looked for. ⭐ `resetFilters()` hard-codes its set and
+   was corrected, or Reset would have left the new filter stuck on.
+   🔬 Verified: no filter 260 → CLOSED 173 → OPEN 54 → REJECTED 16, each set
+   containing only its own state.
+
+⭐ Also added: **the bottom EXPORT BAR** the artwork carries and S11 lacked
+entirely (the four in-panel buttons were the only export affordance). Note left,
+`Export Current View` + `Export XLSX` right — the S09 `pnl-exportbar` shape,
+scoped to `.exec-page`. ⛔ Live handlers, ⛔ NOT the gated `export_button` macro:
+S11 owns a real `/api/export/execution` route.
+
+⭐ And **the last user-facing Scanner wording is gone** — the *"Scanner ranking
+omitted"* note was REMOVED outright, not reworded: it existed to explain an EMPTY
+footprint, which is now filled. 🔬 Rendered Scanner mentions: **0**.
+
+#### ⛔ WHAT THE APPROVAL DOES NOT MEAN
+
+🔴 **S11 IS NOT `VERIFIED LIVE`.** It was approved on **DEMO data** (260
+synthetic trades), because the real-VM snapshot was too sparse to judge density —
+🔬 202 of its 307 rows never filled, so most timing cells read as dashes. ⭐ The
+demo DB lives OUTSIDE the repo and the pointer was reverted byte-identically
+(md5 `6a6d93df…`, 0 pointer lines); 🔬 the real DB's mtime is unchanged at
+**03-Aug 16:08** ⇒ never opened for writing.
+
+⚠️ **THE 25-COLUMN ARTWORK STILL CANNOT BE BUILT**, and that is unchanged and
+correct. 🔬 Re-verified this window: `order_execution_log.exchange_timestamp` is
+a real column that is **NEVER WRITTEN** — the sole caller of
+`insert_order_execution_log` (`orders/slippage_recorder.py:149`) builds its row
+with `order_timestamp` and `fill_timestamp` and **no `exchange_timestamp` key**.
+Risk and capital record no timestamp at all; `orders` has ONE instant, not a
+create/submit pair. ⇒ 10 of the artwork's columns have no source. They remain
+**NOT INSTRUMENTED**, ⛔ never `0.00`. ⛔ `Signal Score` stays retired (L8, the
+Screen-04 exception only).
+
+⚠️ **Two differences from the PNG were REPORTED, ⛔ not changed** — they need
+👤 Rama's ruling, not a build decision:
+  · **KPI cards carry no icons or sub-labels.** The icon needs the SHARED
+    `kpi_card` macro, which every screen uses; the `MINTRADAY_001`-style
+    sub-labels need a backend field naming WHICH execution was fastest/slowest.
+  · **The page title** renders in the house `panel-title` style, ⛔ not the PNG's
+    large uppercase. 🔬 S09 and S10 — both approved — use the identical pattern
+    (`pnl-h1` / `slp-h1` / `exec-h1`); changing S11 alone would make it the odd
+    one out among approved screens.
+
+**Gate:** 🔬 **142 S11 tests pass** (+8 this window). Six pre-existing tests
+pinned the OLD design and were updated to the new one — ⭐ the Scanner assertion
+got STRICTER, from *"exactly 1 mention"* to **0**. Full dashboard suite:
+🔬 **2081 passed, 1 failed** — `test_c_venv_has_no_kiteconnect`, an environment
+artifact (the GUI venv does not exist on this worktree); ⭐ it fails identically
+on a pristine checkout, so it is ⛔ not an S11 failure.
