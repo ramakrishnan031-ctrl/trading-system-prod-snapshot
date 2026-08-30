@@ -1775,3 +1775,131 @@ got STRICTER, from *"exactly 1 mention"* to **0**. Full dashboard suite:
 🔬 **2081 passed, 1 failed** — `test_c_venv_has_no_kiteconnect`, an environment
 artifact (the GUI venv does not exist on this worktree); ⭐ it fails identically
 on a pristine checkout, so it is ⛔ not an S11 failure.
+
+
+### Entry 23 — S12 SYSTEM HEALTH APPROVED. ⛔ NOT PUSHED
+
+**Date/time:** 30-Aug-2026, approved ~17:3x IST · **Branch:** `feat/screen10-slippage-analytics`
+**Build:** `bb1e0a9` · **Pushed: NO · Deployed: NO**
+
+⭐ A real pass against the original artwork, ⛔ not a cosmetic patch. Six changes,
+all inside Screen 12, plus one pre-existing defect found by measurement.
+
+#### The six
+
+1. **THE BAND IS FIVE CARDS** — Overall · Healthy · Warning · Failed · Uptime.
+   The **UNKNOWN card is removed**: it was a sixth KPI the artwork does not
+   carry. ⚠️ ⛔ **Dropping the CARD must not drop the STATE** — UNKNOWN is a real
+   service status, and on a host without `systemctl` it is the *majority* state.
+   ⇒ its survival in the **table, the status filter, the legend AND the colour
+   map** is pinned by test, so a later edit cannot quietly delete the concept.
+
+2. **Icons and per-status shares restored** — shield · ♥ · ⚠ · ✖.
+   ⭐ `pctOf` returns an **em dash, ⛔ never `0.00%`**, when the fleet size is
+   unknown: a confident zero would be a fabricated denominator.
+
+3. **VM METRICS NESTED INTO THE UPTIME CARD**, as the artwork draws them; the
+   separate rail panel is deleted and the service table takes the full row.
+   ⭐ RAM-available has no row in the artwork but IS genuinely measured, so it is
+   **kept rather than dropped** — ⛔ losing a real number to a layout change is a
+   silent regression. 🔬 All six still route through `gapCell`, so a moved metric
+   cannot become a bare number.
+
+4. **DEPENDENCIES BECOME FIVE HORIZONTAL ICON CARDS** in a band of their own —
+   five cards do not fit legibly in a third of the page. ⛔ Same binding, same
+   five names, same statuses, same probe text on hover; presentation only.
+
+5. ⭐ **THE THROUGHPUT PANEL — present in the PNG, ABSENT from the design TXT.**
+   Bound to the **EXISTING `activity_pulse` reader**: ⛔ no new query, ⛔ no new
+   table, ⛔ nothing derived from a capped row list (which would make a busy hour
+   look calm on exactly the day it mattered).
+     · Signals Received ← `signals.received_at`
+     · Orders Created   ← ENTRY `orders.placed_at`
+     · Orders Filled    ← **`trades.entry_time`**
+   ⚠️ **THE THIRD SERIES IS THE FILL, ⛔ NOT AN ORDER STATUS.** A trade row exists
+   once its ENTRY actually filled; reading `orders.status` instead would count a
+   broker **acknowledgement** as a fill.
+   ⛔ **AN EMPTY CHART HERE IS A REAL ZERO, ⛔ NOT AN INSTRUMENTATION GAP.** All
+   three tables are read live, so `instrumented` stays **True** and the panel says
+   **NO ACTIVITY**. Saying NOT INSTRUMENTED would assert the system cannot count
+   its own orders, and ⭐ that assertion would be false. 🔬 Pinned by a test that
+   went RED under mutation.
+   ⚠️ **ONE DELIBERATE LABEL DEVIATION:** the artwork says **PER MINUTE**. A
+   session is ~375 minutes and will not fit that panel, so the per-minute counts
+   are **summed into hourly buckets and the panel says `(per hour)`**. ⭐ The
+   label follows the AGGREGATION, ⛔ it is not inherited from the drawing.
+
+6. **THE BOTTOM EXPORT BAR**, wired to the **existing** `/api/export/system-health`
+   with the page's own filter params — ⛔ not a gated placeholder. A **Throughput
+   sheet** was added so the workbook cannot omit a panel the screen shows.
+
+#### ⭐ A PRE-EXISTING DEFECT, FOUND BY MEASUREMENT
+
+**The 13px typography floor was acting as a CAP.** `.sysh-page .num-neg` (and its
+siblings) sit at the **same specificity** as `.sysh-page .sysh-ov-v` and appear
+**later in the file** — so the moment Alpine put the semantic colour class on the
+status word, the artwork's largest text silently collapsed.
+🔬 **MEASURED: computed `font-size: 13px` where `1.7rem` was written.** Now 27.2px.
+⭐ Fixed by restating the rule one level deeper — ⛔ the floor itself is untouched,
+because every other screen depends on it, and `test_b1_typography_floor` still
+passes. The same latent bug on `.sysh-up-v` was closed at the same time.
+
+#### ⛔ WHAT THE APPROVAL DOES NOT MEAN
+
+🔴 **S12 IS NOT `VERIFIED LIVE`. It was approved on DEMO DATA.**
+
+⚠️ 👤 **30-Aug-2026 IS A SUNDAY — and on weekends and NSE holidays the VM and the
+trading system DO NOT RUN; the system sits in SOFT_KILL.** ⇒ `Trading Engine
+FAILED`, `Uptime NOT AVAILABLE`, `NOT READY` and every empty series are the
+**CORRECT off-market state**, ⛔ not a fault. ⛔ Never open an incident on an
+off-market reading. ⚠️ ⛔ Do not confuse that with the **dev-host gap** — every
+systemd unit `UNKNOWN` because Windows has no `systemctl` — which ⛔ never resolves
+on any day.
+
+⇒ 👤 Rama's standing instruction: *"always show me every screen using vm db's
+input data or your own demo data for clean review."* ⭐ An empty screen ⛔ cannot be
+reviewed. ⚠️ This **supersedes the Web-Claude S12 ruling**, which said not to build
+a demo payload for the Windows gap — ⛔ a card is not Rama.
+
+⭐ **THE FILL CAME FROM AN OUT-OF-REPO REVIEW HARNESS** that patches the **READER
+LAYER in-process** and serves the real app on **:8501**, with the honest screen
+left up on :8500 for comparison. ⛔ NO repo edit · ⛔ no demo DB · ⛔ no config
+pointer · ⛔ **nothing to revert** — kill the process and the demo is gone.
+🔬 Verified after the render: exactly the 4 modified files, **0** new untracked.
+⭐ Patching at the **reader boundary** was deliberate: every status rollup, the
+worst-wins logic, the readiness gates, the semantic colouring and the export all
+ran **FOR REAL** on demo inputs — ⛔ a hand-written payload would have proved
+nothing about the screen. ⛔ MODE was left at PAPER: a demo server must never
+paint the word LIVE on a trading header.
+
+⭐ **WHAT THE FILLED RENDER EXPOSED THAT THE EMPTY ONE COULD NOT:**
+  · **Trading Readiness NOT READY** with the live-vs-historical gate working —
+    *"preflight judged the system READY at 08:30:41, but that verdict is older
+    than this failure"* + a **SUPERSEDED** banner. ⭐ That is the 15-Aug defect's
+    fix, and it is **invisible on an empty screen**.
+  · An alert reading severity **WARNING** but rendering **GREEN** (*"Tailscale
+    connection restored"*) — the semantic-colour rule holding.
+  · **TRIGGERED rendering amber**, ⛔ not counted as a recovery.
+  · Four different dependency states across the five cards.
+  · Both charts drawing: trends (0–27.5, 08:00→15:50) and throughput
+    (0–64, 09:00→15:00).
+
+#### Gate
+
+🔬 **117 S12 tests pass (+13 this window).** One pre-existing test pinned the OLD
+workbook sheet list and was updated. ⭐ RED-capability proven by **mutation**:
+forcing `instrumented=False` turned the throughput honesty tests red; reverted.
+Full dashboard suite: 🔬 **2100 passed, 1 failed** — `test_c_venv_has_no_kiteconnect`,
+an environment artifact (this worktree has no `ops_dashboard/.venv`, so pytest
+runs under the system Python); ⭐ it fails identically on a pristine checkout, so
+it is ⛔ not an S12 failure.
+🔬 **37 of 37 added CSS selectors are `.sysh-page`-scoped**; `components.html` is
+untouched ⇒ ⛔ no other screen's `kpi_card` render moves.
+
+#### ⏸ Reported, ⛔ not changed
+
+· **No uptime percentage** (the PNG shows 99.82%) — ⛔ no such measurement exists.
+· **`Last Successful Order` renders the full ISO stamp**, where the PNG shows only
+  the time. Pre-existing; ⛔ left alone under the freeze.
+· **The PNG's "View All" links** are absent — this build uses real filters and
+  pagination instead. Pre-existing, ⛔ not part of this pass.
