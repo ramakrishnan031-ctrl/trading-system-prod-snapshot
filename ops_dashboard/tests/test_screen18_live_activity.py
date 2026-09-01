@@ -770,10 +770,18 @@ def test_no_artificial_height_device_closes_a_gap():
         if any(s in containers for s in subjects):
             assert "min-height" not in rule, rule
             assert "height:" not in rule, rule
-    # ⛔ the BANDS are never stretched — a band closes on its tallest card
+    # ⭐ THE BANDS STRETCH, AND THAT IS THE ARTWORK'S OWN GEOMETRY, measured off
+    #   the PNG by pixel scan: three blank columns, one inside each band-B panel
+    #   (x612 / x918 / x1235), ALL show the same border rows — top y=586, bottom
+    #   y=785. The artwork's three panels are exactly equal height. Band C is the
+    #   same shape. ⛔ This is therefore not a device for hiding a gap; refusing
+    #   it was what left one.
     bands = re.search(r"\.lav-page \.lav-rowb, \.lav-page \.lav-rowc \{[^}]*\}",
                       block).group(0)
-    assert "align-items: start" in bands and "stretch" not in bands, bands
+    assert "align-items: stretch" in bands, bands
+    # ⛔ but band A is still NOT a full-width row — that lesson stands
+    left = re.search(r"\.lav-page \.lav-left \{[^}]*\}", block).group(0)
+    assert "grid-template-columns" in left and "1.82fr" in left, left
     # ⭐ band A is levelled by CONTENT: `.lav-main` stretches and the feed's own
     #   window takes the slack, so more REAL rows show. ⛔ Never a spacer.
     assert ".lav-page .lav-main { align-self: stretch; }" in block

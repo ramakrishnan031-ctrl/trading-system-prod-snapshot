@@ -3991,8 +3991,22 @@ main.content:has(> .lav-page) { width: 100%; max-width: none; margin: 0;
 /* bands B and C span BOTH strips, exactly as the PNG draws them. ⭐ The column
    ratios are the artwork's own, measured off it: band B 415:290:300 ≈ 1.4:1:1,
    band C 680:340 = 2:1. */
+/* 🔬 THE BANDS STRETCH, AND THAT IS THE ARTWORK'S OWN GEOMETRY — ⛔ not a device
+   for hiding a gap. MEASURED OFF THE PNG (pixel scan of three blank columns,
+   one inside each band-B panel: x612 winners, x918 system events, x1235 feed
+   filters): every one shows the SAME border rows, top y=586 and bottom y=785.
+   ⇒ the artwork's three band-B panels are EXACTLY equal height, 199px. Band C
+   is the same shape, 797 → 969.
+   ⭐ AND THE SCALE CONFIRMS OUR SIZING IS RIGHT: the PNG's left content band is
+   x202-1247 = 1045px against our 1961px, a factor of 1.877. The artwork's band
+   B of 199px scales to 374 — and SYSTEM EVENTS measures 375 here. So the tall
+   panel is correct and the other two were simply failing to stretch to it.
+   ⚠️ The earlier `align-items: start` came from a band-A lesson (a full-width
+   ROW made a short feed wait for the pipeline stack) that was over-generalised
+   to these bands. Band A still does NOT stretch — only `.lav-main` does, and it
+   pays for it in real rows. */
 .lav-page .lav-rowb, .lav-page .lav-rowc { grid-column: 1 / -1;
-  display: grid; gap: 16px; align-items: start; }
+  display: grid; gap: 16px; align-items: stretch; }
 .lav-page .lav-rowb {
   grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr); }
 .lav-page .lav-rowc {
@@ -4125,19 +4139,30 @@ main.content:has(> .lav-page) { width: 100%; max-width: none; margin: 0;
      SYSTEM EVENTS      PNG draws 4 items → 4 x 58           = 232
      ALERTS BANNER      PNG draws 2 cards → 2 x 96           = 192
      CAPITAL UTILIZATION the donut itself                    = 116
-     RECENT WINNERS/LOSERS PNG draws 4 cards in ONE row → 105 x 1.66 = 174
+     RECENT WINNERS/LOSERS PNG draws 4 cards in ONE row → 116 x 1.877 = 218
 
    ⭐ 01-Sep-2026 — WINNERS / LOSERS WAS THE ONE PANEL IN BANDS B AND C WITHOUT
    A FOOTPRINT, and that is a gap in the doctrine, ⛔ not a spacer added to close
    a band: on a day with no closed trade its four cards collapse to their text
-   and open exactly the blank lower page these floors exist to prevent. The
-   figure is the artwork's own card height (105px in the 1536px PNG) at the same
-   1.66 scale the SYSTEM EVENTS floor already uses. */
+   and open exactly the blank lower page these floors exist to prevent.
+   🔬 The figure is the artwork's OWN card height, read off the PNG by pixel
+   scan — the card band runs y634→750 at x612, so 116px — at the measured 1.877
+   content scale (PNG left band x202-1247 = 1045px against our 1961px).
+   ⭐ It also reproduces the artwork's PROPORTION: 116 of the 199px panel is 58%,
+   and 218 of our 375px band is 58%. ⛔ The first pass used 174 from a 1.66 scale
+   inferred rather than measured; this one is measured. */
 .lav-page .lav-pos .lav-tbl-wrap { min-height: 166px; }
 .lav-page .lav-strat .lav-tbl-wrap { min-height: 221px; }
 .lav-page .lav-evlist { min-height: 232px; }
 .lav-page .lav-alert-list { min-height: 192px; }
-.lav-page .lav-wl-grid { min-height: 174px; }
+.lav-page .lav-wl-grid { min-height: 218px; }
+/* 🔬 FEED FILTERS — the artwork's own tile block, read off the PNG the same way:
+   at x1000 the two tile rows run y629-686 and y701-757, so 128px including the
+   gap, x 1.877 = 240. ⭐ It reproduces the artwork's split too: the PNG leaves
+   199-128 = 71px around the tiles (133 scaled) and this leaves 135. ⛔ Our tiles
+   were 149px — the tiles were UNDERSIZED against the artwork, which is what put
+   the slack in this panel once the band stretched. */
+.lav-page .lav-tiles { min-height: 240px; }
 /* ⭐ BOTH states, so the ring's footprint survives the day it cannot be drawn */
 .lav-page .lav-cap-body, .lav-page .lav-cap .lav-d-empty { min-height: 116px; }
 
