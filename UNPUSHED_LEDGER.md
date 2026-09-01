@@ -2109,3 +2109,139 @@ reverted. Full dashboard suite: 🔬 **2104 passed, 1 failed** —
 on this screen. It carries **9,428** client-side rows, which strains the renderer
 during capture; ⭐ the page itself stayed responsive and every measurement came
 back clean.
+
+
+---
+
+### Entry 26 — S15 SYSTEM LOGS APPROVED. ⛔ NOT PUSHED
+
+**Date/time:** 01-Sep-2026, approved ~11:2x IST · **Branch:** `feat/screen10-slippage-analytics`
+**Build:** `7ec180a` · **Pushed: NO · Deployed: NO**
+
+⭐ S15 was already built and had been given the wide-page fix in `0ca38e2`. 👤 Rama
+returned it with three corrections. ⭐ **The first turned out not to be a missing
+feature at all, but a live defect that no test could see** — and finding that is
+the substance of this entry.
+
+#### 1. 🔴 EVENT TYPE / STATUS WERE BLANK — a REAL DEFECT, ⛔ not an unbuilt feature
+
+The `NOT INSTRUMENTED` markup **was already in the template**. Each
+`<template x-if>` held **TWO sibling spans** — the value span and the gap span.
+🔬 **Alpine 3.14.1 builds an `x-if` branch with
+`content.cloneNode(true).firstElementChild`** — it renders **ONLY the first root
+and DISCARDS every later sibling**. So the gap span was **never created**, and
+the survivor carried `x-show="r.status"`, which is `display:none` **exactly when
+the value is missing**.
+
+⭐⭐ **The one thing this screen must never do — show a blank where a gap belongs —
+is what it did, and it did it SILENTLY:** ⛔ no error, ⛔ no console warning, ⛔ no
+failing test. ⚠️ The markup read correctly to a reviewer; only the render was wrong.
+
+🔬 **MEASURED A/B on TWO live instances against the same VM extract** (`:8501` at
+pristine `0ca38e2`, `:8500` with the correction):
+**BEFORE 20 of 20 Event Type / Status cells BLANK → AFTER 0 of 20.**
+
+⭐ **SWEPT THE CLASS, ⛔ not the instance:** all **33 templates** scanned for
+multi-root `x-if` blocks. 🔬 **Exactly two exist and both are these** ⇒ ⛔ no other
+screen is affected. A new test pins the rule so it cannot return.
+
+⭐ **Real values are untouched:** a Scheduler row still shows its real
+`Status = Success`, and `RECOV-7903` shows a real `Event Type = Recovery
+Completed`. ⇒ the screen distinguishes *"recorded"* from *"not instrumented"*,
+which is the whole point.
+
+#### 2. ⭐ COMPONENT TIMELINE — the PNG's HORIZONTAL diagram, restored
+
+It was a vertical `<ol>`. ⛔ That is precisely what the binding TXT forbids:
+*"Do not replace diagrams/pictorial elements with plain text when the original
+design shows a visual component."* ⭐ The TXT's `Event Detected ↓ Logged ↓ Action
+Taken ↓ Resolved` is its ASCII rendering of the SAME four stages; **SOURCE
+AUTHORITY 1 (the PNG) is binding for composition.**
+
+Now four circular pictorial nodes on one connecting rail, stage label under each
+node, timestamp under the label, footer strip. ⛔ **NO new backend, ⛔ no new
+data** — same `detail.timeline`, same `measured` flag, same gap reasons (now on
+the node's `title`). ⭐ The rail is a `::before` on every stage after the first,
+drawn from the previous node's centre, so it is positioned **BY** the nodes and
+⛔ cannot drift out of step with them.
+
+⛔ **THE PNG's "Duration: 2 sec" HAS NO SOURCE HERE and says NOT INSTRUMENTED.**
+🔬 The stages that ARE measured share the single log timestamp, so subtracting
+them would have produced a **manufactured `0 sec` dressed as a measurement**.
+
+⚠️ **Two layout defects found by MEASURING, ⛔ not by eye:**
+- 🔬 the shared `.slg-ni` `white-space: nowrap` made all four labels overrun a
+  **102px** column (the label needs **123px** on one line) and collide into one
+  run-on block ⇒ the nowrap is lifted **only inside the timeline**, where the
+  longest word needs **94px** and fits.
+- 🔬 then row 3 moved to **the artwork's own proportions** — COMPONENT TIMELINE is
+  the widest panel in the PNG, **~1 : 1.34 : 1 : 1** — taking the stage column to
+  **123px**. ⛔ No word shortened to a dash, ⛔ nothing below the 13px floor.
+
+#### 3. ⭐ SEARCH + EVENT TYPES — INTEGRATED into FILTERS, ⛔ not deleted
+
+⭐ **Compared against BOTH sources first, as the correction required.** 🔬 The
+**PNG places NEITHER panel**: its search is one box in the table toolbar (kept),
+and Event Type is a **filter dropdown**. 🔬 The **TXT** lists a SEARCH section and
+asks to *"preserve the investigation/search **capability**"* — a capability,
+⛔ not a full-width block — and lists **no EVENT TYPES section at all**.
+
+⇒ all five approved fields move into the control block the artwork **does** draw,
+unchanged: Service Name · Module · Error Code · Message · Reference ID, still
+CONTAINS matches, still separate from the exact-match dropdowns. ⛔ **ERROR CODE
+stays SHOWN and DISABLED** — no error-code scheme exists in this system.
+
+⭐ The eleven event-type counts survive too, compacted from an 11-row table to a
+chip strip under their own dropdown, **keeping the distinction that matters**:
+🔬 `Service Restarted 0` is **instrumented and genuinely zero**, while
+`Connection Lost NOT INSTRUMENTED` is **unmeasurable**. ⛔ A 0 is never shown for
+the latter.
+
+⛔ `.slg-rowx` and both panel classes are **REMOVED, ⛔ not emptied** — no dead
+selectors linger. 🔬 **Page height 2158px → 1941px (−217px)**; the removed row was
+**438px**, the FILTERS panel grew **125px → 346px**.
+
+#### 4. ⚠️ A REGRESSION FOUND ON ARRIVAL — the suite was ALREADY RED
+
+🔴 Before any of this work, the S15 suite stood at **8 failed / 72 passed**.
+🔬 `0ca38e2` changed the page root to `class="dash-page slg-page"`, and the test
+helper hard-coded the literal `'<div class="slg-page"'`. ⭐ It matched nothing,
+returned **-1**, and took **EIGHT tests** down with it — every one reporting
+*"the system-logs page root is missing"* rather than the real change.
+⇒ the matcher is now **class-aware**, so adding a class alongside cannot blind it
+again. ⭐ **The width fix itself is untouched**, per 👤 Rama's instruction.
+
+#### 5. ⭐ THE EVIDENCE — the LATEST real VM data, per the brief's HARD RULE
+
+🔬 Today's dated `system_`/`reconciler_`/`trades_` logs (**28-Aug…01-Sep**) plus
+`system_events` / `cron_heartbeat` / `reconciliation_log` extracted **READ-ONLY**
+from the live **428 MB** VM DB (⛔ the DB itself was never copied; ⛔ nothing was
+written on the VM outside `/tmp`).
+🔬 **11,656 events · Info 11,565 (99.22%) · Warning 83 (0.71%) · Error 8 (0.07%) ·
+Critical 0 · last event 10:49:24 TODAY.**
+⭐ **Severity is genuinely Info-dominated and is ⛔ NOT reshaped toward the PNG's
+55%.** ⛔ No Scanner added anywhere.
+
+#### ⛔ WHAT THE APPROVAL DOES NOT MEAN
+
+🔴 **S15 IS NOT `VERIFIED LIVE`.** It was approved on a **READ-ONLY VM EXTRACT**
+rendered locally through the git-ignored `gui_config.local.yaml` pointer —
+⛔ no repo edit, ⛔ no demo DB, ⛔ nothing to revert.
+
+⚠️ These remain genuinely **NOT INSTRUMENTED** and the screen says so rather than
+inventing values: **Trading Impact** (nothing classifies it) · **Error Code** (no
+scheme exists repo-wide) · **Resolution Time / Resolved At / Recovery Duration**
+(not stored) · **Event Detected** (a log line is the first record of itself) ·
+per-engine health (the engines are THREADS inside one systemd service —
+Screen 12's ruling).
+
+#### Gate
+
+🔬 **S15 82 passed, 0 failed** (from **8F / 72P**), including **two new guards** —
+one pinning the Alpine single-root rule, one pinning the horizontal diagram.
+🔬 Full dashboard suite **2112 passed, 1 failed** = `test_c_venv_has_no_kiteconnect`,
+⭐ **proven environmental by running it against a PRISTINE checkout of HEAD, where
+it fails identically** — it shells out to `pip show` and ⛔ cannot see HTML or CSS.
+⭐ RED-capability proven for the blank-cell audit **by injecting a blank cell**,
+which the probe caught, and for the console check **by emitting a probe warning**,
+which it captured; ⇒ ⛔ neither zero was vacuous.
