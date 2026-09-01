@@ -53,18 +53,43 @@ def _strategy_rows(strategies: dict, live_states: Optional[dict]) -> list:
     `live_enabled` is what the RUNNING process reports. They are kept apart
     deliberately — a divergence is real information, not noise to be smoothed.
     """
+    # 👤 RAMA, 01-Sep-2026: 12 Intraday first, then the 3 Delivery, then the
+    # shadow LAST. ⛔ Not alphabetical-by-key, which interleaved the delivery
+    # book into the middle of the intraday one on the operational control list.
+    def _order(nm):
+        v = strategies[nm] or {}
+        tt = str(v.get("intent") or v.get("trade_type") or "INTRADAY").upper()
+        disp = str(v.get("display_name") or nm)
+        return (1 if "shadow" in disp.lower() else 0,      # shadow always last
+                0 if tt == "INTRADAY" else 1,              # intraday before delivery
+                disp.lower())
+
     rows = []
-    for name in sorted(strategies):
+    for name in sorted(strategies, key=_order):
         s = strategies[name] or {}
         cfg_enabled = bool(s.get("enabled", True))
         live = None if live_states is None else bool(live_states.get(name, cfg_enabled))
+        # ⛔ THE AUTHORITATIVE LABEL IS `display_name`, ⛔ NOT a title-cased key.
+        # 🔬 Measured 01-Sep-2026: 3 of 16 differ, and the difference is not
+        # cosmetic on all three — `pb01_breakout_retest` title-cases to
+        # "Pb01 Breakout Retest" and SILENTLY DROPS the "(shadow)" marker that
+        # tells an operator this strategy is fail-closed rather than merely
+        # paused. ⭐ The artwork itself spells the other two "VWAP", not "Vwap".
+        label = str(s.get("display_name") or name.replace("_", " ").title())
+        # ⭐ A SHADOW IS NOT A PAUSED STRATEGY. It is disabled by DESIGN, held
+        # behind a promotion gate, and must never read as "someone turned this
+        # off and could turn it back on". 🔬 `pb01_breakout_retest` carries
+        # `enabled: false` with "FAIL-CLOSED: never trades until the spec-13
+        # promotion gate" and has 0 trades / 0 signals in its whole life.
+        shadow = "shadow" in label.lower()
         rows.append({
             "name": name,
-            "label": name.replace("_", " ").title(),
+            "label": label,
             "trade_type": (s.get("intent") or s.get("trade_type") or "INTRADAY"),
             "direction": s.get("direction"),
             "configured_enabled": cfg_enabled,
             "live_enabled": live,
+            "shadow": shadow,
             # ⚠️ Surfaced, never hidden: the running process and the file disagree.
             "diverged": (live is not None and live != cfg_enabled),
         })
@@ -114,6 +139,74 @@ def _readiness(cfg: dict, ks: dict, live: Optional[dict]) -> list:
         "detail": f"kill switch {state}",
     })
     return out
+
+
+def _limits(sc: dict) -> dict:
+    """The seven approved limit parameters, each under the base the CONFIG
+    actually supports — ⛔ never under the base the artwork draws.
+
+    🔬 MEASURED 01-Sep-2026 against `config/system_config.yaml`:
+      · THREE are genuinely mode-split — concentration, position value and the
+        daily loss limit each have a `delivery_*` sibling;
+      · TWO are GLOBAL — `max_daily_trades` and `max_open_positions` have no
+        delivery variant at all;
+      · Minimum Eligible Score resolves to `v3_chain.min_pass_score`;
+      · Max Qty (Lots) has NO authoritative key anywhere in the tree.
+
+    ⛔⛔ THE ARTWORK DRAWS ALL SEVEN TWICE, under an Intraday table and a
+    Delivery table. Reproducing that would print ONE global number under TWO
+    headings and tell the operator the two modes are independently configured
+    when they are not — on the screen whose whole purpose is to say what the
+    system will actually do. ⛔ A duplicated value is a fabricated distinction.
+    ⭐ So the split ones are shown split, the global ones are shown ONCE and say
+    they govern both, and the one with no source reports NOT INSTRUMENTED —
+    ⛔ never 0, which would claim a limit of zero lots.
+    """
+    ps, risk = sc.get("position_sizing") or {}, sc.get("risk") or {}
+    v3 = sc.get("v3_chain") or {}
+
+    def split(label, intraday, delivery, src, pct=False, key=None):
+        return {"label": label, "intraday": intraday, "delivery": delivery,
+                "pct": pct, "source": src,
+                # ⭐ the EXISTING staging key, carried so the change-preview /
+                # confirm machinery keeps working unchanged; ⛔ no per-mode
+                # staging key is invented for a plane that could not accept one.
+                "key": key,
+                # ⭐ Equal today is a FACT about the config, not a reason to
+                # collapse the rows: they are separately settable.
+                "same": intraday == delivery}
+
+    def glob(label, value, src, measured=True, reason=None, key=None):
+        return {"label": label, "value": value, "source": src,
+                "measured": measured, "reason": reason, "key": key}
+
+    return {
+        "mode_specific": [
+            split("Max Concentration (%)", ps.get("max_concentration_pct"),
+                  ps.get("delivery_max_concentration_pct"),
+                  "position_sizing.max_concentration_pct / .delivery_max_concentration_pct",
+                  True, key="max_concentration_pct"),
+            split("Max Position Value (%)", ps.get("max_position_value_pct"),
+                  ps.get("delivery_max_position_value_pct"),
+                  "position_sizing.max_position_value_pct / .delivery_max_position_value_pct", True),
+            split("Daily Loss Limit (%)", risk.get("daily_loss_limit_pct"),
+                  risk.get("delivery_daily_loss_limit_pct"),
+                  "risk.daily_loss_limit_pct / risk.delivery_daily_loss_limit_pct",
+                  True, key="daily_loss_limit_pct"),
+        ],
+        "global": [
+            glob("Max Trades (Per Day)", risk.get("max_daily_trades"),
+                 "risk.max_daily_trades", key="max_daily_trades"),
+            glob("Max Positions (Open)", risk.get("max_open_positions"),
+                 "risk.max_open_positions", key="max_open_positions"),
+            glob("Minimum Eligible Score", v3.get("min_pass_score"), "v3_chain.min_pass_score"),
+            glob("Max Qty (Lots)", None, None, measured=False,
+                 reason="no authoritative key exists for a per-order LOT cap; "
+                        "position_sizing.max_single_order_qty is a QUANTITY cap "
+                        "and is not the same parameter"),
+        ],
+        "global_note": "one value governs BOTH modes — the config has no delivery variant",
+    }
 
 
 def build_controls_screen(cfg: dict, today: Optional[str] = None) -> dict:
@@ -208,6 +301,7 @@ def build_controls_screen(cfg: dict, today: Optional[str] = None) -> dict:
                 "daily_loss_limit_pct": risk.get("daily_loss_limit_pct"),
             },
             "live": (live_state or {}).get("limits"),
+            **_limits(sc),
         },
         "market_protection": {
             "entries_paused": entries_paused,

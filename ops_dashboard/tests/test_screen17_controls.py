@@ -236,3 +236,131 @@ class TestVisualLanguage:
         win = self._css_window()
         assert "--green" in win and "--red" in win
         assert ".ctl-sw-on" in win and ".ctl-sw-off" in win
+
+
+# ══════════════════════════════════
+# 01-Sep-2026 — the approved S17 corrections
+# ══════════════════════════════════
+def test_the_strategy_label_is_the_authoritative_display_name():
+    """⛔ A title-cased KEY is a fabricated label when the YAML carries one.
+
+    🔬 Measured 01-Sep-2026: 3 of 16 differ. Two are casing (`Vwap` for the
+    artwork's `VWAP`); the third is not cosmetic at all — `pb01_breakout_retest`
+    title-cases to "Pb01 Breakout Retest" and SILENTLY DROPS the "(shadow)"
+    marker that separates a fail-closed strategy from a merely paused one.
+    """
+    from ops_dashboard.backend.services import controls as svc
+    # ⛔ BEHAVIOUR, ⛔ not source text. A first attempt asserted
+    # `"display_name" in inspect.getsource(...)` and PASSED against a reverted
+    # implementation, because the COMMENT above that line says "display_name" —
+    # the same "scan what renders, not what is written about it" trap this file
+    # already documents at `_markup()`. 🔬 Caught by mutation.
+    rows = svc._strategy_rows({
+        "vwap_bounce_long": {"display_name": "VWAP Bounce Long", "enabled": True,
+                             "intent": "INTRADAY"},
+        "no_display_name_here": {"enabled": True, "intent": "INTRADAY"},
+    }, None)
+    by = {r["name"]: r["label"] for r in rows}
+    assert by["vwap_bounce_long"] == "VWAP Bounce Long",         "the label reverted to a title-cased key (%r)" % by["vwap_bounce_long"]
+    assert by["no_display_name_here"] == "No Display Name Here",         "the fallback for a strategy with no display_name is gone"
+
+
+def test_a_shadow_strategy_is_marked_and_cannot_be_toggled():
+    """⛔ A SHADOW IS NOT A PAUSED STRATEGY. It is disabled by DESIGN behind a
+    promotion gate, so it must never render as something an operator switched
+    off and could switch back on. 🔬 The real config carries exactly one:
+    `pb01_breakout_retest`, `enabled: false` — "FAIL-CLOSED: never trades until
+    the spec-13 promotion gate" — with 0 trades and 0 signals in its whole life.
+
+    ⛔ The shared fixture holds 5 synthetic strategies and no shadow, so the
+    BUILDER is exercised directly; depending on fixture content would make this
+    test pass for the wrong reason.
+    """
+    from ops_dashboard.backend.services import controls as svc
+    rows = svc._strategy_rows({
+        "pb01_breakout_retest": {"display_name": "PB-01 Breakout + Retest (shadow)",
+                                 "enabled": False, "intent": "INTRADAY"},
+        "gap_go_long": {"display_name": "Gap Go Long", "enabled": True,
+                        "intent": "INTRADAY"},
+    }, None)
+    by = {r["name"]: r for r in rows}
+    assert by["pb01_breakout_retest"]["shadow"] is True
+    assert by["pb01_breakout_retest"]["configured_enabled"] is False
+    assert by["gap_go_long"]["shadow"] is False, "an ordinary strategy is not a shadow"
+    assert by["gap_go_long"]["label"] == "Gap Go Long"
+
+    m = _markup()
+    assert "r.shadow" in m, "the template no longer distinguishes a shadow row"
+    assert "busy || r.shadow" in m, "the shadow toggle guard is gone"
+
+
+def test_the_strategy_table_has_the_approved_serial_column():
+    """👤 The contract states the columns three times: # | Strategy Name | Type
+    | Status | Action. ⭐ The serial is presentation only — the row index."""
+    m = _markup()
+    assert 'class="dt-th ctl-serial">#<' in m, "the # header is missing"
+    assert 'x-for="(r, i) in strategyRows()"' in m, "the row index is not available"
+    assert 'class="dt-td ctl-serial" x-text="i + 1"' in m, "the serial cell is missing"
+
+
+def test_limits_split_only_what_the_config_actually_splits(gui_config):
+    """⛔⛔ THE ARTWORK DRAWS ALL SEVEN PARAMETERS TWICE. 🔬 The config splits
+    only THREE. Printing a global number under an Intraday heading AND a
+    Delivery heading claims the two modes are independently configured when they
+    are not — ⛔ a duplicated value is a fabricated distinction.
+    """
+    from ops_dashboard.backend.services import controls as svc
+    lim = svc.build_controls_screen(gui_config)["limits"]
+    split = {r["label"] for r in lim["mode_specific"]}
+    assert split == {"Max Concentration (%)", "Max Position Value (%)",
+                     "Daily Loss Limit (%)"}, split
+    for r in lim["mode_specific"]:
+        assert r["source"] and "delivery" in r["source"].lower(), \
+            "a mode-specific row must name its delivery source: %r" % r["label"]
+    glob = {r["label"]: r for r in lim["global"]}
+    assert "Max Trades (Per Day)" in glob and "Max Positions (Open)" in glob
+    assert lim["global_note"], "the global group must say it governs both modes"
+    # ⛔ NOT INSTRUMENTED, ⛔ never 0 — a 0 would claim a limit of zero lots.
+    qty = glob["Max Qty (Lots)"]
+    assert qty["measured"] is False and qty["value"] is None, qty
+    assert qty["reason"], "an unavailable parameter must carry its reason"
+
+
+def test_the_history_timestamp_is_formatted_not_raw_iso():
+    """🔬 Measured 01-Sep-2026 in the browser BEFORE the fix: the raw 32-char ISO
+    stamp took 244px of a 265px history row, left 14px for the action text, and
+    wrapped it ONE CHARACTER PER LINE — a 4393px-tall panel. The same raw value
+    also broke the LAST CONTROL CHANGE card across three lines.
+    ⭐ Control history spans DAYS, so the formatter must name the day when the
+    stamp is not today.
+    """
+    m = _markup()
+    assert "hhmmss(h.ts || h.timestamp)" in m, "the history stamp is raw again"
+    assert "lastChange()" in m, "the KPI no longer formats its timestamp"
+    # ⭐ SWEEP THE CLASS, ⛔ not the instance. 🔬 The first pass fixed the rail
+    # panel and the KPI and MISSED section 12 table, which kept printing the raw
+    # ISO — caught only by scrolling the rendered page. ⛔ NO render site may
+    # print an unformatted stamp.
+    assert not re.search(r'x-text="dash\(h\.(ts|timestamp)', m), \
+        "a history stamp still renders the unformatted value"
+    assert len(re.findall(r"hhmmss\(h\.ts \|\| h\.timestamp\)", m)) == 2, \
+        "both history render sites must format their stamp"
+    body = re.search(r"hhmmss\(ts\)\s*\{(.*?)\n    \},", _tpl(), re.S)
+    assert body and "today" in body.group(1), \
+        "the formatter must compare the stamp against today"
+
+
+def test_the_history_row_cannot_be_crushed_again():
+    """⭐ Formatting the stamp is the real fix; this is the GUARD. The base block
+    sets `.ctl-hrow > * { min-width: 0; overflow-wrap: anywhere }`, which is
+    exactly what permits a per-CHARACTER break once a row runs out of room, so
+    the action text must keep a floor it cannot be squeezed below."""
+    css = open(_CSS, encoding="utf-8").read()
+    assert ".ctl-page .ctl-hrow > span:not(.ctl-htime)" in css,         "the action-text floor rule is gone"
+    rule = css[css.index(".ctl-page .ctl-hrow > span:not(.ctl-htime)"):][:160]
+    m = re.search(r"min-width:\s*(\d+)px", rule)
+    assert m and int(m.group(1)) >= 60, rule
+    # ⛔ the time column must not be re-declared here — it already carries
+    # `flex: none` in the base block, and two competing rules is how this
+    # panel got into trouble in the first place.
+    assert css.count(".ctl-page .ctl-htime {") == 1, "duplicate .ctl-htime rules"

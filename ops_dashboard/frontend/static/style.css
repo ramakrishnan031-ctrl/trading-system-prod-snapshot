@@ -5838,8 +5838,12 @@ main.content:has(> .ctl-page) { width: 100%; max-width: none; margin: 0;
 .ctl-page .ctl-rail { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
 .ctl-page .ctl-row { display: grid; gap: 14px; align-items: start; }
 .ctl-page .ctl-row1 { grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr); }
-.ctl-page .ctl-row2 { grid-template-columns: minmax(0, .8fr) minmax(0, 1.1fr) minmax(0, 1.1fr); }
-.ctl-page .ctl-row3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.ctl-page .ctl-row2 { grid-template-columns:
+  minmax(0, .44fr) minmax(0, 1.66fr) minmax(0, .90fr); }
+/* MEASURED off the approved PNG: section 3 occupies ~11% of the main column,
+   section 4 ~34% and section 5 ~24% (11:34:24 -> .48:1.47:1.05). The previous
+   .8:1.1:1.1 starved section 4, whose two side-by-side tables then wrapped every
+   parameter label onto 2-3 lines and drove the whole row to 450px. */.ctl-page .ctl-row3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .ctl-page .ctl-row4 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 
 /* Trading-mode block */
@@ -5879,7 +5883,7 @@ main.content:has(> .ctl-page) { width: 100%; max-width: none; margin: 0;
 .ctl-page .ctl-diverge { font-size: 13px; color: var(--orange); margin-left: 6px;
   font-weight: 700; }
 .ctl-page .ctl-actcol { width: 64px; text-align: right; }
-.ctl-page .ctl-stratscroll { max-height: 268px; overflow-y: auto; }
+.ctl-page .ctl-stratscroll { max-height: 216px; overflow-y: auto; }
 
 /* Runtime-limit inputs */
 .ctl-page .ctl-input { width: 92px; background: var(--panel2); color: var(--text);
@@ -5973,6 +5977,67 @@ main.content:has(> .ctl-page) { width: 100%; max-width: none; margin: 0;
    ⛔ The global rules are NOT touched — Screen 16 Configuration keeps its own
    220px column and its own sizing. Verified at 1920x1080 and 1440x900. */
 .ctl-page .cfg-row { grid-template-columns: 1fr auto; }
+/* ── S17 · 01-Sep-2026 ─────────────────────────────
+   ⛔ THE HISTORY ROW MUST NEVER BE CRUSHED AGAIN. MEASURED before the fix: the
+   raw ISO stamp took 244px of a 265px row, left 14px for the action text, and
+   wrapped it one character per line — a 4393px-tall panel. Formatting the stamp
+   is the real fix; this ONE rule is the GUARD. The block above already sets
+   `.ctl-hrow > * { min-width: 0; overflow-wrap: anywhere }`, which is precisely
+   what permits a per-CHARACTER break once a row runs out of room — so the
+   action text is given a floor it cannot be squeezed below. ⛔ The time column
+   already carries `flex: none` up there; it is NOT redeclared here. */
+.ctl-page .ctl-hrow > span:not(.ctl-htime) { flex: 1 1 auto; min-width: 90px; }
+
+/* the approved serial column — presentation only, never sorted or exported */
+.ctl-page .ctl-serial { width: 40px; text-align: center; color: var(--dim); }
+
+/* a SHADOW strategy is disabled BY DESIGN, not by an operator */
+.ctl-page .ctl-shadow { margin-left: 6px; padding: 1px 6px; border-radius: 4px;
+  font-size: 13px; font-weight: 700; letter-spacing: .04em;
+  color: var(--orange); border: 1px solid currentColor; opacity: .9; }
+.ctl-page .ctl-shadowrow { opacity: .82; }
+
+/* ── S17 VISUAL-FIT CORRECTION · 01-Sep-2026 ────────────────
+   MEASURED against the approved PNG at a true 1920: the page ran 2366px, 2.19x
+   the viewport, against artwork whose own 1536x1024 proportions imply ~1280px
+   at this width — and panels started at NINE distinct vertical positions
+   instead of the artwork's four clean rows. The cause was three UNBOUNDED
+   panels (12. HISTORY 814px, the rail history 525px, RUNTIME LIMITS 564px)
+   dragging their rows down and leaving the rest of the grid scattered.
+   These rules bound the tall panels and make each row read as one band.
+   No panel is deleted and no data is hidden: the long lists scroll INSIDE
+   their approved footprint, exactly as the Strategy Controls table already
+   does under the approved S17 behaviour. */
+.ctl-page .ctl-row { align-items: stretch; }
+.ctl-page .ctl-row > .panel { display: flex; flex-direction: column; }
+
+/* the two limit groups sit SIDE BY SIDE, as the artwork draws its two tables */
+.ctl-page .ctl-limgrid { display: grid; gap: 14px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; }
+.ctl-page .ctl-limcol { min-width: 0; }
+.ctl-page .ctl-limcol .ctl-subh:first-child { margin-top: 0; }
+
+/* long histories scroll inside their footprint instead of stretching the page */
+.ctl-page .ctl-hist { max-height: 240px; overflow-y: auto; }
+.ctl-page .ctl-histpanel .tbl-scroll { max-height: 188px; overflow-y: auto; }
+/* the shared .tbl-scroll is NOT touched; only section 12 inside .ctl-page */
+
+/* the mode-specific / global split in RUNTIME LIMIT CONTROLS */
+.ctl-page .ctl-subh { margin: 10px 0 4px; font-size: 13px; font-weight: 700;
+  letter-spacing: .06em; color: var(--dim); text-transform: uppercase; }
+.ctl-page .ctl-subh span { margin-left: 8px; font-weight: 500; font-size: 13px;
+  letter-spacing: 0; text-transform: none; opacity: .8; }
+/* ⛔ NOT `table-layout: fixed`. MEASURED: fixed gave four EQUAL ~55px columns,
+   so every parameter label wrapped onto three lines and the header cells
+   collided into "PARAMETERINTRADAY". `auto` lets the label column take what it
+   needs while the numeric columns stay narrow, which is what the artwork draws. */
+.ctl-page .ctl-limtbl { width: 100%; table-layout: auto; }
+.ctl-page .ctl-limtbl th, .ctl-page .ctl-limtbl td { padding: 6px 8px; }
+.ctl-page .ctl-limtbl td.dt-num, .ctl-page .ctl-limtbl th.dt-num { white-space: nowrap; }
+.ctl-page .ctl-limtbl td:first-child { white-space: normal; line-height: 1.3; }
+.ctl-page .ctl-limtbl .ctl-input { width: 100%; min-width: 52px; }
+.ctl-page .ctl-ni { color: var(--dim); font-size: 13px; }
+
 .ctl-page .cfg-key,
 .ctl-page .cfg-val { font-size: 13px; }
 

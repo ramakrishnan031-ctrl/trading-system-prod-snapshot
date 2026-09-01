@@ -56,7 +56,7 @@
     {{ kpi_card("Paused Strategies", "summary('paused_strategies')", tone="warn") }}
     {{ kpi_card("Alerts", "summary('alert_status')", tone="info") }}
     {# Artwork KPI. Real audit source; renders '—' when nothing is recorded. #}
-    {{ kpi_card("Last Control Change", "summary('last_control_change')", tone="info") }}
+    {{ kpi_card("Last Control Change", "lastChange()", tone="info") }}
   {% endcall %}
 
   <div class="ctl-shell">
@@ -110,15 +110,24 @@
           <div class="tbl-scroll ctl-stratscroll">
             <table class="dt-table">
               <thead><tr>
+                <th class="dt-th ctl-serial">#</th>
                 <th class="dt-th">Strategy Name</th>
                 <th class="dt-th">Trade Type</th>
                 <th class="dt-th">Status</th>
                 <th class="dt-th ctl-actcol">Action</th>
               </tr></thead>
               <tbody>
-                <template x-for="r in strategyRows()" :key="r.name">
-                  <tr>
-                    <td class="dt-td" x-text="r.label"></td>
+                <template x-for="(r, i) in strategyRows()" :key="r.name">
+                  <tr :class="r.shadow ? 'ctl-shadowrow' : ''">
+                    <td class="dt-td ctl-serial" x-text="i + 1"></td>
+                    <td class="dt-td">
+                      <span x-text="r.label"></span>
+                      {# ⛔ A SHADOW IS NOT A PAUSED STRATEGY — it is held behind a
+                         promotion gate and must never read as something an
+                         operator merely switched off and could switch back on. #}
+                      <span class="ctl-shadow" x-show="r.shadow" x-cloak
+                            title="fail-closed: never trades until its promotion gate">SHADOW</span>
+                    </td>
                     <td class="dt-td"><span class="ctl-badge" x-text="r.trade_type"></span></td>
                     <td class="dt-td">
                       <span class="ctl-state" :class="onoff(effEnabled(r))"
@@ -129,8 +138,8 @@
                     <td class="dt-td ctl-actcol">
                       <button type="button" class="ctl-sw"
                               :class="effEnabled(r) ? 'ctl-sw-on' : 'ctl-sw-off'"
-                              :disabled="!planeUp() || busy"
-                              @click="toggleStrategy(r)"
+                              :disabled="!planeUp() || busy || r.shadow"
+                              @click="!r.shadow && toggleStrategy(r)"
                               :aria-label="'toggle ' + r.label"></button>
                     </td>
                   </tr>
@@ -161,26 +170,72 @@
 
         <section class="panel ctl-limits">
           <h3 class="panel-title">5. RUNTIME LIMIT CONTROLS</h3>
-          <table class="dt-table">
+          {# ⛔⛔ THE ARTWORK DRAWS ALL SEVEN PARAMETERS TWICE, under an Intraday
+             table and a Delivery table. 🔬 Measured 01-Sep-2026: the config
+             splits only THREE of them. Printing one global number under two
+             headings would tell the operator the modes are independently
+             configured when they are not — on the screen whose whole purpose is
+             to say what the system will actually do. ⛔ A duplicated value is a
+             fabricated distinction. 👤 Rama chose the honest mixed layout. #}
+          <div class="ctl-limgrid">
+          <div class="ctl-limcol">
+          <h4 class="ctl-subh">MODE-SPECIFIC <span>separately configured per mode</span></h4>
+          <table class="dt-table ctl-limtbl">
             <thead><tr>
               <th class="dt-th">Parameter</th>
-              <th class="dt-th dt-num">Live Value</th>
+              <th class="dt-th dt-num">Intraday</th>
+              <th class="dt-th dt-num">Delivery</th>
               <th class="dt-th dt-num">New Value</th>
             </tr></thead>
             <tbody>
-              <template x-for="l in limitDefs" :key="l.key">
+              <template x-for="l in modeLimits()" :key="l.label">
                 <tr>
-                  <td class="dt-td" x-text="l.label"></td>
-                  <td class="dt-td dt-num" x-text="liveLimit(l)"></td>
+                  <td class="dt-td" x-text="l.label" :title="l.source"></td>
+                  <td class="dt-td dt-num" x-text="limVal(l.intraday, l.pct)"></td>
+                  <td class="dt-td dt-num" x-text="limVal(l.delivery, l.pct)"></td>
                   <td class="dt-td dt-num">
-                    <input class="ctl-input" type="number" :step="l.step" :min="l.min"
-                           :disabled="!planeUp() || busy"
-                           x-model="staged[l.key]" :placeholder="liveLimit(l)">
+                    <input x-show="l.key" class="ctl-input" type="number" step="0.01" min="0"
+                           :disabled="!planeUp() || busy" x-model="staged[l.key]"
+                           :placeholder="limVal(l.intraday, l.pct)"
+                           title="stages the intraday value; the delivery variant is set in Configuration">
+                    <span x-show="!l.key" class="ctl-ni" x-cloak>—</span>
                   </td>
                 </tr>
               </template>
             </tbody>
           </table>
+
+          </div>
+          <div class="ctl-limcol">
+          <h4 class="ctl-subh">GLOBAL <span x-text="globalNote()"></span></h4>
+          <table class="dt-table ctl-limtbl">
+            <thead><tr>
+              <th class="dt-th">Parameter</th>
+              <th class="dt-th dt-num">Value</th>
+              <th class="dt-th dt-num">New Value</th>
+            </tr></thead>
+            <tbody>
+              <template x-for="l in globalLimits()" :key="l.label">
+                <tr>
+                  <td class="dt-td" x-text="l.label" :title="l.source || ''"></td>
+                  {# ⛔ NOT INSTRUMENTED, ⛔ never 0 — a 0 here would claim a
+                     configured limit of zero lots, which is a different and
+                     much more dangerous statement than "no source exists". #}
+                  <td class="dt-td dt-num" :class="l.measured ? '' : 'ctl-ni'"
+                      :title="l.measured ? (l.source || '') : l.reason"
+                      x-text="l.measured ? limVal(l.value, false) : 'NOT INSTRUMENTED'"></td>
+                  <td class="dt-td dt-num">
+                    <input x-show="l.key" class="ctl-input" type="number" step="1" min="1"
+                           :disabled="!planeUp() || busy" x-model="staged[l.key]"
+                           :placeholder="limVal(l.value, false)">
+                    <span x-show="!l.key" class="ctl-ni" x-cloak>—</span>
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+          </div>
+          </div>
           <p class="ctl-note">Applies to decisions made <b>after</b> the change; a
             decision already in flight may still use the previous value.</p>
         </section>
@@ -314,7 +369,7 @@
           </div>
         </section>
 
-        <section class="panel">
+        <section class="panel ctl-histpanel">
           <h3 class="panel-title">12. HISTORY <span class="panel-sub">(recent changes)</span></h3>
           <div class="tbl-scroll">
             <table class="dt-table">
@@ -325,7 +380,8 @@
               <tbody>
                 <template x-for="(h, i) in (data.control_history || [])" :key="i">
                   <tr>
-                    <td class="dt-td mono" x-text="dash(h.ts || h.timestamp)"></td>
+                    <td class="dt-td mono" x-text="hhmmss(h.ts || h.timestamp) || dash(null)"
+                      :title="h.ts || h.timestamp"></td>
                     <td class="dt-td" x-text="dash(h.module || h.src_table)"></td>
                     <td class="dt-td" x-text="dash(h.action || h.event_type)"></td>
                     <td class="dt-td" x-text="dash(h.user || h.actor)"></td>
@@ -365,7 +421,8 @@
         <div class="ctl-hist">
           <template x-for="(h, i) in (data.control_history || []).slice(0, 6)" :key="i">
             <div class="ctl-hrow">
-              <span class="ctl-htime mono" x-text="dash(h.ts || h.timestamp)"></span>
+              <span class="ctl-htime mono" x-text="hhmmss(h.ts || h.timestamp) || dash(null)"
+                    :title="h.ts || h.timestamp"></span>
               <span x-text="dash(h.action || h.event_type)"></span>
             </div>
           </template>
@@ -486,6 +543,36 @@ function controlsPage() {
     // plane is down, and the row is flagged `diverged` when they disagree.
     effEnabled(r) { return r.live_enabled === null || r.live_enabled === undefined
                             ? r.configured_enabled : r.live_enabled; },
+    {# ⛔ THE RAW ISO STRING WAS BEING PRINTED. 🔬 Measured 01-Sep-2026: a
+       32-character stamp in a monospace font took 244px of the history row and
+       left 14px for the action text, which then wrapped ONE CHARACTER PER LINE
+       and made the panel 4393px tall. ⭐ The same raw value also broke the
+       LAST CONTROL CHANGE card across three lines.
+       ⭐ Control history spans DAYS, so a stamp from an earlier day names that
+       day; today keeps the bare time. ⛔ NO APOSTROPHES IN THIS BLOCK. #}
+    hhmmss(ts) {
+      if (!ts) return "";
+      const s = String(ts).replace("T", " ");
+      const day = s.slice(0, 10), t = s.slice(11, 19);
+      if (!day || day === (this.data.today || "")) return t;
+      const M = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                 "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+      const q = day.split("-");
+      return q[2] + "-" + (M[Number(q[1]) - 1] || q[1]) + " " + t;
+    },
+    lastChange() {
+      const v = (this.data.active_controls_summary || {}).last_control_change;
+      return v ? this.hhmmss(v) : "—";
+    },
+    modeLimits()   { return (this.data.limits && this.data.limits.mode_specific) || []; },
+    globalLimits() { return (this.data.limits && this.data.limits.global) || []; },
+    globalNote()   { return (this.data.limits && this.data.limits.global_note) || ""; },
+    limVal(v, pct) {
+      if (v === null || v === undefined || v === "") return "—";
+      const n = Number(v);
+      if (!isFinite(n)) return String(v);
+      return pct ? (n * 100).toFixed(2) + "%" : String(n);
+    },
     liveLimit(l) {
       const lim = this.data.limits || {};
       const v = (lim.live && lim.live[l.key] !== null && lim.live[l.key] !== undefined)
