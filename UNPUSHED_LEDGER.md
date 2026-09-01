@@ -2555,3 +2555,104 @@ the environment artifact — ⭐ the passed count rose **2113 → 2115** by exac
 two guards added ⇒ ⛔ zero regressions.
 ⛔ S16 and S17 untouched — 👤 held to be built LAST. ⛔ No global/shared CSS rule
 touched.
+
+
+---
+
+### Entry 30 — S21 SCANNER ATTRIBUTION APPROVED. ⛔ NOT PUSHED
+
+**Date/time:** 01-Sep-2026, approved ~16:0x IST · **Branch:** `feat/screen10-slippage-analytics`
+**Build:** `921969c` · **Pushed: NO · Deployed: NO**
+
+⚖️⚖️ **THIS ENTRY EXISTS FOR ONE REASON: A DATED RULING OF RAMA'S WAS REVERSED**,
+and a reversal must be recorded where the next reader will meet it, ⛔ never
+silently applied.
+
+#### 1. ⚖️ THE 16-Aug RULING, AND ITS 01-Sep SUPERSESSION
+
+📄 The template AND the service both carried: *"⛔⛔ NO SCANNER COLUMN IN THE MAIN
+TABLE (Rama, 16-Aug). Scanner and Strategy are 1:1 — 🔬 measured: 16 scanners onto
+16 distinct strategies, each named after its strategy — so the artwork's
+`Scanner` column is dropped"*, with the identity surviving in SCANNER MAPPING.
+
+👤 **The 01-Sep contract reverses it and answers that reasoning head-on:** *"Keep
+the word Scanner wherever it is meaningful in this screen; do not rename or
+remove the Scanner concept merely because it maps 1:1 to Strategy."*
+
+⚠️⚠️ **THE 1:1 MEASUREMENT ITSELF STILL HOLDS — it was never wrong, only its
+CONCLUSION was overturned.** ⇒ the Scanner cell reads the **SAME row's own
+`scanners` list**, which the payload has carried all along: ⭐ one identity shown
+twice by request, ⛔ NOT a second dataset.
+🔬 **VERIFIED ON THE RENDERED SCREEN: 16 of 16 rows satisfy `scanners ==
+[strategy]`, zero divergence.**
+⭐ And what the old rule was REALLY protecting — that Scanner must never become a
+second independent dataset — is now guarded by **its own test** rather than by
+the column's absence. ⭐ That is the durable part; the column was only ever the
+means.
+
+#### 2. ⭐ THE TWO COLUMNS
+
+⭐ **`#` IS A SERIAL, ⛔ NOT THE PAYLOAD'S `rank`.** It is the row's index in the
+CURRENT sort, so re-sorting renumbers 1..n on the spot — 🔬 confirmed in the
+browser: sorting by Signals kept the serials **1,2,3,4** while the SCANNERS
+beneath them changed. ⛔ It carries `nosort` (sorting BY a row number sorts by the
+order the sort itself produced); ⭐ it stays draggable; ⭐ medals follow the top
+three POSITIONS as the artwork draws. ⛔ `rank` is untouched and still drives
+SCANNER RANKING.
+
+⭐ **TRADE TYPE NEEDED NO NEW CALCULATION** — it was already in the payload, the
+strategy's own YAML `intent` through the ONE shared `strategy_meta` path Screens
+19 and 20 use. ⛔ Never inferred from the scanner's NAME, which the contract
+forbids in as many words. 🔬 Rendered values are only ever `Intraday`/`Delivery`.
+
+⚠️ **`COLS_KEY` → v2, ⛔ NOT COSMETIC.** A stored **v1** order lists the OLD
+thirteen keys and `initCols` **appends anything missing**, so a returning
+operator would have got Scanner and Trade Type at the **FAR RIGHT and no `#` at
+all**. ⭐ Screens 14 and 20 both paid for this; ⭐ **this is the third occurrence
+and the FIRST caught before shipping rather than after.**
+
+#### 3. ⚠️ ONE BACKEND FILE, AND ONLY BECAUSE THE CHANGE FORCED IT
+
+`EXPORT_HEADER` is bound to the table's labels **by an existing test**, so adding
+columns required the export to follow — which the guidance permits explicitly
+(*"unless the requested S21 change requires a correction"*). 🔬 Verified against a
+**real downloaded workbook**: header matches, rows carry serial / scanner /
+strategy / trade type, all three sheets survive.
+
+#### 4. ⚠️ THREE STALE RECORDS CORRECTED
+
+⛔ Leaving them would have had the codebase assert two contradictory things:
+· the **footer note** still told readers *"Strategy is the identity shown; the
+  scanner name is in SCANNER MAPPING"*;
+· the **service docstring's heading** still read *"NO SCANNER COLUMN IN THE MAIN
+  TABLE"* above a body describing its own supersession;
+· the **payload still published a `scanner_column` GAP** for a column that now
+  exists.
+⭐ **A stale explanation is worse than none — it teaches the reader the wrong
+model.**
+
+#### 5. ⛔ THE DEFERRED GLOBAL TABLE RULE WAS NOT APPLIED
+
+👤 Rama: the freeze-pane / body-scroll / header-drag rule is a GLOBAL pass after
+all 22 screens are built, and ⛔ *"do not treat its absence as an S21 defect."*
+⭐ **Its absence was MEASURED, ⛔ not merely skipped:** 🔬 `thead` computes
+`position: static`, the wrap has `max-height: none`, it does ⛔ not scroll
+vertically, and all 16 rows sit in the viewport. ⛔ No global or shared selector
+touched, ⛔ no compensating visual change made.
+
+#### ⛔ WHAT THE APPROVAL DOES NOT MEAN
+
+🔴 **S21 IS NOT `VERIFIED LIVE`** — approved on ONE real trading day.
+⭐ **THE DATA IS THE 15:54 VM RE-PULL, ⛔ not the 11:41 extract.** 👤 The instruction
+forbids stale logs where newer exist, and 🔬 the difference was large: **787 →
+4,083 signals**, 2 → 3 closed trades. ⛔ No demo rows, ⛔ nothing fabricated.
+
+#### Gate
+
+🔬 **S21 142 passed** (+1 test, collected twice across the parametrised `v41`/`v42`
+fixture). ⭐ Two superseded tests **rewritten, ⛔ not deleted**: the
+no-Scanner-column test became the **not-a-second-dataset** guard, and the
+workbook test's leftover *"Scanner not in header"* assertion became its opposite.
+🔬 Full dashboard suite **2117 passed, 1 failed** = `test_c_venv_has_no_kiteconnect`,
+the environment artifact ⇒ ⛔ zero regressions.
+⛔ No page-wide horizontal overflow. ⛔ S16/S17 untouched — 👤 held to be built LAST.
