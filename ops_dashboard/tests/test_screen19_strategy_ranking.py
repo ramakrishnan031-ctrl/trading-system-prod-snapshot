@@ -515,3 +515,38 @@ def test_the_drag_affordance_survives_the_glyph_removal():
     assert ".sr-grip" not in block
     assert 'draggable="true"' in tpl and "drag to reorder" in tpl
     assert ".sr-page .sr-th { cursor: grab" in css
+
+
+def test_the_table_is_a_frozen_header_over_a_scrolling_twelve_row_body():
+    """👤 THE TABLE-BEHAVIOUR CONTRACT (Rama, 01-Sep-2026), pinned.
+
+    ⭐ The artwork draws TWELVE data rows and the screen must stay stable when
+    more strategies exist. 🔬 Real data returns SIXTEEN today, so before this the
+    wrap grew to 645px and the WHOLE PAGE scrolled (1353px against a 1264px
+    viewport) just to reach rows 13-16.
+
+    🔬 THE FIGURE IS MEASURED AT SUB-PIXEL, ⛔ not rounded: thead 30.92px and each
+    row 38.33px put row 12's bottom edge at 490.92 ⇒ 491px. ⚠️ Rounding to 31 and
+    38 gives 487 and shows only ELEVEN rows — here a 4px error is a whole row.
+
+    ⛔ `max-height`, ⛔ never `height`: a day with fewer than twelve strategies
+    must not open an empty region under the last row. ⛔ And no pagination is
+    substituted — every genuine row stays reachable by scrolling the BODY.
+    """
+    css = _css()
+    wrap = re.search(r"\.sr-page \.sr-tbl-wrap \{[^}]*\}", css).group(0)
+    assert "max-height: 491px" in wrap, wrap
+    assert "height:" not in wrap.replace("max-height:", ""), wrap   # ⛔ never fixed
+    assert "overflow-y: auto" in wrap, wrap
+    # ⛔ the horizontal scroll stays ON THE WRAP so columns cannot push the PAGE
+    assert "overflow-x: auto" in wrap, wrap
+
+    # ⭐ the freeze-pane, reusing the S11/S18 pattern rather than a second one
+    head = re.search(r"\.sr-page \.sr-tbl thead th \{[^}]*\}", css).group(0)
+    assert "position: sticky" in head and "top: 0" in head, head
+    assert "background:" in head, head        # ⛔ rows must not show through it
+
+    # ⛔ the header must stay draggable — a frozen header is still a usable one
+    tpl = _tpl()
+    assert 'draggable="true"' in tpl
+    assert "colDragMixin()" in tpl

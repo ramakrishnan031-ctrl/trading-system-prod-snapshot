@@ -4483,7 +4483,30 @@ main.content:has(> .sr-page) { width: 100%; max-width: none; margin: 0;
   justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .sr-page .sr-panel-head .panel-title { margin: 0; }
 .sr-page .sr-exp { font-size: 13px; white-space: nowrap; }
-.sr-page .sr-tbl-wrap { overflow-x: auto; }
+/* ── THE TABLE-BEHAVIOUR CONTRACT (👤 Rama, 01-Sep-2026) ────────────────────
+   ⭐ The artwork draws TWELVE data rows, and the screen must stay stable when
+   more strategies exist than that. 🔬 MEASURED IN THE BROWSER AT SUB-PIXEL, ⛔ not
+   guessed and ⛔ not rounded: thead **30.92px**, every data row **38.33px**, so
+   row 12's bottom edge sits **490.92px** below the wrap's top ⇒ **491px**.
+   ⚠️ Rounding those to 31 and 38 gives 487 and shows only ELEVEN rows — a 4px
+   error is a whole row here, which is why the figure is taken from the rendered
+   box and not from arithmetic on integers.
+   🔬 Real data returns SIXTEEN strategies today, so this genuinely bites — before
+   this rule the wrap grew to 645px and the WHOLE PAGE scrolled (1353px against a
+   1264px viewport) just to reach rows 13-16.
+   ⭐ `max-height`, ⛔ not `height`: a day with fewer than twelve strategies must
+   ⛔ not open an empty region below the last row. That is S11's own choice
+   (`.exec-rank-scroll`), and this reuses S11/S18's pattern rather than inventing
+   a second scrolling implementation.
+   ⛔ The horizontal scroll stays ON THE WRAP, so many columns can never push the
+   PAGE sideways. ⛔ No pagination is substituted, ⛔ no row is truncated: all
+   sixteen remain reachable by scrolling the body. */
+.sr-page .sr-tbl-wrap { overflow-x: auto; overflow-y: auto; max-height: 491px; }
+/* ⭐ the freeze-pane: the header stays put while the rows move underneath, and
+   it keeps its own background so rows can never show through it. ⛔ `top: 0` is
+   relative to the SCROLLING WRAP, so the page's own scroll cannot move it. */
+.sr-page .sr-tbl thead th { position: sticky; top: 0; z-index: 1;
+  background: var(--panel); }
 .sr-page .sr-tbl { width: 100%; table-layout: fixed; }
 .sr-page .sr-tbl td { padding: 7px 6px; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; text-align: left; }
