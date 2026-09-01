@@ -4704,10 +4704,30 @@ main.content:has(> .sh-page) { width: 100%; max-width: none; margin: 0;
 /* ⭐ THE APPROVED TABLE FOOTPRINT: the artwork draws a 14-row table, and a
    short day must not shrink the card (Rama, Screen 18). ⛔ Not a spacer - the
    16 configured strategies already exceed this floor, which then does nothing. */
-.sh-page .sh-tbl-wrap { overflow-x: auto; min-height: 350px; }
+/* ── THE TABLE INTERACTION, S19's PATTERN (👤 Rama, 01-Sep-2026) ─────────────
+   ⭐ The artwork draws FOURTEEN rows and says "Showing 1 to 14 of 14", so 14 is
+   THIS screen's footprint — ⛔ not S19's 12, which was S19's own artwork.
+   🔬 MEASURED IN THE BROWSER AT SUB-PIXEL, ⛔ not computed from integers: thead
+   32.00 and each row 36.67 put row 14's bottom edge at **545.33** ⇒ **546px**.
+   ⚠️ S19 taught this the hard way — rounding the row height there cost a whole
+   visible row.
+   🔬 Real data returns SIXTEEN strategies, so it bites: before this the wrap
+   grew to 619px and the WHOLE PAGE scrolled (1485px against a 1264px viewport)
+   to reach rows 15-16.
+   ⛔ `min-height` is KEPT: it is the empty-day footprint and a different job.
+   ⛔ This is S20 ONLY — 👤 the global table rule is deferred until every screen
+   is built, so ⛔ no shared/global selector is touched here. */
+.sh-page .sh-tbl-wrap { overflow-x: auto; overflow-y: auto;
+  min-height: 350px; max-height: 546px; }
+/* ⭐ the freeze-pane, reusing S11/S18/S19 rather than a fourth implementation */
+.sh-page .sh-tbl thead th { position: sticky; top: 0; z-index: 1;
+  background: var(--panel); }
 /* ⭐ min-width = the sum of the approved column widths, so the headings never
-   compress into a wrap. Narrower viewports scroll inside `.sh-tbl-wrap`. */
-.sh-page .sh-tbl { width: 100%; table-layout: fixed; min-width: 1214px; }
+   compress into a wrap. Narrower viewports scroll inside `.sh-tbl-wrap`.
+   ⭐ 1214 → 1258 = the serial column's own 44px. */
+.sh-page .sh-tbl { width: 100%; table-layout: fixed; min-width: 1258px; }
+/* the serial reads as a row marker, ⛔ not as data competing with the metrics */
+.sh-page .sh-serial { color: var(--muted); }
 .sh-page .sh-tbl td { padding: 7px 6px; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; text-align: left; }
 /* the HEADER wraps rather than truncating - a clipped column name is a

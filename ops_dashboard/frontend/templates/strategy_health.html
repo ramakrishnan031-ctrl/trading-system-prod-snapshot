@@ -106,13 +106,15 @@
                              overKey === c.key ? 'is-over' : '', c.ctr ? 'ctr' : '']"
                     :style="c.w ? ('width:' + c.w) : ''"
                     draggable="true" role="button" tabindex="0"
-                    :title="c.label + ' · click to sort, drag to reorder'"
+                    :title="c.nosort ? (c.label + ' · row number of the current sort · drag to reorder')
+                                     : (c.label + ' · click to sort, drag to reorder')"
                     @dragstart="onDragStart(c.key, $event)"
                     @dragover.prevent="overKey = c.key"
                     @dragleave="overKey === c.key && (overKey = '')"
                     @drop.prevent="onDrop(c.key)"
                     @dragend="onDragEnd()"
-                    @click="headClick(c.key)" @keyup.enter="tSort(c.key)">
+                    @click="!c.nosort && headClick(c.key)"
+                    @keyup.enter="!c.nosort && tSort(c.key)">
                   {# ⭐ The binding artwork draws PLAIN headings; the drag glyph
                      was my own addition and it cost 12px on EVERY column, which
                      is what pushed the three "… Today" headings into a wrap that
@@ -125,10 +127,19 @@
               </template>
             </tr></thead>
             <tbody>
-              <template x-for="r in tSorted(rows())" :key="r.strategy">
+              {# ⭐ `(r, i)` — the serial column needs the row's INDEX IN THE
+                 CURRENTLY SORTED SET, which is exactly what this loop yields.
+                 ⛔ It is NOT read from the row and ⛔ NOT stored: re-sorting or
+                 filtering renumbers 1..n on the spot, which is what a serial
+                 column means. 👤 Rama, 01-Sep-2026: "presentation-only; do not
+                 create or alter a business/data identifier." #}
+              <template x-for="(r, i) in tSorted(rows())" :key="r.strategy">
                 <tr>
                   <template x-for="c in cols" :key="c.key">
                     <td :class="[c.ctr ? 'ctr' : '', c.num ? 'mono' : '']">
+                      <template x-if="c.key === 'serial'">
+                        <span class="sh-serial" x-text="i + 1"></span>
+                      </template>
                       <template x-if="c.key === 'display_name'">
                         {# a long name ellipsises; the full one stays reachable #}
                         <span class="sh-nm" :title="r.display_name"
@@ -508,6 +519,12 @@ function healthPage() {
        was deleted and no data model changed; the table keeps a min-width and
        scrolls inside its own container when the viewport is narrower. */
     DEFAULT_COLS: [
+      /* ⭐ 👤 Rama, 01-Sep-2026: a serial column FIRST. It is presentation-only —
+         the index in the current sort, ⛔ never a stored identifier — so it
+         carries `nosort`: sorting BY a row number would sort by the display
+         order that the sort itself produces, which means nothing. ⭐ It stays
+         DRAGGABLE, so the column-order interaction is unchanged. */
+      { key: "serial",           label: "#",    ctr: true, nosort: true, w: "44px" },
       { key: "display_name",     label: "Strategy",                    w: "132px" },
       { key: "trade_type",       label: "Trade Type",       ctr: true, w: "94px" },
       { key: "state",            label: "Status",           ctr: true, w: "108px" },
@@ -520,12 +537,17 @@ function healthPage() {
       { key: "health_score",     label: "Health Score",     ctr: true, w: "110px" },
       { key: "trend",            label: "Trend",            ctr: true, w: "92px" },
     ],
-    SPECIAL: ["display_name", "trade_type", "state", "last_signal",
+    SPECIAL: ["serial", "display_name", "trade_type", "state", "last_signal",
               "rejections_today", "health_score", "trend"],
     cols: [],
     /* v2: the column SET changed (Trade Type added after Strategy). A stored
-       v1 order would have appended it LAST - the Screen-14 lesson. */
-    COLS_KEY: "screen20.health.colOrder.v2",
+       v1 order would have appended it LAST - the Screen-14 lesson.
+       ⭐ v3, 01-Sep-2026: the SET changed again (the serial column). ⛔ THE BUMP
+       IS NOT COSMETIC — a stored v2 order lists eleven keys, and `initCols`
+       appends anything missing from it, so a returning operator would have got
+       the new "#" column at the FAR RIGHT instead of first. The very lesson the
+       v2 note records, one screen later. */
+    COLS_KEY: "screen20.health.colOrder.v3",
 
     f: { state: "", trade_type: "", silent_min: "" },
 

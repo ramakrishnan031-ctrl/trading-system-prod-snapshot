@@ -382,8 +382,13 @@ def test_the_six_approved_kpi_cards_in_the_approved_order():
 #: ⭐ Rama, 16-Aug enumerated these headings for THIS screen, Trade Type
 #: included — so it is a COLUMN here too, immediately after Strategy, and no
 #: longer a badge tucked inside the Strategy cell where it had no heading.
-APPROVED_COLUMNS = ["Strategy", "Trade Type", "Status", "Last Signal", "Last Trade",
-                    "Signals Today", "Orders Today", "Trades Today",
+# ⭐ "#" leads the set from 01-Sep-2026 — 👤 Rama: "Serial / # column as the FIRST
+# column". ⛔ It is presentation-only (the index in the current sort/filter) and
+# its own test pins that; here it only has to hold its PLACE, because these two
+# tests are what would otherwise let it drift out of first position or lose its
+# width from the table's min-width sum.
+APPROVED_COLUMNS = ["#", "Strategy", "Trade Type", "Status", "Last Signal",
+                    "Last Trade", "Signals Today", "Orders Today", "Trades Today",
                     "Rejections Today", "Health Score", "Trend"]
 
 
@@ -693,8 +698,11 @@ def test_every_approved_heading_fits_on_one_line():
     # same defect the Screen-12 and Screen-18 windows were corrected for.
     # The PROPERTY is unchanged; only the window is.
     block = block[:block.index("SCREEN 21")]
-    th = block[block.index(".sh-page .sh-tbl th"):]
-    th = th[:th.index("}")]
+    # ⛔ MATCH THE RULE EXACTLY, ⛔ not by prefix. `.sh-page .sh-tbl th` is a
+    # PREFIX of `.sh-page .sh-tbl thead th`, so a bare `index()` silently
+    # grabbed the sticky-header rule added on 01-Sep and asserted `nowrap`
+    # against it. The PROPERTY is unchanged; only the match is made precise.
+    th = re.search(r"\.sh-page \.sh-tbl th \{[^}]*\}", block).group(0)
     assert "white-space: nowrap" in th, th
 
     tpl = _tpl()
@@ -719,3 +727,71 @@ def test_the_drag_affordance_survives_the_glyph_removal():
     assert 'draggable="true"' in tpl
     assert "drag to reorder" in tpl
     assert ".sh-page .sh-th { cursor: grab" in css
+
+
+def test_the_serial_column_is_first_and_is_presentation_only():
+    """👤 Rama, 01-Sep-2026: a Serial/# column FIRST, presentation-only.
+
+    ⭐ THE POINT IS THAT IT IS NOT DATA. It renders the row's INDEX IN THE
+    CURRENTLY SORTED, FILTERED SET — so re-sorting or filtering renumbers 1..n
+    on the spot — and it is ⛔ never read from the row and ⛔ never stored.
+    🔬 Verified in the browser: sorting by health score kept the serials 1,2,3,4
+    while the STRATEGIES underneath them changed; filtering to Disabled gave
+    "1", to Silent gave 1..15, unfiltered 1..16.
+
+    ⛔ It also carries `nosort`: sorting BY a row number would sort by the very
+    display order the sort produces, which means nothing. ⭐ It stays DRAGGABLE,
+    so the column-order interaction is unchanged.
+    """
+    tpl = _tpl()
+    cols = tpl[tpl.index("DEFAULT_COLS:"):tpl.index("SPECIAL:")]
+    first = re.search(r'\{ key: "([a-z_]+)"', cols).group(1)
+    assert first == "serial", first
+    assert 'label: "#"' in cols and "nosort: true" in cols
+
+    # ⭐ the index comes from the LOOP over the sorted set, ⛔ not from the row
+    assert 'x-for="(r, i) in tSorted(rows())"' in tpl
+    assert 'x-text="i + 1"' in tpl
+    assert "r.serial" not in tpl          # ⛔ never a stored identifier
+    assert '"serial"' in tpl[tpl.index("SPECIAL:"):tpl.index("cols: []")]
+
+    # ⛔ THE STORED-ORDER KEY MUST BE BUMPED, and this is not cosmetic: a stored
+    #   v2 order lists the OLD eleven keys and `initCols` appends anything
+    #   missing, so a returning operator would have got "#" at the FAR RIGHT.
+    assert 'COLS_KEY: "screen20.health.colOrder.v3"' in tpl
+
+    # ⛔ and the header must not sort while still dragging
+    assert 'c.nosort && headClick(c.key)' in tpl
+    assert 'draggable="true"' in tpl
+
+
+def test_the_table_is_a_frozen_header_over_a_scrolling_fourteen_row_body():
+    """👤 The S19 interaction pattern, on THIS screen's own footprint.
+
+    ⭐ The artwork draws FOURTEEN rows and says "Showing 1 to 14 of 14", so 14 is
+    S20's footprint — ⛔ not S19's 12, which was S19's own artwork.
+    🔬 MEASURED AT SUB-PIXEL: thead 32.00 + 14 x 36.67 puts row 14's bottom at
+    545.33 ⇒ 546px. ⚠️ S19 taught this — rounding a row height there showed
+    eleven rows instead of twelve.
+    🔬 Real data returns SIXTEEN strategies, so it bites: the wrap grew to 619px
+    and the WHOLE PAGE scrolled (1485px against a 1264px viewport) to reach
+    rows 15-16.
+    ⛔ `min-height` is KEPT — it is the empty-day footprint, a different job.
+    """
+    css = _css()
+    wrap = re.search(r"\.sh-page \.sh-tbl-wrap \{[^}]*\}", css).group(0)
+    assert "max-height: 546px" in wrap, wrap
+    assert "min-height: 350px" in wrap, wrap      # ⛔ the empty-day floor stays
+    assert "overflow-y: auto" in wrap, wrap
+    assert "overflow-x: auto" in wrap, wrap       # ⛔ contained, never page-wide
+
+    head = re.search(r"\.sh-page \.sh-tbl thead th \{[^}]*\}", css).group(0)
+    assert "position: sticky" in head and "top: 0" in head, head
+    assert "background:" in head, head
+
+    # ⭐ the serial column's own width is in the table's min-width (1214 -> 1258)
+    tbl = re.search(r"\.sh-page \.sh-tbl \{[^}]*\}", css).group(0)
+    assert "min-width: 1258px" in tbl, tbl
+
+    # ⛔ S20 ONLY — the global table rule is deferred until every screen is built
+    assert ".sh-page .sh-tbl-wrap" in wrap
