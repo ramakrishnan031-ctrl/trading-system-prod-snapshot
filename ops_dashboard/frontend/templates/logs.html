@@ -97,6 +97,69 @@
             <button class="btn-primary" type="button" @click="applyFilters()">▼ Apply Filters</button>
           </span>
         </div>
+
+        {# ── SEARCH — INTEGRATED, ⛔ not a standalone panel ──────────────────
+           ⭐ MEASURED AGAINST BOTH SOURCES FIRST, as the correction required.
+           The binding PNG places NO standalone SEARCH panel: it puts one
+           "Search logs…" box in the table toolbar (kept, below) and everything
+           else in THIS control block. The TXT does list a SEARCH section, and
+           it says "Preserve the investigation/search capability" — a capability,
+           ⛔ not a full-width block. So all five approved fields survive intact
+           and simply move into the panel the artwork actually draws.
+           ⛔ NOTHING IS DISCARDED: Service Name, Module, Error Code, Message and
+           Reference ID are the same parameters, still CONTAINS matches, still
+           separate from the exact-match dropdowns above (binding a typed
+           fragment to a dropdown would return nothing for every partial word).
+           ⛔ ERROR CODE stays SHOWN and DISABLED — no error-code scheme exists
+           in this system, so a box that accepted one could only return nothing.
+           It says NOT INSTRUMENTED rather than pretending to search. #}
+        <div class="slg-fsec">
+          <h4 class="slg-fsec-t">SEARCH</h4>
+          <div class="slg-sfrow">
+            <label class="slg-sf-r"><span class="slg-f-l">Service Name</span>
+              <input type="text" class="sel" placeholder="Enter service name"
+                     x-model="f.service_q" @keyup.enter="applyFilters()"></label>
+            <label class="slg-sf-r"><span class="slg-f-l">Module</span>
+              <input type="text" class="sel" placeholder="Enter module"
+                     x-model="f.module_q" @keyup.enter="applyFilters()"></label>
+            <label class="slg-sf-r">
+              <span class="slg-f-l">Error Code
+                <span class="slg-ni">NOT INSTRUMENTED</span></span>
+              <input type="text" class="sel" disabled
+                     placeholder="no error-code scheme exists"
+                     title="A repo-wide search for an XXX-0000 error-code scheme returns zero, so this field cannot be queried."></label>
+            <label class="slg-sf-r"><span class="slg-f-l">Message</span>
+              <input type="text" class="sel" placeholder="Enter keyword in message"
+                     x-model="f.message_q" @keyup.enter="applyFilters()"></label>
+            <label class="slg-sf-r"><span class="slg-f-l">Reference ID</span>
+              <input type="text" class="sel" placeholder="Enter reference ID"
+                     x-model="f.ref_q" @keyup.enter="applyFilters()"></label>
+            <button class="btn-primary slg-sbtn" type="button"
+                    @click="applyFilters()">⌕ Search</button>
+          </div>
+        </div>
+
+        {# ── EVENT TYPES — the counts, compacted beside their own filter ─────
+           ⭐ Neither source document places an EVENT TYPES PANEL: the PNG has
+           none, and the TXT names Event Type only as a FILTER and a table
+           COLUMN. It was an addition. ⛔ But the information is real and worth
+           keeping — which of the eleven approved types this system actually
+           records — so it is compacted to a chip strip under the dropdown it
+           belongs to, instead of a full-width block. Same data, same honesty:
+           an uninstrumented type says so and ⛔ never shows 0. #}
+        <div class="slg-fsec">
+          <h4 class="slg-fsec-t">EVENT TYPES</h4>
+          <div class="slg-etrow">
+            <template x-for="t in data.event_types || []" :key="t">
+              <span class="slg-etchip"
+                    :class="(data.instrumented_event_types || []).includes(t) ? '' : 'is-ni'">
+                <span class="slg-etk" x-text="t"></span><b class="slg-etn mono"
+                      x-text="(data.instrumented_event_types || []).includes(t)
+                              ? fmt((data.by_event_type || {})[t]) : 'NOT INSTRUMENTED'"></b>
+              </span>
+            </template>
+          </div>
+        </div>
       </section>
 
       {# ── SYSTEM LOG EVENTS ─────────────────────────────────────────────── #}
@@ -150,14 +213,25 @@
                         <span class="slg-sev" :class="'slg-sv-' + r.severity.toLowerCase()"
                               x-text="r.severity.toUpperCase()"></span>
                       </template>
+                      {# 🔴 ONE ROOT ELEMENT PER x-if, AND THAT IS NOT A STYLE
+                         RULE. Alpine 3 builds an x-if branch with
+                         `content.cloneNode(true).firstElementChild` and DISCARDS
+                         every later sibling, so a SECOND <span> here is never
+                         created at all. The surviving first span then carries
+                         x-show="r.status", which is display:none exactly when
+                         the value is missing — so the gap state rendered as an
+                         EMPTY CELL, which is the one thing this screen must
+                         never do. Both branches now live on ONE element, the
+                         ternary shape Screen 13 already uses. #}
                       <template x-if="c.key === 'status'">
-                        <span x-show="r.status" class="pill" :class="statusPill(r.status)"
-                              x-text="r.status"></span><span
-                              x-show="!r.status" class="slg-ni">NOT INSTRUMENTED</span>
+                        <span :class="r.status ? ('pill ' + statusPill(r.status)) : 'slg-ni'"
+                              :title="r.status ? '' : gapWhy('event_type')"
+                              x-text="r.status || 'NOT INSTRUMENTED'"></span>
                       </template>
                       <template x-if="c.key === 'event_type'">
-                        <span x-show="r.event_type" x-text="r.event_type"></span><span
-                              x-show="!r.event_type" class="slg-ni">NOT INSTRUMENTED</span>
+                        <span :class="r.event_type ? '' : 'slg-ni'"
+                              :title="r.event_type ? '' : gapWhy('event_type')"
+                              x-text="r.event_type || 'NOT INSTRUMENTED'"></span>
                       </template>
                       <template x-if="c.key !== 'severity' && c.key !== 'status' && c.key !== 'event_type'">
                         <span x-text="cell(r, c.key)"></span>
@@ -225,17 +299,42 @@
           <div class="slg-d-empty" x-show="!detail.found" x-cloak>
             Select an event to see its component timeline.
           </div>
-          <ol class="slg-tl" x-show="detail.found" x-cloak>
-            <template x-for="s in detail.timeline || []" :key="s.stage">
-              <li :class="s.measured ? 'is-on' : 'is-off'">
-                <i class="slg-tl-dot"></i>
-                <span class="slg-tl-k" x-text="s.stage"></span>
-                <span class="slg-tl-v mono" x-show="s.measured" x-text="s.time"></span>
-                <span class="slg-tl-v slg-ni" x-show="!s.measured" x-cloak>NOT INSTRUMENTED</span>
-                <span class="slg-tl-why" x-show="s.gap" x-text="s.gap"></span>
-              </li>
-            </template>
-          </ol>
+          {# ⭐ THE HORIZONTAL FOUR-STAGE DIAGRAM THE BINDING PNG DRAWS — four
+             circular pictorial nodes on one connecting rail, stage label under
+             each node, timestamp under the label, and a footer strip. The TXT's
+             "Event Detected ↓ Logged ↓ Action Taken ↓ Resolved" is its ASCII
+             rendering of the SAME four stages; SOURCE AUTHORITY 1 (the PNG) is
+             binding for composition, and the TXT itself forbids replacing a
+             pictorial element with plain text. ⛔ A vertical <ol> was doing
+             exactly that.
+             ⛔ THE STAGES ARE STILL THE BACKEND'S — same `detail.timeline`,
+             same `measured` flag, same gap reason. Nothing here can invent a
+             stage: an unmeasured node renders hollow and says NOT INSTRUMENTED
+             in place of a time, and its reason is carried on the title. #}
+          <div class="slg-tlh" x-show="detail.found" x-cloak>
+            <div class="slg-tlh-track">
+              <template x-for="(s, i) in detail.timeline || []" :key="s.stage">
+                <div class="slg-tlh-stage" :class="s.measured ? 'is-on' : 'is-off'"
+                     :title="s.measured ? (s.stage + ' recorded at ' + s.time) : (s.gap || 'not instrumented')">
+                  <span class="slg-tlh-node" x-html="stageIcon(i)"></span>
+                  <span class="slg-tlh-k" x-text="s.stage"></span>
+                  <span class="slg-tlh-v mono" x-show="s.measured" x-text="s.time"></span>
+                  <span class="slg-tlh-v slg-ni" x-show="!s.measured" x-cloak>NOT INSTRUMENTED</span>
+                </div>
+              </template>
+            </div>
+            {# ⛔ The PNG's footer reads "Duration: 2 sec". Nothing stamps a
+               duration here — the stages that ARE measured share the single
+               log timestamp, so subtracting them would yield a manufactured
+               0 sec dressed as a measurement. It says so instead. #}
+            <div class="slg-tlh-foot">
+              <span class="slg-tlh-dur">Duration
+                <b class="slg-ni" :title="gapWhy('timeline')">NOT INSTRUMENTED</b></span>
+              <span x-show="tlResolved()" class="pill pill-ok">Resolved</span>
+              <span x-show="!tlResolved()" class="slg-ni"
+                    :title="gapWhy('resolution')">No resolution recorded</span>
+            </div>
+          </div>
         </section>
 
         <section class="panel slg-err">
@@ -332,71 +431,6 @@
   </div>
 
   {# ── DEPENDENCY STATUS · SYSTEM REPLAY · RETENTION · EXPORT ────────────── #}
-
-  {# ── SEARCH · EVENT TYPES ───────────────────────────────────────────────
-     ⭐ The binding PNG places NEITHER panel; the TXT requires SEARCH and lists
-     it exactly here — after Recovery Tracking, before Retention. They sit in
-     their own full-width row rather than stacked into the rail, and that is
-     MEASURED, not styled: with them in the rail the rail overshot the left
-     column by ~780px, so everything below waited for the grid to close and a
-     dead band opened under the table. The rail is back to the PNG's THREE
-     panels, which is what makes it end level with the left column.
-     ⛔ No min-height and no stretch is used anywhere to close a gap. #}
-  <div class="slg-rowx">
-    {# ── SEARCH — the binding TXT's five approved fields ─────────────────
-       ⭐ These are CONTAINS searches over the SAME filtered population the
-       table shows, and they are separate parameters from the FILTERS
-       dropdowns above: binding a typed fragment to a dropdown's exact match
-       would silently return nothing for every partial word.
-       ⛔ ERROR CODE is shown because the design requires it, and DISABLED
-       because no error-code scheme exists in this system — a box that
-       accepted one could only ever return nothing. It says so rather than
-       pretending to search. #}
-    <section class="panel slg-searchp">
-      <h3 class="panel-title">SEARCH</h3>
-      <div class="slg-sf">
-        <label class="slg-sf-r"><span class="slg-f-l">Service Name</span>
-          <input type="text" class="sel" placeholder="Enter service name"
-                 x-model="f.service_q" @keyup.enter="applyFilters()"></label>
-        <label class="slg-sf-r"><span class="slg-f-l">Module</span>
-          <input type="text" class="sel" placeholder="Enter module"
-                 x-model="f.module_q" @keyup.enter="applyFilters()"></label>
-        <label class="slg-sf-r">
-          <span class="slg-f-l">Error Code
-            <span class="slg-ni">NOT INSTRUMENTED</span></span>
-          <input type="text" class="sel" disabled
-                 placeholder="no error-code scheme exists"
-                 title="A repo-wide search for an XXX-0000 error-code scheme returns zero, so this field cannot be queried."></label>
-        <label class="slg-sf-r"><span class="slg-f-l">Message</span>
-          <input type="text" class="sel" placeholder="Enter keyword in message"
-                 x-model="f.message_q" @keyup.enter="applyFilters()"></label>
-        <label class="slg-sf-r"><span class="slg-f-l">Reference ID</span>
-          <input type="text" class="sel" placeholder="Enter reference ID"
-                 x-model="f.ref_q" @keyup.enter="applyFilters()"></label>
-        <button class="btn-primary slg-sbtn" type="button"
-                @click="applyFilters()">⌕ Search</button>
-      </div>
-    </section>
-
-    <section class="panel slg-etypes">
-      <h3 class="panel-title">EVENT TYPES</h3>
-      <table class="cap-table slg-mini"><tbody>
-        <template x-for="t in data.event_types || []" :key="t">
-          <tr>
-            <td x-text="t"></td>
-            <td class="rt mono">
-              <template x-if="(data.instrumented_event_types || []).includes(t)">
-                <span x-text="fmt((data.by_event_type || {})[t])"></span>
-              </template>
-              <template x-if="!(data.instrumented_event_types || []).includes(t)">
-                <span class="slg-ni">NOT INSTRUMENTED</span>
-              </template>
-            </td>
-          </tr>
-        </template>
-      </tbody></table>
-    </section>
-  </div>
 
   <div class="slg-row4">
     <section class="panel slg-deps">
@@ -579,6 +613,38 @@ function systemLogsPage() {
       if (s.skipped_foreign_shape) n += "; " + s.skipped_foreign_shape + " records skipped (different shape)";
       if (s.skipped_not_json) n += "; " + s.skipped_not_json + " non-JSON lines skipped";
       return n + ".";
+    },
+
+    /* ── COMPONENT TIMELINE — the PNG's four pictorial nodes ───────────────
+       ⭐ Injected with x-html on a SPAN, never an x-for inside the <svg>: the
+       header note records why that renders nothing. One icon per approved
+       stage, in TIMELINE_STAGES order, drawn in the same 16px stroked style
+       as the KPI icons so the deck and the diagram read as one screen. */
+    TL_ICONS: [
+      /* Event Detected — a radar ping */
+      '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="8" r="2"/><path d="M3.8 3.8a6 6 0 000 8.4M12.2 3.8a6 6 0 010 8.4"/></svg>',
+      /* Logged — the written record */
+      '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 2.5h8v11H4z"/><path d="M6 6h4M6 9h4"/></svg>',
+      /* Action Taken — a bolt */
+      '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M9 2L4.5 9H8l-1 5 4.5-7H8z"/></svg>',
+      /* Resolved — a tick */
+      '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M3.5 8.5l3 3 6-7"/></svg>',
+    ],
+    stageIcon(i) { return this.TL_ICONS[i] || this.TL_ICONS[this.TL_ICONS.length - 1]; },
+
+    /* ⛔ Reads the BACKEND's measured flag for the approved "Resolved" stage —
+       ⛔ never inferred from severity, status text or the absence of an error. */
+    tlResolved() {
+      const r = ((this.detail || {}).timeline || [])
+                  .find(s => s.stage === "Resolved");
+      return !!(r && r.measured);
+    },
+
+    /* the builder's own reason string for a gap, so a NOT INSTRUMENTED marker
+       can always explain itself on hover instead of just asserting */
+    gapWhy(key) {
+      const g = (this.data.gaps || {})[key];
+      return (g && g.reason) ? g.reason : "";
     },
 
     donutMarkup() {

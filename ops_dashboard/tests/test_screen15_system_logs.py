@@ -38,11 +38,20 @@ def _shipped(client) -> str:
 
 
 def _page_content(client) -> str:
-    """This screen's VISIBLE markup — shared chrome and scripts removed."""
+    """This screen's VISIBLE markup — shared chrome and scripts removed.
+
+    🔴 MATCH THE ROOT BY ITS CLASS, ⛔ never by one exact attribute string.
+    `0ca38e2` moved S15 onto the wide-page layout, so the root became
+    `class="dash-page slg-page"` — and the literal `'<div class="slg-page"'`
+    stopped matching. It did not fail loudly: it returned -1 and took EIGHT
+    tests down with it, every one of them reporting the page root as missing
+    rather than the real change. A class-aware match cannot be blinded by a
+    class being added alongside.
+    """
     body = _shipped(client)
-    i = body.find('<div class="slg-page"')
-    assert i > 0, "the system-logs page root is missing"
-    body = body[i:]
+    m = re.search(r'<div\s[^>]*class="[^"]*\bslg-page\b[^"]*"', body)
+    assert m, "the system-logs page root is missing"
+    body = body[m.start():]
     j = body.find("<script>")
     return body[:j] if j > 0 else body
 
@@ -495,10 +504,83 @@ def test_the_rail_holds_only_the_three_panels_the_png_places_there():
     rail = tpl[tpl.index('<aside class="slg-rail"'):tpl.index("</aside>")]
     panels = re.findall(r'class="panel slg-([a-z-]+)"', rail)
     assert panels == ["svcs", "sev-p", "impact"], panels
-    # ⭐ and the two the PNG never places are still on the page, below
-    assert 'class="slg-rowx"' in tpl
-    for cls in ("slg-searchp", "slg-etypes"):
-        assert cls in tpl[tpl.index('class="slg-rowx"'):]
+    # ⛔ THE STANDALONE ROW IS GONE, ⛔ not merely hidden. Moving SEARCH and
+    # EVENT TYPES out of the rail fixed the overshoot but cost a whole row's
+    # height, and the binding PNG places NEITHER panel. They now sit inside the
+    # FILTERS panel — the one control block the artwork does draw.
+    for dead in ('class="slg-rowx"', "slg-searchp", "slg-etypes"):
+        assert dead not in tpl, dead
+    # ⭐ and BOTH survive there in full — ⛔ integration, never deletion
+    i = tpl.index('<section class="panel slg-filters">')
+    filters = tpl[i:tpl.index("</section>", i)]
+    assert "SEARCH" in filters and "EVENT TYPES" in filters
+    for field in ("Service Name", "Module", "Error Code", "Message",
+                  "Reference ID"):
+        assert field in filters, field
+
+
+def test_no_x_if_branch_has_two_root_elements():
+    """🔴 THE BLANK-CELL DEFECT, PINNED — and it is a CORRECTNESS rule, not
+    style. Alpine 3 builds an x-if branch with
+    `content.cloneNode(true).firstElementChild` and DISCARDS every later
+    sibling. Event Type and Status each held TWO spans: the value span, and the
+    NOT INSTRUMENTED span. Only the first was ever created, and it carried
+    x-show="r.status" — display:none exactly when the value was missing. So the
+    gap state rendered as an EMPTY CELL, the one thing this screen must never
+    do, and it did it silently: no error, no warning, no failing test."""
+    tpl = _tpl()
+
+    def root_count(inner: str) -> int:
+        depth = n = 0
+        void = ("br", "img", "input", "hr", "meta", "link")
+        for m in re.finditer(r"<(/?)([a-zA-Z][\w-]*)([^>]*?)(/?)>", inner):
+            closing, tag, _attrs, selfclose = m.groups()
+            if closing:
+                depth -= 1
+            elif selfclose or tag.lower() in void:
+                if depth == 0:
+                    n += 1
+            else:
+                if depth == 0:
+                    n += 1
+                depth += 1
+        return n
+
+    offenders = [
+        m.group(0)[:60]
+        for m in re.finditer(r"<template\s+x-if=[^>]*>(.*?)</template>", tpl, re.S)
+        if root_count(m.group(1)) > 1
+    ]
+    assert not offenders, offenders
+
+    # ⭐ and the two cells state the gap on ONE element, so it cannot recur
+    for key in ("status", "event_type"):
+        blk = re.search(r"x-if=\"c\.key === '" + key + r"'\">(.*?)</template>",
+                        tpl, re.S)
+        assert blk, key
+        assert "NOT INSTRUMENTED" in blk.group(1), key
+        assert "x-show" not in blk.group(1), key
+
+
+def test_the_component_timeline_is_the_pngs_horizontal_diagram():
+    """⛔ The binding TXT forbids replacing a pictorial element with plain text
+    where the original design shows a visual component, and the PNG draws the
+    four stages as circular nodes on a horizontal rail. A vertical <ol> was
+    doing exactly what the TXT forbids."""
+    tpl, css = _tpl(), _css()
+    assert "slg-tlh-track" in tpl
+    assert 'class="slg-tl"' not in tpl, "the vertical list is still there"
+    # four pictorial nodes, one per approved stage, injected as real SVG
+    assert tpl.count("<svg viewBox=\"0 0 16 16\"", tpl.index("TL_ICONS:")) >= 4
+    assert 'x-html="stageIcon(i)"' in tpl
+    # laid out as four columns joined by a rail drawn off the nodes themselves
+    assert "grid-template-columns: repeat(4, 1fr)" in css
+    assert ".slg-tlh-stage::before" in css
+    # ⛔ and an unmeasured stage still says so rather than showing a time
+    seg = tpl[tpl.index("slg-tlh-track"):tpl.index("slg-tlh-foot")]
+    assert 'x-show="!s.measured"' in seg and "NOT INSTRUMENTED" in seg
+    # ⛔ no fabricated duration: the PNG's "2 sec" has no source here
+    assert "Duration" in tpl and "tlResolved()" in tpl
 
 
 def test_no_artificial_height_device_closes_a_gap():

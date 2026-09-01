@@ -3711,12 +3711,36 @@ table td.ctr { text-align: center !important; }
 .slg-page .slg-ni { font-size: 13px; color: var(--dim); letter-spacing: .02em;
   white-space: nowrap; }
 .slg-page .slg-note { font-size: 13px; color: var(--dim); margin: 10px 0 0; line-height: 1.5; }
-/* the approved SEARCH panel — same shape as Screens 13/14's rail search */
-.slg-page .slg-sf { display: flex; flex-direction: column; gap: 9px; }
-.slg-page .slg-sf-r { display: flex; flex-direction: column; gap: 4px; }
-.slg-page .slg-sf-r .slg-f-l { display: flex; align-items: baseline; gap: 8px; }
-.slg-page .slg-sf .sel[disabled] { opacity: .5; cursor: not-allowed; }
-.slg-page .slg-sbtn { margin-top: 4px; }
+/* ── SEARCH · EVENT TYPES — INTEGRATED into the FILTERS panel ──────────────
+   ⭐ Both were full-width standalone panels in their own row, and the binding
+   PNG places NEITHER: it draws ONE control block. Folding them in deletes that
+   row outright, which is where the height went — the row cost its own full
+   height, ⛔ not a styling excess — while every approved field and every count
+   survives. The five search inputs go from stacked to a five-up grid; the
+   eleven event types go from eleven table rows to a chip strip. */
+.slg-page .slg-fsec { margin-top: 12px; padding-top: 11px;
+  border-top: 1px solid var(--card-bd); }
+.slg-page .slg-fsec-t { font-size: 13px; font-weight: 700; letter-spacing: .06em;
+  color: var(--muted); margin: 0 0 9px; }
+.slg-page .slg-sfrow { display: grid; gap: 10px 12px; align-items: end;
+  grid-template-columns: repeat(5, minmax(0, 1fr)) auto; }
+@media (max-width: 1500px) { .slg-page .slg-sfrow { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 900px)  { .slg-page .slg-sfrow { grid-template-columns: 1fr; } }
+.slg-page .slg-sf-r { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.slg-page .slg-sf-r .slg-f-l { display: flex; align-items: baseline; gap: 8px;
+  flex-wrap: wrap; }
+.slg-page .slg-sfrow .sel[disabled] { opacity: .5; cursor: not-allowed; }
+.slg-page .slg-sbtn { align-self: end; }
+/* ⛔ an uninstrumented type is dimmed and SAYS so — it never shows 0 */
+.slg-page .slg-etrow { display: flex; flex-wrap: wrap; gap: 6px 8px; }
+.slg-page .slg-etchip { display: inline-flex; align-items: baseline; gap: 7px;
+  padding: 4px 9px; border-radius: 6px; font-size: 13px;
+  background: var(--panel2); border: 1px solid var(--card-bd); }
+.slg-page .slg-etk { color: var(--text); }
+.slg-page .slg-etn { color: var(--blue); font-weight: 700; }
+.slg-page .slg-etchip.is-ni .slg-etk { color: var(--muted); }
+.slg-page .slg-etchip.is-ni .slg-etn { color: var(--dim); font-weight: 600;
+  letter-spacing: .02em; }
 
 /* severity donut */
 .slg-page .slg-donut-body { display: flex; align-items: center; gap: 14px; }
@@ -3735,16 +3759,21 @@ table td.ctr { text-align: center !important; }
 .slg-page .slg-lg-n { margin-left: auto; color: var(--muted); }
 
 /* details / timeline / error / recovery */
+/* ⭐ THE ARTWORK'S OWN PROPORTIONS. In the PNG this row is not four equal
+   panels: COMPONENT TIMELINE is the widest because it carries a four-across
+   diagram, and the measured ratio off the artwork is ~1 : 1.34 : 1 : 1.
+   🔬 It is also what the diagram needs — at the old 1.1/1.1/1/1 a stage column
+   was 102px against a 97px label, leaving ~5px between two adjacent wrapped
+   "NOT INSTRUMENTED"s, which read as one run-on block. */
 .slg-page .slg-row3 { display: grid; gap: 16px; align-items: start;
-  grid-template-columns: 1.1fr 1.1fr 1fr 1fr; }
+  grid-template-columns: 1fr 1.35fr 1fr 1fr; }
 @media (max-width: 1500px) { .slg-page .slg-row3 { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 900px)  { .slg-page .slg-row3 { grid-template-columns: 1fr; } }
 .slg-page .slg-row4 { display: grid; gap: 16px; align-items: start;
   grid-template-columns: 1.1fr 1.4fr 1fr .8fr; }
 @media (max-width: 1500px) { .slg-page .slg-row4 { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 900px)  { .slg-page .slg-row4 { grid-template-columns: 1fr; } }
-.slg-page .slg-row3 .panel, .slg-page .slg-row4 .panel,
-.slg-page .slg-rowx .panel { margin-bottom: 0; }
+.slg-page .slg-row3 .panel, .slg-page .slg-row4 .panel { margin-bottom: 0; }
 /* ⛔ NO min-height and ⛔ no stretch anywhere below the table. A 230px floor was
    here and it was the wrong tool: the real cause of the dead band was that the
    RAIL had grown to five panels and overshot the table by ~780px (measured off
@@ -3753,27 +3782,51 @@ table td.ctr { text-align: center !important; }
    Impact — which is what makes it end level with the table, and the rows below
    run full width exactly as the PNG draws them. */
 
-/* SEARCH · EVENT TYPES — the two panels the binding PNG never places. The TXT
-   lists SEARCH right here, after Recovery Tracking and before Retention. SEARCH
-   keeps the rail width its five stacked inputs are designed for; EVENT TYPES
-   takes the remainder. */
-.slg-page .slg-rowx { display: grid; gap: 16px; align-items: start;
-  grid-template-columns: 330px minmax(0, 1fr); }
-@media (max-width: 900px) { .slg-page .slg-rowx { grid-template-columns: 1fr; } }
+/* ⛔ `.slg-rowx` is GONE, ⛔ not merely emptied. It existed only to carry the
+   standalone SEARCH and EVENT TYPES panels, which the binding PNG never
+   places; both now live inside the FILTERS panel, so the row and its rules go
+   with them rather than lingering as dead selectors. */
 .slg-page .slg-d-empty { color: var(--dim); font-size: 13px; padding: 10px 0; }
 .slg-page .slg-kv td { padding: 5px 6px; font-size: 13px; vertical-align: top; }
 .slg-page .slg-kv-v { color: var(--text); word-break: break-word; }
-.slg-page .slg-tl { list-style: none; margin: 0; padding: 0; }
-.slg-page .slg-tl li { display: grid; grid-template-columns: 14px 1fr auto;
-  gap: 3px 8px; align-items: baseline; padding: 6px 0; }
-.slg-page .slg-tl-dot { width: 9px; height: 9px; border-radius: 50%;
-  background: var(--gray); display: inline-block; }
-.slg-page .slg-tl li.is-on .slg-tl-dot { background: var(--pos); }
-.slg-page .slg-tl-k { font-size: 13px; }
-.slg-page .slg-tl li.is-off .slg-tl-k { color: var(--dim); }
-.slg-page .slg-tl-v { font-size: 13px; color: var(--blue); text-align: right; }
-.slg-page .slg-tl-why { grid-column: 2 / span 2; font-size: 13px; color: var(--dim);
-  line-height: 1.45; }
+/* ── COMPONENT TIMELINE — the PNG's HORIZONTAL four-stage diagram ──────────
+   ⭐ Four equal columns; each is a circular pictorial node above its stage
+   label and timestamp, and one rail joins them. The rail is a ::before on
+   every stage AFTER the first, drawn from the previous node's centre to this
+   one's — so it is positioned BY the nodes and can never drift out of step
+   with them the way a separately placed line can.
+   ⛔ No min-height anywhere: the panel is exactly as tall as the diagram. */
+.slg-page .slg-tlh { display: flex; flex-direction: column; gap: 12px; }
+.slg-page .slg-tlh-track { display: grid; grid-template-columns: repeat(4, 1fr); }
+.slg-page .slg-tlh-stage { position: relative; display: flex;
+  flex-direction: column; align-items: center; gap: 5px; text-align: center;
+  padding: 0 4px; min-width: 0; }
+.slg-page .slg-tlh-stage::before { content: ""; position: absolute;
+  top: 16px; right: 50%; left: -50%; height: 2px; background: var(--card-bd); }
+.slg-page .slg-tlh-stage:first-child::before { content: none; }
+.slg-page .slg-tlh-stage.is-on::before { background: var(--pos); }
+.slg-page .slg-tlh-node { position: relative; z-index: 1; width: 34px;
+  height: 34px; border-radius: 50%; display: inline-flex; flex: none;
+  align-items: center; justify-content: center; border: 2px solid var(--card-bd);
+  background: var(--panel2); color: var(--dim); }
+.slg-page .slg-tlh-stage.is-on .slg-tlh-node { border-color: var(--pos);
+  color: var(--pos); background: var(--pos-tint); }
+.slg-page .slg-tlh-k { font-size: 13px; color: var(--text); line-height: 1.3; }
+.slg-page .slg-tlh-stage.is-off .slg-tlh-k { color: var(--dim); }
+.slg-page .slg-tlh-v { font-size: 13px; color: var(--blue); }
+/* 🔬 MEASURED IN THE BROWSER, ⛔ not guessed: a stage column is 102px, and
+   "NOT INSTRUMENTED" needs 123px on ONE line — so the shared `.slg-ni`
+   `white-space: nowrap` made all four values overrun their columns and collide
+   into each other. Wrapped, the longest word needs 94px and fits inside 102px.
+   ⛔ The words are NOT shortened to a dash or an abbreviation to make them fit,
+   ⛔ nor is the text taken below the design's 13px floor: only the nowrap that
+   the rail-panel rule imposed is lifted, and only here. */
+.slg-page .slg-tlh-v.slg-ni { white-space: normal; line-height: 1.25; }
+.slg-page .slg-tlh-foot { display: flex; align-items: center;
+  justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  border-top: 1px solid var(--card-bd); padding-top: 10px; }
+.slg-page .slg-tlh-dur { font-size: 13px; color: var(--muted);
+  display: inline-flex; align-items: baseline; gap: 8px; }
 
 /* dependency status */
 .slg-page .slg-dep-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px; }
