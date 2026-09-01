@@ -2771,3 +2771,133 @@ NOT proven — 3 hypotheses were wrong — so ⛔ no cause is asserted.
 UI). 🔬 @1920 **and** @1440: ⛔ no page overflow, ⛔ no clipped headers, 15 columns,
 6 KPIs, **0 overlaps across 19 panels**. 🔬 Console clean — the only messages all
 session were the canaries that PROVE the capture works.
+
+---
+
+### Entry 32 — S17 CONTROLS APPROVED. ⛔ NOT PUSHED
+
+**Date/time:** 01-Sep-2026, approved ~22:0x IST · **Branch:** `feat/screen10-slippage-analytics`
+**Build:** `c8e1238` · **Pushed: NO · Deployed: NO**
+
+🔴🔴 **THE HEADLINE IS ARCHITECTURAL, ⛔ NOT COSMETIC: THE CONTROL PLANE WAS
+DESIGNED ON 17-Aug AND NEVER BUILT ON THE TRADING SIDE.**
+
+🔬 Verified exhaustively on the VM: ⛔ nothing listens on `:8600`; ⛔ `CONTROL_SECRET`
+is absent from `.env`; ⛔ nothing outside `ops_dashboard` references a control
+plane anywhere in the deployed tree; ⛔ **the trading process serves NO HTTP AT
+ALL** (⛔ no route, ⛔ no `HTTPServer`). `control_client.py` is a well-built client
+for a server that does not exist — ⛔ and is not even deployed, living only on
+this unpushed branch.
+
+⇒ ⭐ **S17 IS TRUTHFULLY 100% VIEW, ⛔ NOT THE SPEC'S 95/5.** ⛔ **NO WRITE PATH WAS
+CREATED.** Every control renders **disabled WITH its reason**, Readiness reports
+**Broker UNKNOWN · Services NOT READY** rather than a comforting green, and
+⭐ **UNREACHABLE stays distinct from REFUSED** — *"confirmation required"* and
+*"trader unreachable"* are different operational statements.
+⏸ Whether to BUILD the trading-side plane is a separate decision, ⛔ out of scope.
+
+#### 1. ⭐ FIVE TRUTH DEFECTS — ⛔ none of them the control semantics
+
+⭐ **THE LABEL WAS A TITLE-CASED KEY** over an authoritative `display_name`.
+🔬 3 of 16 differ. Two are casing the artwork itself spells **VWAP**; ⛔ the third
+is not cosmetic — `pb01_breakout_retest` title-cases to *"Pb01 Breakout Retest"*
+and **SILENTLY DROPS the `(shadow)` marker**.
+
+⭐ **A SHADOW IS NOT A PAUSED STRATEGY.** Disabled BY DESIGN behind a promotion
+gate — 📄 *"FAIL-CLOSED: never trades until the spec-13 promotion gate"*, 🔬 **0
+trades and 0 signals in its whole life** — so it is badged and its toggle carries
+**its own guard**, independent of the plane being down. ⛔ It must never read as
+something an operator switched off and could switch back on.
+
+⭐ **THE `#` COLUMN** the contract names three times was missing.
+
+⛔⛔ **THE ARTWORK DRAWS ALL SEVEN LIMIT PARAMETERS TWICE**, under an Intraday
+table and a Delivery table. 🔬 **The config splits only THREE.** Printing one
+global number under two headings claims the modes are independently configured
+when they are not — ⛔ **a duplicated value is a fabricated distinction**, on the
+screen whose whole purpose is to say what the system will actually do.
+⇒ 👤 Rama chose the **honest mixed layout**: the 3 shown split, the globals saying
+they govern both, and ⭐ **Max Qty (Lots) `NOT INSTRUMENTED`, ⛔ never 0** — a 0
+would claim a configured limit of **zero lots**.
+
+⭐ **RAW ISO STAMPS**, and this caused the worst visual defect on the page: 🔬 a
+32-character stamp took **244px of a 265px** history row, left **14px** for the
+action text and wrapped it **ONE CHARACTER PER LINE** ⇒ a **4393px-tall** panel,
+now **458px**. Made date-aware (control history spans DAYS): today `10:07:17`,
+earlier days `31-Aug 17:35:04`.
+
+#### 2. 👤 THE VISUAL-FIT REJECTION — ⭐ THE MOST IMPORTANT LESSON HERE
+
+👤 **Rama rejected the first S17 render**, and the ruling is worth quoting:
+*"The previous review incorrectly treated functional correctness, panel
+non-overlap, and regression results as evidence that the screen was visually
+matched. That is not sufficient."* · *"A layout can have zero overlap and still be
+badly designed."*
+⛔⛔ **HE WAS RIGHT.** I had reported *no overflow · no overlap · tests green* as
+though that were visual acceptance. ⭐ **IT IS A SEPARATE GATE.**
+
+🔬 **MEASURED against the PNG (edge-detected, 1536×1024) at a TRUE 1920:**
+
+| | artwork | before | after |
+|---|---|---|---|
+| page height | ~1280 implied | **2366px = 2.19×** | **1540px = 1.43×** |
+| main rows | 4 clean bands | **9 scattered tops** | **4 bands** 326/349/225/255 |
+| row-2 widths | 11 : 34 : 24 | 360/495/495 | **198/747/405** |
+| rail left | 1582 | 1584 | 1584 ⭐ already matched |
+
+⭐ The horizontal composition was ALREADY close; ⛔ **the failure was vertical.**
+🔬 Three UNBOUNDED panels dragged their rows down — `12. HISTORY` **814px**, the
+rail history **525px**, `RUNTIME LIMITS` **564px**.
+⇒ rows stretch to equal heights · row 2 re-proportioned to the artwork's own
+**11:34:24** · long lists scroll **INSIDE their footprint** (⭐ the same pattern
+the approved Strategy Controls table already uses — ⛔ **nothing deleted, nothing
+hidden**) · the two limit groups **side by side** as the artwork draws them.
+
+⚠️ `table-layout: fixed` → **auto**: 🔬 fixed gave four EQUAL ~55px columns, so
+every label wrapped onto three lines and the header collided into
+**"PARAMETERINTRADAY"**. ⭐ Caught by ZOOMING IN, ⛔ by no metric.
+
+#### 3. 👤 ORDERING IS RAMA'S
+
+⭐ **12 Intraday → 3 Delivery → the shadow LAST**, ⛔ not alphabetical-by-key,
+which interleaved the delivery book into the middle of the intraday one on the
+operational control list. 🔬 Verified 1–16 on the rendered screen.
+
+#### ⚠️ THREE METHOD ERRORS OF MINE
+
+⚠️ **A VACUOUS TEST THAT PASSED AGAINST A REVERTED IMPLEMENTATION.** It asserted
+`"display_name" in inspect.getsource(...)` — and **my own COMMENT contains that
+word**. ⭐ Exactly the *"scan what renders, not what is written about it"* trap
+📄 this very test file documents at `_markup()`. 🔬 Caught by mutation; rewritten
+to assert BEHAVIOUR.
+⚠️ **I FIXED TWO OF THREE TIMESTAMP SITES** and missed section 12 — found only by
+SCROLLING the rendered page. ⭐ The test now sweeps every site.
+⚠️ **MY FIRST CSS BROKE THE PROJECT'S OWN GUARDS** — 11/12px text under the 13px
+floor and a raw `#e0a458` — ⭐ and its own tests caught both. ⚠️ It also DUPLICATED
+two existing rules; consolidated to the ONE that is genuinely new.
+
+#### ⛔ WHAT THE APPROVAL DOES NOT MEAN
+
+🔴 **S17 IS NOT `VERIFIED LIVE`** — approved on a review render over a read-only
+extract, ⛔ never on the VM, and ⛔ **no control was ever operated** because none
+can be.
+⛔ **THE COMPOSITION IS CLOSER, ⛔ NOT MATCHED.** ⚠️ Remaining, and reported BEFORE
+approval: **1.43× vs the artwork's implied ~1.19×**; the final row is
+`BROKER COSTS · CONFIGURATION COMPARISON · HISTORY` where the artwork draws
+`CONFIGURATION SNAPSHOT · INFORMATION` (⛔ panels NOT deleted — a content decision
+Rama owns); the rail history is still cramped at 300px; and 1440 runs 2.32× tall
+via the **pre-existing** `≤1500` rail reflow.
+
+#### Gate
+
+🔬 **Focused S17: 46 passed, 0 failed** (39 baseline + 7). ⭐ All 6 new tests
+proven **red-capable by mutation**, one of them only after being caught vacuous.
+🔬 **Full dashboard suite: 2129 passed, 1 failed** = `test_c_venv_has_no_kiteconnect`,
+📄 the environment artifact ⇒ ⛔ **ZERO new failures** — ⭐ and the count is
+**IDENTICAL to the pre-layout run**, so the composition work broke nothing.
+🔬 @1920: ⛔ no page overflow, ⛔ no clipped headers, **0 overlaps** (⭐ detector
+calibrated until three separate nudges each fired — a first zero was VACUOUS).
+🔬 @1440: 2090px, 6 bands, 0 overlaps, ⛔ no overflow.
+⛔ Shared `.tbl-scroll` untouched · ⭐ every new selector `.ctl-page`-scoped ·
+⛔ deferred global table rule NOT implemented · ⛔ no other screen touched.
+⏸ **S16 Configuration is now the ONLY screen left.**
