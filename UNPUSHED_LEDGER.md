@@ -2455,3 +2455,103 @@ guard added, ⇒ ⛔ zero regressions.
 be built LAST. ⛔ Paper/live parity untouched — no mode-specific path added.
 🔬 `git diff --name-only` returned **nothing** under `backend/`, `services/`,
 `readers/` or `api/` ⇒ ⭐ the UI-only verdict is measured, ⛔ not asserted.
+
+
+---
+
+### Entry 29 — S20 STRATEGY HEALTH APPROVED. ⛔ NOT PUSHED
+
+**Date/time:** 01-Sep-2026, approved ~14:2x IST · **Branch:** `feat/screen10-slippage-analytics`
+**Build:** `a2fe2e4` · **Pushed: NO · Deployed: NO**
+
+⭐ 👤 Two changes were asked for — a serial column and S19's table interaction —
+and the investigation ran first. ⭐ **Both proved UI-ONLY.** 🔬 `git diff
+--name-only` returned **nothing** under `backend/`, `services/`, `readers/` or
+`api/`, and every CSS selector added is scoped to `.sh-page` ⇒ the verdict is
+**measured**, ⛔ not asserted.
+
+#### 1. ⭐ WHAT ALREADY EXISTED — verified at `file:line` first
+
+⭐ The backend already satisfies the spec, so ⛔ nothing was rebuilt:
+· the health score is the **real weighted composite** at exactly **Activity 30 /
+Signal Quality 25 / Acceptance Rate 20 / Trade Activity 15 / Errors 10**
+(`strategy_health.py:57-61`) — ⛔ not a status lookup;
+· **silent detection reads `gui_config.silence.yellow_max_min` = 120 min =
+2 Hours** and is **READ-TIME ONLY, ⛔ nothing written** (`:186-203`) ⇒ ⭐ the
+read-only dashboard boundary holds;
+· **"Scanner Offline" keeps the artwork's exact label** under a recorded 16-Aug
+ruling (`:64`, `:550`) and is **derived**, ⛔ not invented;
+· export is `/api/export/strategy-health` (`analytics2.py:594`);
+· column drag already worked.
+
+#### 2. ⭐⭐ THE SERIAL COLUMN IS NOT DATA — that is the whole point
+
+It renders the row's **INDEX IN THE CURRENTLY SORTED, FILTERED SET** through
+`x-for="(r, i)"` ⇒ ⛔ never read from the row, ⛔ never stored, so re-sorting or
+filtering **renumbers 1..n on the spot**.
+🔬 **VERIFIED IN THE BROWSER:** sorting by health score kept the serials
+**1,2,3,4** while the STRATEGIES beneath them changed; filtering to Disabled
+gave **`1`**, to Silent **`1..15`**, unfiltered **`1..16`**.
+⛔ It carries `nosort` — sorting BY a row number would sort by the very display
+order the sort produces. ⭐ It stays **draggable**, so column-order interaction
+is unchanged.
+
+⚠️⚠️ **THE `COLS_KEY` BUMP TO v3 IS NOT COSMETIC.** A stored **v2** order lists the
+old ELEVEN keys and `initCols` **appends anything missing**, so a returning
+operator would have found the new **`#` column at the FAR RIGHT** instead of
+first. ⭐ That is precisely the **Screen-14 lesson the template's own v2 note
+already records** — the same trap, one screen later.
+
+#### 3. ⭐ THE FREEZE-PANE, ON THIS SCREEN'S OWN FOOTPRINT
+
+Reuses S11/S18/S19 rather than a **fourth** scrolling implementation.
+⭐ **FOURTEEN rows, ⛔ not S19's twelve** — this artwork draws 14 and says
+*"Showing 1 to 14 of 14"*. 🔬 **546px MEASURED AT SUB-PIXEL**: thead **32.00** +
+14 × **36.67** ⇒ row 14's bottom at **545.33**. ⭐ S19's rounding lesson
+**applied rather than repeated** (there, rounding showed 11 rows instead of 12).
+⛔ `min-height: 350px` is **KEPT** — the empty-day footprint, a different job.
+⛔ **S20 ONLY** — 👤 the global table rule stays deferred until every screen is built.
+
+🔬 **VERIFIED IN THE BROWSER, ⛔ not from source:** 14 rows visible · wrap **546
+client vs 619 scroll** · **the header's top does not move** across a full scroll,
+which reaches **row 16** · column drag works with the sticky header · the serial
+header **refuses to sort** · page **1485 → 1412**.
+
+⚠️ **A WIDTH I DID NOT CLAIM.** The 1440px check ⛔ could not be done as a resize —
+the browser sits at **75% page zoom**, so the CSS viewport never changed.
+⇒ ⭐ rather than report a width that was not really rendered, the **MECHANISM**
+was tested: squeezing the panel to **1400 / 1100 / 900px**, the table clamps to
+its **1258px** min-width and the **WRAP** scrolls horizontally while the **PAGE
+never overflows**, header sticky at every width.
+
+#### 4. ⚠️ TWO EXISTING TESTS NEEDED REPAIR — and both are left SHARPER
+
+· `APPROVED_COLUMNS` now leads with **`#`**.
+· 🔴 the heading-fits-on-one-line test matched `.sh-page .sh-tbl th` **BY PREFIX**,
+which silently grabbed the new `thead th` rule and asserted `nowrap` against it.
+⭐ The match is now **exact**; ⛔ the property is unchanged.
+
+#### ⛔ WHAT THE APPROVAL DOES NOT MEAN
+
+🔴 **S20 IS NOT `VERIFIED LIVE`.** ⚠️ It was approved on a genuinely **QUIET** real
+day — 🔬 15 Silent / 1 Disabled, 787 signals, 6 trades — and ⭐ that is exactly
+what the screen shows. ⛔ No demo rows, ⛔ no config pointer, ⛔ nothing fabricated.
+
+⚠️ Still **NOT INSTRUMENTED** and saying so: **HEALTH TIMELINE** (*"no state
+history is stored"*) and **RECENT HEALTH EVENTS** (*"state transitions are not
+recorded"*). ⛔ The artwork's *"(Example)"* timeline was **NOT** turned into
+production history.
+⛔ **Scanner is not duplicated** — 🔬 exactly ONE occurrence, the approved
+**"Scanner Offline"** label; ⛔ no Scanner column, ⛔ no Scanner filter.
+
+#### Gate
+
+🔬 **S20 102 passed** (100 baseline + 2 guards). ⭐ **RED-CAPABILITY PROVEN BY THREE
+MUTATIONS:** moving the serial out of first position, reading it from the row
+instead of the loop index, and dropping the 14-row bound each turned a guard
+red; all reverted.
+🔬 Full dashboard suite **2115 passed, 1 failed** = `test_c_venv_has_no_kiteconnect`,
+the environment artifact — ⭐ the passed count rose **2113 → 2115** by exactly the
+two guards added ⇒ ⛔ zero regressions.
+⛔ S16 and S17 untouched — 👤 held to be built LAST. ⛔ No global/shared CSS rule
+touched.
