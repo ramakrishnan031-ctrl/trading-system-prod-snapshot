@@ -2245,3 +2245,131 @@ it fails identically** — it shells out to `pip show` and ⛔ cannot see HTML o
 ⭐ RED-capability proven for the blank-cell audit **by injecting a blank cell**,
 which the probe caught, and for the console check **by emitting a probe warning**,
 which it captured; ⇒ ⛔ neither zero was vacuous.
+
+
+---
+
+### Entry 27 — S18 LIVE ACTIVITY APPROVED. ⛔ NOT PUSHED
+
+**Date/time:** 01-Sep-2026, approved ~13:0x IST · **Branch:** `feat/screen10-slippage-analytics`
+**Build:** `f9d5fe3` + `f860f82` · **Pushed: NO · Deployed: NO**
+
+⭐ S18 was already substantially built, with its decisions recorded: informational
+only, MTM/LTP gaps declared, Scanner absent. 👤 Rama's correction asked for the
+artwork's row spans and the removal of a 🔬 measured dead band. It took **TWO
+passes**, and the second one **overturned my own explanation** — which is the
+part worth keeping.
+
+#### 1. ⭐ THE ARTWORK'S THREE BANDS (`f9d5fe3`)
+
+🔬 The work area was two independent strips carrying four panels each. The PNG
+draws **three bands**: band A is two strips (feed ǀ pipeline · strategy); bands
+B and C then run **ACROSS BOTH**, x205→1240 —
+
+    A  feed                    ǀ pipeline · strategy
+    B  winners ǀ system events ǀ feed filters
+    C  active positions        ǀ capital utilization
+
+⇒ **FEED FILTERS** moved into band B and **CAPITAL UTILIZATION** into band C,
+both bands given `grid-column: 1 / -1` at the artwork's own ratios (B 1.4:1:1
+from 415:290:300; C 2:1 from 680:340).
+
+⚠️⚠️ **AN EARLIER SESSION HAD BUILT FULL-WIDTH ROWS AND RECORDED THEM REJECTED**,
+for a real mechanism: a grid row is as tall as its tallest cell, so a short feed
+left a band beneath it. ⭐ **That mechanism is ADDRESSED, ⛔ not ignored** — only
+`.lav-main` stretches, and the feed's own scroll WINDOW takes the slack, so band
+A closes on **REAL ROWS becoming visible** (430px → 560px against 540 stored
+events). 🔬 feed 694, pipeline+strategy 694, **difference 0**.
+
+#### 2. 🔴 THE RESIDUAL BAND — AND MY OWN WRONG EXPLANATION (`f860f82`)
+
+After pass 1 a **150px** band remained under RECENT WINNERS / LOSERS. ⛔ I had
+explained it as unavoidable: *"stretching would only relocate the emptiness
+inside the cards."* 🔴 **THAT WAS WRONG, and only MEASURING THE ARTWORK showed
+it.**
+
+🔬 **PIXEL-SCANNED THE PNG, ⛔ did not estimate it.** Three blank columns, one
+inside each band-B panel — **x612** (winners), **x918** (system events),
+**x1235** (feed filters) — ⭐ **ALL THREE return the SAME border rows: top
+y=586, bottom y=785.** ⇒ the artwork's three band-B panels are **EXACTLY equal
+height, 199px**. Band C is the same shape, 797→969.
+⇒ ⭐ **The artwork STRETCHES its bands, and refusing to is what left the gap.**
+
+⭐ **The scale also proved the tall panel was never the problem.** The PNG's left
+content band is x202–1247 = **1045px** against our **1961px** ⇒ **×1.877**. The
+artwork's 199px band scales to **373.4** — and SYSTEM EVENTS measures **375**
+here. ⇒ SYSTEM EVENTS was correctly sized all along.
+⚠️ The `align-items: start` this replaced came from a **BAND-A** lesson that had
+been **over-generalised** to the bands.
+
+**Three changes, every figure read off the artwork:**
+- `align-items: stretch` on `.lav-rowb` / `.lav-rowc`.
+- 🔬 **WINNERS card footprint 174 → 218px** — the artwork's card band runs
+  y634→750, so 116px × 1.877. ⚠️ The first pass used 174 from a 1.66 scale that
+  was **inferred**, ⛔ not measured.
+- 🔬 **FEED FILTERS tile footprint 149 → 240px** — the artwork's two tile rows
+  run y629→686 and y701→757, so 128px × 1.877. ⭐ Our tiles were genuinely
+  **undersized**, and that is what put the slack there once the band stretched.
+
+⭐⭐ **IT FIXED THE GEOMETRY RATHER THAN HIDING IT** — the test 👤 Rama set. 🔬 The
+space BELOW the winners cards measures **157** against the artwork's **155.8**,
+and the card-to-panel ratio is **58% in both**. Band B 375 vs 373.4 · card 218
+vs 217.7 · tile block 240 vs 240.2 · filters slack 135 vs 133.2 — ⭐ all within
+~2px.
+
+🔬 **RESIDUAL DEAD BAND 206px → 150px → 0px.** Band B tops all **1006**, bottoms
+all **1381**; band C **1397→1690**; ⛔ no horizontal overflow, ⛔ no clipping.
+
+#### ⚠️ WHAT IS NOT CLOSED, and is REPORTED rather than padded
+
+🔬 Band C measures **293** against the artwork's **322.8**. ⭐ Both its panels are
+equal and full so there is **no gap**; forcing the difference would need
+arbitrary padding, which the brief forbids.
+
+#### ⛔ WHAT THE APPROVAL DOES NOT MEAN
+
+🔴 **S18 IS NOT `VERIFIED LIVE`.** 👤 At Rama's instruction the approval render
+fills **ALERTS BANNER** (1 CRITICAL + 2 WARNING) and **ACTIVE POSITIONS** (4
+rows, one PARTIAL) with **DEMO** data, held **ENTIRELY in the out-of-repo review
+extract** — ⛔ no repo edit, ⛔ no demo DB in the tree, ⛔ nothing to revert.
+🔬 A `grep` over `*.py`/`*.html`/`*.css` finds none of it in the repo.
+⚠️ 🔬 **I caught one incoherence in my OWN demo before showing it:** the first
+sizing drove capital to **90.33%** utilised, because the figures resolve against
+the day's **REAL** opening capital — one INIT row, **₹10,469.40 at 08:15:11** —
+⛔ not the ₹18,469 I had assumed. Resized to the artwork's own split,
+**₹4,414.80 (42.17%) / ₹6,054.60 (57.83%)**.
+
+⭐ **THE REAL DATA IS REAL:** `signals` / `orders` / `trades` / `fm_ledger` /
+`telegram_alerts` / `kill_switch_state` pulled **READ-ONLY** from the live VM DB
+at **11:41:02 today** — 🔬 787 signals, 533 feed events, 2 closed trades, 88
+ledger rows. ⛔ The 428 MB DB itself was never copied.
+
+⚠️ Still genuinely **NOT INSTRUMENTED** and saying so: **CURRENT MTM** and
+**LTP / MTM (₹) / MTM (%)** (Pending Broker Source G4 — no live price), the
+**open-positions delta** (no stored history), and **Broker Reconnected /
+Database Warning** (nothing writes them).
+
+#### Gate
+
+🔬 **S18 116 passed** — unchanged from the pre-change baseline. Full dashboard
+suite 🔬 **2112 passed, 1 failed** = `test_c_venv_has_no_kiteconnect`, ⭐ proven
+environmental against a pristine checkout of HEAD.
+⭐ **FOUR guards updated, and they stay guards:** the two-strips test became a
+three-bands test pinning band membership, the `1 / -1` spans and the artwork's
+ratios; the collapsed-order test now expects `feed/pipe/strat/rowb/rowc`; the
+artificial-height guard now reads each rule's **SUBJECT** rather than any
+ancestor (a height applies to the element a rule SELECTS, so a card footprint is
+no longer forbidden for the accident of its selector path); and it now asserts
+the bands **DO** stretch, carrying the artwork measurement that justifies it,
+while still asserting band A is ⛔ not a full-width row.
+
+⛔ **Scanner absent** — 0 occurrences in rendered text, class names and
+attributes. ⛔ **S16 and S17 untouched** — 👤 held by Rama's 01-Sep decision to
+build them LAST.
+
+⚠️ **A NUISANCE, ⛔ not a page defect:** screenshot capture timed out repeatedly
+mid-session. 🔬 The feed renders **all 540 records** into the DOM (`feed_page: 15`
+comes back in the payload but the template does not use it), and that DOM size
+defeats the capture injector — the same strain Entry 25 recorded for S14.
+⭐ JS evaluation stayed responsive throughout and every measurement came back
+clean. 🏷️ **OPEN for 👤 Rama:** whether the feed should page client-side.
