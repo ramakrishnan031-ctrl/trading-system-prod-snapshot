@@ -748,18 +748,39 @@ def test_no_artificial_height_device_closes_a_gap():
     reserves the footprint the artwork draws for that card, which is a different
     act and is required (see the footprint test below). This guard covers only
     the containers, where a height could only ever be a spacer.
+
+    ⭐ 01-Sep-2026 — THE CHECK NOW READS THE RULE'S *SUBJECT*, ⛔ not any ancestor
+    in its selector. A height applies to the element the rule SELECTS, so
+    `.lav-main .lav-feed .lav-tbl-wrap { min-height }` is a floor on the feed's
+    own scroll window — the permitted act — even though `.lav-main` appears in
+    the path. The old substring test could not tell those apart and would have
+    forbidden a card footprint for the accident of its ancestry.
     """
     css = _css()
     start = css.index("SCREEN 18 — LIVE ACTIVITY")
     nxt = re.search(r"SCREEN \d+ [—-]", css[start + 20:])
     block = css[start: start + 20 + nxt.start()] if nxt else css[start:]
+    containers = (".lav-work", ".lav-left", ".lav-main", ".lav-side",
+                  ".lav-rail", ".lav-rowb", ".lav-rowc", ".panel")
     for rule in re.findall(r"^\.lav-page[^{]*\{[^}]*\}", block, re.M | re.S):
         head = rule.split("{")[0]
-        if any(k in head for k in (".lav-row", ".panel", "lav-work", "lav-left",
-                                   "lav-main", "lav-side", "lav-rail")):
+        # the SUBJECT is the last simple selector of each comma-separated part
+        subjects = [p.strip().split()[-1].split(":")[0]
+                    for p in head.split(",") if p.strip()]
+        if any(s in containers for s in subjects):
             assert "min-height" not in rule, rule
             assert "height:" not in rule, rule
-    assert "align-items: start" in block      # ⛔ never `stretch` on these rows
+    # ⛔ the BANDS are never stretched — a band closes on its tallest card
+    bands = re.search(r"\.lav-page \.lav-rowb, \.lav-page \.lav-rowc \{[^}]*\}",
+                      block).group(0)
+    assert "align-items: start" in bands and "stretch" not in bands, bands
+    # ⭐ band A is levelled by CONTENT: `.lav-main` stretches and the feed's own
+    #   window takes the slack, so more REAL rows show. ⛔ Never a spacer.
+    assert ".lav-page .lav-main { align-self: stretch; }" in block
+    grow = re.search(r"\.lav-page \.lav-main \.lav-feed \.lav-tbl-wrap \{[^}]*\}",
+                     block).group(0)
+    assert "min-height: 430px" in grow, grow      # a FLOOR, never a cap
+    assert "max-height" not in grow, grow
 
 
 def test_every_data_card_holds_its_approved_footprint_when_empty():
@@ -809,45 +830,66 @@ def test_the_capital_chart_keeps_its_card_when_the_source_is_unavailable(client)
         assert p["reason"]
 
 
-def test_the_work_area_is_two_independent_strips_not_full_width_rows():
-    """🔴 THE REJECTED LAYOUT, PINNED. A grid ROW is as tall as its tallest cell,
-    so with the work area built as full-width rows the short REAL-TIME ACTIVITY
-    FEED left a dead band beneath it while RECENT WINNERS / LOSERS waited for the
-    unrelated PIPELINE + STRATEGY stack beside it to close.
+def test_the_work_area_is_the_artworks_three_bands():
+    """⭐ THE ARTWORK'S OWN GEOMETRY, restored on 👤 Rama's 01-Sep-2026 instruction.
+    Band A is two strips side by side; bands B and C then run ACROSS both, which
+    is how the PNG draws them (x205→1240, under the feed AND the pipeline):
 
-    ⭐ The strips are the PNG's own columns: the WIDE one carries the feed, the
-    winners/system-events band and active positions; the NARROW one carries the
-    pipeline, strategy activity, feed filters and capital. ⛔ No panel may cross
-    strips, because that is what moves a heading out of its approved place.
+        A  feed                    ǀ pipeline · strategy
+        B  winners ǀ system events ǀ feed filters
+        C  active positions        ǀ capital utilization
+
+    🔴 AN EARLIER SESSION BUILT FULL-WIDTH ROWS AND RECORDED THEM REJECTED, for a
+    real mechanism: a grid row is as tall as its tallest cell, so a short feed
+    left a band beneath it while the next band waited for the pipeline stack.
+    ⭐ THAT MECHANISM IS ADDRESSED, ⛔ not ignored — `.lav-main` stretches and the
+    feed's own scroll WINDOW takes the slack, so band A closes on REAL ROWS
+    becoming visible. ⛔ No spacer, ⛔ no stretch on the bands themselves.
     """
     tpl = _tpl()
-    assert 'class="lav-main"' in tpl and 'class="lav-side"' in tpl
-    # ⛔ the rejected wrappers are gone for good
-    for dead in ('class="lav-rowa"', 'class="lav-rowc"', 'class="lav-mid"'):
-        assert dead not in tpl, dead
+    for cls in ('class="lav-main"', 'class="lav-side"',
+                'class="lav-rowb"', 'class="lav-rowc"'):
+        assert cls in tpl, cls
+    assert 'class="lav-mid"' not in tpl        # ⛔ the one wrapper never adopted
 
     main = tpl[tpl.index('<div class="lav-main">'):tpl.index('<div class="lav-side">')]
-    side = tpl[tpl.index('<div class="lav-side">'):tpl.index('<aside class="lav-rail"')]
-    assert re.findall(r'class="panel lav-([a-z]+)"', main) == [
-        "feed", "wl", "sysev", "pos"]
-    assert re.findall(r'class="panel lav-([a-z]+)"', side) == [
-        "pipe", "strat", "filters", "cap"]
-    # each strip is its own flow — ⛔ never a row that both must line up in
+    side = tpl[tpl.index('<div class="lav-side">'):tpl.index('<div class="lav-rowb">')]
+    rowb = tpl[tpl.index('<div class="lav-rowb">'):tpl.index('<div class="lav-rowc">')]
+    rowc = tpl[tpl.index('<div class="lav-rowc">'):tpl.index('<aside class="lav-rail"')]
+    assert re.findall(r'class="panel lav-([a-z]+)"', main) == ["feed"]
+    assert re.findall(r'class="panel lav-([a-z]+)"', side) == ["pipe", "strat"]
+    assert re.findall(r'class="panel lav-([a-z]+)"', rowb) == ["wl", "sysev", "filters"]
+    assert re.findall(r'class="panel lav-([a-z]+)"', rowc) == ["pos", "cap"]
+
     css = _css()
     assert (".lav-page .lav-main, .lav-page .lav-side { display: flex; "
             "flex-direction: column;" in css)
+    # ⭐ the bands span BOTH strips — that span IS the correction
+    bands = re.search(r"\.lav-page \.lav-rowb, \.lav-page \.lav-rowc \{[^}]*\}",
+                      css).group(0)
+    assert "grid-column: 1 / -1" in bands, bands
+    # ⭐ and the band column ratios are the artwork's own, ⛔ not equal thirds
+    assert "minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr)" in css   # band B
+    assert "minmax(0, 2fr) minmax(0, 1fr)" in css                     # band C
 
 
 def test_the_collapsed_layout_keeps_the_pngs_row_order():
-    """⚠️ Below the breakpoint the two strips become one column. ⛔ It must not
-    read strip-after-strip (feed → winners → positions → pipeline → …): `order`
-    puts the panels back into the artwork's own row sequence."""
+    """⚠️ Below the breakpoint band A's two strips become one column. ⛔ It must
+    not read strip-after-strip (feed → pipeline → strategy is fine, but the
+    bands must follow in the artwork's order, ⛔ never interleaved).
+
+    ⭐ Bands B and C are single elements now, so the sequence is simply
+    feed → pipeline → strategy → band B → band C — which IS the PNG's row order,
+    and the bands keep their own internal grids to collapse further below."""
     block = _lav_css_block()
     mq = re.search(r"@media \(max-width: 1500px\) \{(.*?)\n\}", block, re.S).group(1)
     assert "display: contents" in mq
     got = re.findall(r"\.lav-page \.lav-([a-z]+)\s*\{ order: (\d)", mq)
-    assert got == [("feed", "1"), ("pipe", "2"), ("strat", "3"), ("rowb", "4"),
-                   ("filters", "5"), ("pos", "6"), ("cap", "7")], got
+    assert got == [("feed", "1"), ("pipe", "2"), ("strat", "3"),
+                   ("rowb", "4"), ("rowc", "5")], got
+    # ⛔ the bands must still collapse to one column on a narrow viewport
+    narrow = re.search(r"@media \(max-width: 1100px\) \{(.*?)\n\}", block, re.S).group(1)
+    assert ".lav-rowb" in narrow and ".lav-rowc" in narrow
 
 
 def test_the_feeds_bounded_height_is_a_scroll_container(client):

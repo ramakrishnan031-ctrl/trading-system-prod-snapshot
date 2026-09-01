@@ -169,122 +169,12 @@
             <a class="panel-link lav-more" href="/trade-logs">View Full Feed →</a>
           </div>
         </section>
-
-        {# ── WINNERS / LOSERS + SYSTEM EVENTS — the PNG's second band, side by
-           side INSIDE the wide strip exactly as the artwork draws them, so they
-           now begin directly under the feed instead of waiting for the
-           pipeline stack beside them. ──────────────────────────────────── #}
-        <div class="lav-rowb">
-          <section class="panel lav-wl">
-          <h3 class="panel-title">RECENT WINNERS / LOSERS
-            <span class="panel-sub" x-text="wlBase()"></span>
-          </h3>
-          <div class="lav-wl-grid">
-            <template x-for="c in WL_CARDS" :key="c.key">
-              <div class="lav-wl-card" :class="'lav-wl-' + c.tone">
-                <span class="lav-wl-l" x-text="c.label"></span>
-                <b class="lav-wl-v" x-text="wlAmount(c.key)"></b>
-                <span class="lav-wl-sym" x-text="wlSymbol(c.key)"></span>
-                <span class="lav-wl-t mono" x-text="wlTime(c.key)"></span>
-              </div>
-            </template>
-          </div>
-        </section>
-
-          <section class="panel lav-sysev">
-          <h3 class="panel-title">SYSTEM EVENTS
-            <span class="panel-sub" x-text="sysEventsSub()"></span>
-          </h3>
-          <ol class="lav-evlist">
-            <template x-for="e in sysEvents()" :key="e.ref_id">
-              <li>
-                <i class="lav-ev-dot" :class="'lav-ev-' + e.chip.toLowerCase()"></i>
-                <span class="lav-ev-t mono" x-text="e.time"></span>
-                <span class="lav-ev-b">
-                  <span class="lav-ev-n" x-text="e.event"></span>
-                  <span class="lav-ev-d" x-text="e.details || '—'"></span>
-                </span>
-                <span class="lav-ev-chip" :class="'lav-ev-' + e.chip.toLowerCase()"
-                      x-text="e.chip"></span>
-              </li>
-            </template>
-            <li class="lav-empty" x-show="!sysEvents().length" x-cloak>
-              No service events recorded today.</li>
-          </ol>
-          {# ⛔ Two of the four approved examples have NO source and the panel
-             says so rather than leaving a reader to assume a quiet day. #}
-          <p class="lav-note" x-show="uninstrumentedSysEvents().length" x-cloak
-             x-text="'NOT INSTRUMENTED: ' + uninstrumentedSysEvents().join(' · ')
-                     + ' — nothing in this system writes them.'"></p>
-          <div class="lav-foot">
-            <a class="panel-link lav-more" href="/logs">View All Events →</a>
-          </div>
-          </section>
-        </div>
-
-        <section class="panel lav-pos">
-          <h3 class="panel-title">ACTIVE POSITIONS <span class="lav-live-tag">(LIVE)</span>
-            <span class="panel-sub" x-text="posBase()"></span>
-          </h3>
-          <div class="lav-tbl-wrap">
-            <table class="cap-table lav-postbl">
-              {# ⭐ The approved ten columns, in the approved order — Symbol
-                 BEFORE Strategy. ⛔ No Scanner column, and none is invented. #}
-              <thead><tr>
-                <th class="lbl">Symbol</th>
-                <th class="lbl">Strategy</th>
-                <th class="lbl ctr">Qty</th>
-                <th class="lbl ctr">Entry Price</th>
-                <th class="lbl ctr">LTP</th>
-                <th class="lbl ctr">MTM (₹)</th>
-                <th class="lbl ctr">MTM (%)</th>
-                <th class="lbl ctr">SL</th>
-                <th class="lbl ctr">TGT</th>
-                <th class="lbl ctr">Status</th>
-              </tr></thead>
-              <tbody>
-                <template x-for="p in positions()" :key="p.trade_id">
-                  <tr>
-                    <td x-text="p.symbol || '—'"></td>
-                    <td x-text="p.strategy || '—'"></td>
-                    <td class="ctr mono" x-text="fmt(p.qty)"></td>
-                    <td class="ctr mono" x-text="num(p.entry_price)"></td>
-                    {# ⛔ NO LIVE PRICE EXISTS IN THIS BUILD. The compact `n/a`
-                       marker is Screen 06's approved treatment for exactly
-                       these three fields in exactly this kind of cell —
-                       ⛔ never a 0, never a blank that reads as measured — and
-                       the full reason is on the tooltip and in the note under
-                       the table. #}
-                    <td class="ctr"><span class="lav-nolive"
-                        title="Needs LTP — Pending Broker Source (G4); this dashboard has no live price">n/a</span></td>
-                    <td class="ctr"><span class="lav-nolive"
-                        title="Needs LTP — Pending Broker Source (G4); this dashboard has no live price">n/a</span></td>
-                    <td class="ctr"><span class="lav-nolive"
-                        title="Needs LTP — Pending Broker Source (G4); this dashboard has no live price">n/a</span></td>
-                    <td class="ctr mono" x-text="num(p.sl)"></td>
-                    <td class="ctr mono" x-text="num(p.tgt)"></td>
-                    <td class="ctr">
-                      <span class="lav-st lav-st-success" x-text="p.status"></span>
-                    </td>
-                  </tr>
-                </template>
-                <tr x-show="!positions().length" x-cloak>
-                  <td colspan="10" class="lav-empty">No open positions.</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <p class="lav-note" x-text="posNote()"></p>
-          <div class="lav-foot">
-            <a class="panel-link lav-more" href="/positions">View All Positions →</a>
-          </div>
-        </section>
       </div>
 
-      {# ── NARROW STRIP — LIVE PROCESSING PIPELINE · STRATEGY ACTIVITY ·
-         FEED FILTERS · CAPITAL UTILIZATION. These four are the PNG's own
-         right-hand column of the work area (x≈805-1250), and they flow on
-         their own so nothing in the wide strip ever waits for them. ────── #}
+      {# ── NARROW STRIP — LIVE PROCESSING PIPELINE · STRATEGY ACTIVITY. ⭐ The
+         artwork's right-hand column of the work area carries these TWO only;
+         FEED FILTERS and CAPITAL UTILIZATION sit in the full-width bands below,
+         which is where the PNG draws them. ─────────────────────────────────── #}
       <div class="lav-side">
         <section class="panel lav-pipe">
           <h3 class="panel-title">LIVE PROCESSING PIPELINE
@@ -353,6 +243,66 @@
             <a class="panel-link lav-more" href="/strategies">View All Strategies →</a>
           </div>
         </section>
+      </div>
+
+      {# ── BAND B — RECENT WINNERS / LOSERS · SYSTEM EVENTS · FEED FILTERS ───
+         ⭐ THE ARTWORK'S OWN THIRD ROW, and it spans the wide AND narrow strips
+         exactly as the PNG draws it (x205→1240, under both). 👤 Rama, 01-Sep-2026:
+         restore the row spans so the layout matches the original design.
+         ⚠️ AN EARLIER SESSION TRIED FULL-WIDTH ROWS AND RECORDED THEM AS
+         REJECTED — a grid row is as tall as its tallest cell, so a short feed
+         left a band beneath it. ⭐ THAT FAILURE IS ADDRESSED, ⛔ not ignored: the
+         feed's own scroll window now grows to the height of the pipeline +
+         strategy stack beside it, so row A closes level on CONTENT — more rows
+         become visible — ⛔ not on a spacer, ⛔ not on a min-height, ⛔ not on a
+         stretch. The 🔬 measured 206px band this replaces is recorded in the
+         ledger. ──────────────────────────────────────────────────────────── #}
+      <div class="lav-rowb">
+        <section class="panel lav-wl">
+        <h3 class="panel-title">RECENT WINNERS / LOSERS
+          <span class="panel-sub" x-text="wlBase()"></span>
+        </h3>
+        <div class="lav-wl-grid">
+          <template x-for="c in WL_CARDS" :key="c.key">
+            <div class="lav-wl-card" :class="'lav-wl-' + c.tone">
+              <span class="lav-wl-l" x-text="c.label"></span>
+              <b class="lav-wl-v" x-text="wlAmount(c.key)"></b>
+              <span class="lav-wl-sym" x-text="wlSymbol(c.key)"></span>
+              <span class="lav-wl-t mono" x-text="wlTime(c.key)"></span>
+            </div>
+          </template>
+        </div>
+      </section>
+
+        <section class="panel lav-sysev">
+        <h3 class="panel-title">SYSTEM EVENTS
+          <span class="panel-sub" x-text="sysEventsSub()"></span>
+        </h3>
+        <ol class="lav-evlist">
+          <template x-for="e in sysEvents()" :key="e.ref_id">
+            <li>
+              <i class="lav-ev-dot" :class="'lav-ev-' + e.chip.toLowerCase()"></i>
+              <span class="lav-ev-t mono" x-text="e.time"></span>
+              <span class="lav-ev-b">
+                <span class="lav-ev-n" x-text="e.event"></span>
+                <span class="lav-ev-d" x-text="e.details || '—'"></span>
+              </span>
+              <span class="lav-ev-chip" :class="'lav-ev-' + e.chip.toLowerCase()"
+                    x-text="e.chip"></span>
+            </li>
+          </template>
+          <li class="lav-empty" x-show="!sysEvents().length" x-cloak>
+            No service events recorded today.</li>
+        </ol>
+        {# ⛔ Two of the four approved examples have NO source and the panel
+           says so rather than leaving a reader to assume a quiet day. #}
+        <p class="lav-note" x-show="uninstrumentedSysEvents().length" x-cloak
+           x-text="'NOT INSTRUMENTED: ' + uninstrumentedSysEvents().join(' · ')
+                   + ' — nothing in this system writes them.'"></p>
+        <div class="lav-foot">
+          <a class="panel-link lav-more" href="/logs">View All Events →</a>
+        </div>
+        </section>
 
         <section class="panel lav-filters">
           <h3 class="panel-title">FEED FILTERS</h3>
@@ -365,6 +315,70 @@
                 <span class="lav-tile-l" x-text="t.label"></span>
               </button>
             </template>
+          </div>
+        </section>
+      </div>
+
+      {# ── BAND C — ACTIVE POSITIONS · CAPITAL UTILIZATION ──────────────────
+         ⭐ The artwork's bottom row, both panels side by side across the same
+         span. ⛔ CAPITAL UTILIZATION keeps its donut — a pictorial element the
+         binding TXT forbids replacing with text. ───────────────────────────── #}
+      <div class="lav-rowc">
+        <section class="panel lav-pos">
+          <h3 class="panel-title">ACTIVE POSITIONS <span class="lav-live-tag">(LIVE)</span>
+            <span class="panel-sub" x-text="posBase()"></span>
+          </h3>
+          <div class="lav-tbl-wrap">
+            <table class="cap-table lav-postbl">
+              {# ⭐ The approved ten columns, in the approved order — Symbol
+                 BEFORE Strategy. ⛔ No Scanner column, and none is invented. #}
+              <thead><tr>
+                <th class="lbl">Symbol</th>
+                <th class="lbl">Strategy</th>
+                <th class="lbl ctr">Qty</th>
+                <th class="lbl ctr">Entry Price</th>
+                <th class="lbl ctr">LTP</th>
+                <th class="lbl ctr">MTM (₹)</th>
+                <th class="lbl ctr">MTM (%)</th>
+                <th class="lbl ctr">SL</th>
+                <th class="lbl ctr">TGT</th>
+                <th class="lbl ctr">Status</th>
+              </tr></thead>
+              <tbody>
+                <template x-for="p in positions()" :key="p.trade_id">
+                  <tr>
+                    <td x-text="p.symbol || '—'"></td>
+                    <td x-text="p.strategy || '—'"></td>
+                    <td class="ctr mono" x-text="fmt(p.qty)"></td>
+                    <td class="ctr mono" x-text="num(p.entry_price)"></td>
+                    {# ⛔ NO LIVE PRICE EXISTS IN THIS BUILD. The compact `n/a`
+                       marker is Screen 06's approved treatment for exactly
+                       these three fields in exactly this kind of cell —
+                       ⛔ never a 0, never a blank that reads as measured — and
+                       the full reason is on the tooltip and in the note under
+                       the table. #}
+                    <td class="ctr"><span class="lav-nolive"
+                        title="Needs LTP — Pending Broker Source (G4); this dashboard has no live price">n/a</span></td>
+                    <td class="ctr"><span class="lav-nolive"
+                        title="Needs LTP — Pending Broker Source (G4); this dashboard has no live price">n/a</span></td>
+                    <td class="ctr"><span class="lav-nolive"
+                        title="Needs LTP — Pending Broker Source (G4); this dashboard has no live price">n/a</span></td>
+                    <td class="ctr mono" x-text="num(p.sl)"></td>
+                    <td class="ctr mono" x-text="num(p.tgt)"></td>
+                    <td class="ctr">
+                      <span class="lav-st lav-st-success" x-text="p.status"></span>
+                    </td>
+                  </tr>
+                </template>
+                <tr x-show="!positions().length" x-cloak>
+                  <td colspan="10" class="lav-empty">No open positions.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="lav-note" x-text="posNote()"></p>
+          <div class="lav-foot">
+            <a class="panel-link lav-more" href="/positions">View All Positions →</a>
           </div>
         </section>
 

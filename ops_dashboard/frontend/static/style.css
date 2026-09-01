@@ -3951,31 +3951,52 @@ main.content:has(> .lav-page) { width: 100%; max-width: none; margin: 0;
 .lav-page .lav-rail { display: flex; flex-direction: column; gap: 16px; }
 .lav-page .lav-rail .panel, .lav-page .lav-left .panel { margin-bottom: 0; }
 
-/* ⛔⛔ THE WORK AREA IS TWO INDEPENDENT STRIPS, ⛔ NOT full-width rows.
-   🔴 THE ROWS VERSION WAS REJECTED, and the mechanism is the point: a grid ROW
-   is as tall as its TALLEST cell, so on a quiet day the short REAL-TIME
-   ACTIVITY FEED left a ~210px dead band beneath it while RECENT WINNERS /
-   LOSERS waited for the unrelated PIPELINE + STRATEGY stack beside it to close.
-   ⭐ THE STRIPS ARE THE PNG's OWN COLUMNS, measured off the artwork —
-        WIDE   (x200-890)   feed · winners + system events · active positions
-        NARROW (x805-1250)  pipeline · strategy · feed filters · capital
-   ⭐ RATIO 1.82 IS THE ARTWORK'S OWN, measured: the PNG's wide/narrow boundary
-   sits at x800 (row A), x935 (row B) and x893 (row C) — average x876 — which
-   splits its 1044px left area 674:370 = 1.82. ⚠️ It was 1.6 for one commit ONLY
-   because the container was capped at 1600px and the narrow strip could not
-   otherwise give the pipeline its 63px; with the full column restored the
-   artwork's own ratio fits, so it is used. (P) wide 862 / narrow 474 at 1920 vs
-   the PNG's averages scaled to the same content band: 870 / 479.
-   ⛔ Nothing is stretched, ⛔ no spacer exists, ⛔ no font or card was shrunk:
-   each strip simply stops when its own content stops. */
+/* ── THE WORK AREA IS THE ARTWORK'S THREE BANDS ────────────────────────────
+   👤 Rama, 01-Sep-2026: restore the row spans so the layout matches the
+   original design and removes the 🔬 measured 206px dead band.
+   ⭐ THE PNG'S OWN GEOMETRY: band A is two strips side by side (feed | pipeline
+   + strategy); bands B and C then run ACROSS BOTH of them, x205→1240 —
+        A  feed                    ǀ pipeline · strategy
+        B  winners ǀ system events ǀ feed filters
+        C  active positions        ǀ capital utilization
+   The wide/narrow split of band A stays the artwork's own 1.82 (the PNG's
+   boundary sits at x800/x935/x893, average x876, splitting its 1044px left
+   area 674:370).
+
+   ⚠️⚠️ A PREVIOUS SESSION TRIED FULL-WIDTH ROWS AND RECORDED THEM REJECTED, for
+   a REAL mechanism: a grid row is as tall as its TALLEST cell, so a short feed
+   left a ~210px band beneath it while the next band waited for the pipeline
+   stack beside it. ⭐ THAT MECHANISM IS ADDRESSED HERE, ⛔ not ignored — and the
+   fix is CONTENT, ⛔ not a spacer: only `.lav-main` stretches to the band's
+   height, and the feed's own SCROLL WINDOW takes the extra space, so more REAL
+   rows become visible (the feed holds 533 today against a 430px window). ⛔ No
+   min-height, ⛔ no fixed height, ⛔ no empty filler, ⛔ nothing shrunk. If the
+   feed is ever the taller cell, `.lav-side` stays at its natural height and the
+   band closes on the feed instead. */
 .lav-page .lav-left { display: grid; gap: 16px; align-items: start;
   grid-template-columns: minmax(0, 1.82fr) minmax(0, 1fr); }
 .lav-page .lav-main, .lav-page .lav-side { display: flex; flex-direction: column;
   gap: 16px; min-width: 0; }
+/* ⭐ Band A closes level, and it closes on ROWS. ⛔ `flex-basis: 0` is deliberate:
+   with `auto` the wrap's basis would be the feed's full 18,508px of content and
+   the panel would run away. The 430px floor is kept, so when `.lav-main` is NOT
+   stretched (the narrow breakpoint, where it becomes `display: contents`) the
+   feed keeps exactly the window it had before. */
+.lav-page .lav-main { align-self: stretch; }
+.lav-page .lav-main .lav-feed { flex: 1 1 auto; min-height: 0;
+  display: flex; flex-direction: column; }
+.lav-page .lav-main .lav-feed .lav-tbl-wrap { flex: 1 1 0; height: auto;
+  min-height: 430px; }
 
-/* the PNG's second band INSIDE the wide strip — winners beside system events */
-.lav-page .lav-rowb { display: grid; gap: 16px; align-items: start;
-  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); }
+/* bands B and C span BOTH strips, exactly as the PNG draws them. ⭐ The column
+   ratios are the artwork's own, measured off it: band B 415:290:300 ≈ 1.4:1:1,
+   band C 680:340 = 2:1. */
+.lav-page .lav-rowb, .lav-page .lav-rowc { grid-column: 1 / -1;
+  display: grid; gap: 16px; align-items: start; }
+.lav-page .lav-rowb {
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr); }
+.lav-page .lav-rowc {
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); }
 
 @media (max-width: 1500px) {
   /* ⚠️ MEASURED AT 1440, ⛔ not guessed: the work area is 912px there, so at NO
@@ -3986,17 +4007,20 @@ main.content:has(> .lav-page) { width: 100%; max-width: none; margin: 0;
      order stays the artwork's, ⛔ never strip-after-strip. */
   .lav-page .lav-left { grid-template-columns: minmax(0, 1fr); }
   .lav-page .lav-main, .lav-page .lav-side { display: contents; }
-  .lav-page .lav-feed    { order: 1; }
-  .lav-page .lav-pipe    { order: 2; }
-  .lav-page .lav-strat   { order: 3; }
-  .lav-page .lav-rowb    { order: 4; }
-  .lav-page .lav-filters { order: 5; }
-  .lav-page .lav-pos     { order: 6; }
-  .lav-page .lav-cap     { order: 7; }
+  /* ⭐ Bands B and C are single elements now, so the reading order is simply
+     feed → pipeline → strategy → band B → band C, which IS the PNG's own row
+     order. ⛔ The band panels are NOT unwrapped here: they keep their own
+     internal grids and collapse below. */
+  .lav-page .lav-feed { order: 1; }
+  .lav-page .lav-pipe { order: 2; }
+  .lav-page .lav-strat { order: 3; }
+  .lav-page .lav-rowb { order: 4; }
+  .lav-page .lav-rowc { order: 5; }
   .lav-page .lav-tiles { grid-template-columns: repeat(8, minmax(0, 1fr)); }
 }
 @media (max-width: 1100px) {
-  .lav-page .lav-rowb { grid-template-columns: minmax(0, 1fr); }
+  .lav-page .lav-rowb, .lav-page .lav-rowc {
+    grid-template-columns: minmax(0, 1fr); }
   .lav-page .lav-tiles { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
 
@@ -4100,11 +4124,20 @@ main.content:has(> .lav-page) { width: 100%; max-width: none; margin: 0;
      STRATEGY ACTIVITY  PNG draws 5 rows  → head 61 + 5 x 32 = 221
      SYSTEM EVENTS      PNG draws 4 items → 4 x 58           = 232
      ALERTS BANNER      PNG draws 2 cards → 2 x 96           = 192
-     CAPITAL UTILIZATION the donut itself                    = 116          */
+     CAPITAL UTILIZATION the donut itself                    = 116
+     RECENT WINNERS/LOSERS PNG draws 4 cards in ONE row → 105 x 1.66 = 174
+
+   ⭐ 01-Sep-2026 — WINNERS / LOSERS WAS THE ONE PANEL IN BANDS B AND C WITHOUT
+   A FOOTPRINT, and that is a gap in the doctrine, ⛔ not a spacer added to close
+   a band: on a day with no closed trade its four cards collapse to their text
+   and open exactly the blank lower page these floors exist to prevent. The
+   figure is the artwork's own card height (105px in the 1536px PNG) at the same
+   1.66 scale the SYSTEM EVENTS floor already uses. */
 .lav-page .lav-pos .lav-tbl-wrap { min-height: 166px; }
 .lav-page .lav-strat .lav-tbl-wrap { min-height: 221px; }
 .lav-page .lav-evlist { min-height: 232px; }
 .lav-page .lav-alert-list { min-height: 192px; }
+.lav-page .lav-wl-grid { min-height: 174px; }
 /* ⭐ BOTH states, so the ring's footprint survives the day it cannot be drawn */
 .lav-page .lav-cap-body, .lav-page .lav-cap .lav-d-empty { min-height: 116px; }
 
