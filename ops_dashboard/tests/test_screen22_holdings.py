@@ -1018,3 +1018,71 @@ def test_d5_the_rows_per_page_control_is_the_established_one():
     assert ".hld-page .hld-rpp .sel" in block
     line = [l for l in block.splitlines() if ".hld-rpp .sel" in l][0]
     assert "height: 30px" in line and "padding: 0 8px" in line, line
+
+
+def test_every_filter_resets_the_page_index():
+    """⭐ A filter applied from page 3 must not strand the reader past the end
+    of the smaller filtered set.
+
+    ⛔ Without this, filtering 28 rows down to 21 while `tPage` is 3 renders
+    "Showing 21 to 21 of 21 holdings" and ONE row — which a reader takes to
+    mean the filter matched almost nothing, not that the page is stale.
+    🔬 Measured in the browser on 01-Sep-2026 before the fix.
+    """
+    tpl = _tpl()
+    handlers = re.findall(r'@(?:change|keyup\.enter)="([^"]*\bload\(\)[^"]*)"', tpl)
+    assert handlers, "the filter controls no longer call load() — retarget this test"
+    for h in handlers:
+        assert "tPage = 1" in h, (
+            "a filter handler calls load() without resetting the page: %r" % h)
+
+
+def test_the_shared_refresh_does_not_reset_the_page_index():
+    """⛔ The counterpart guard. `@ops-refresh.window` fires on every poll, so
+    resetting `tPage` there would yank a reader back to page 1 mid-read — the
+    reason the reset lives at the filter call sites and ⛔ NOT inside load()."""
+    tpl = _tpl()
+    m = re.search(r'@ops-refresh\.window="([^"]*)"', tpl)
+    assert m, "the shared refresh binding is gone — retarget this test"
+    assert "tPage" not in m.group(1), m.group(1)
+    body = re.search(r"\n    load\(\)\s*\{(.*?)\n    \},", tpl, re.S)
+    if body:
+        assert "tPage = 1" not in body.group(1), "load() must not reset the page"
+
+
+def test_a_stale_timestamp_is_rendered_with_its_date():
+    """⛔ The broker side can be DAYS old — `reconcile_positions` writes a row
+    only when there is a position to compare, so a flat book leaves the last
+    row standing indefinitely.
+
+    🔬 Measured 01-Sep-2026: `last_sync` was 2026-08-18T15:45:02, and the old
+    `slice(11,19)` formatter drew it as a bare "15:45:02" beside a green ● CRON
+    dot — indistinguishable from today at 15:45. ⭐ The formatter must compare
+    the stamp's DAY against the payload's `today` and show the date when they
+    differ; ⛔ a bare time-only slice is the defect.
+    """
+    tpl = _tpl()
+    m = re.search(r"hhmmss\(ts\)\s*\{(.*?)\n    \},", tpl, re.S)
+    assert m, "hhmmss() is gone or reshaped — retarget this test"
+    body = m.group(1)
+    assert "today" in body, "hhmmss() no longer compares the stamp against today"
+    assert re.search(r"slice\(\s*0\s*,\s*10\s*\)", body), \
+        "hhmmss() no longer extracts the stamp's date"
+    one_line = re.match(r"\s*return ts \?", body)
+    assert not one_line, "hhmmss() reverted to the bare time-only slice"
+
+
+def test_the_screen_names_the_base_of_each_holdings_count(gui_config):
+    """⭐ `system_holdings` counts CURRENTLY-OPEN positions while the table's
+    System Qty comes from the last reconciliation RECORD. The two legitimately
+    differ, so each must publish the base it counted — otherwise "0 system
+    holdings" beside a row reading "System Qty 1" looks like a defect.
+    """
+    p = holdings.build_holdings_screen(gui_config)
+    k = p["kpi"]
+    assert k["system_base"], "the system count must name its base"
+    assert k["broker_base"], "the broker count must name its base"
+    assert k["system_base"] != k["broker_base"], "the two bases are not the same"
+    for tile in p["health"]["tiles"]:
+        if tile["measured"]:
+            assert tile["base"], ("an unmeasured base: %s" % tile["label"])

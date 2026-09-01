@@ -67,10 +67,17 @@
 
       {# ── FILTERS — the SAME control language as Screens 03/04/05/13/14/19/20 #}
       <section class="panel hld-filters">
+        {# ⭐ EVERY FILTER RESETS `tPage`. Filtering while on page 3 of an
+           unfiltered 28 otherwise leaves `tPage` past the end of the smaller
+           filtered set, and the table renders "Showing 21 to 21 of 21" with a
+           single row — which reads as "the filter matched almost nothing".
+           ⛔ The reset canNOT live inside `load()`: the shared refresh
+           (`@ops-refresh.window="load()"`, above) calls it on every poll, and
+           that would yank a reader back to page 1 mid-read. #}
         <div class="flt-row">
           <label class="flt-field">
             <span class="flt-k">Product</span>
-            <select class="sel" x-model="f.product" @change="load()">
+            <select class="sel" x-model="f.product" @change="tPage = 1; load()">
               <option value="">All Products</option>
               <template x-for="p in productOptions()" :key="p.key">
                 <option :value="p.key" x-text="p.label"></option>
@@ -79,7 +86,7 @@
           </label>
           <label class="flt-field">
             <span class="flt-k">Status</span>
-            <select class="sel" x-model="f.status" @change="load()">
+            <select class="sel" x-model="f.status" @change="tPage = 1; load()">
               <option value="">All Status</option>
               <template x-for="s in statusOptions()" :key="s">
                 <option :value="s" x-text="s"></option>
@@ -88,7 +95,7 @@
           </label>
           <label class="flt-field">
             <span class="flt-k">Source</span>
-            <select class="sel" x-model="f.source" @change="load()">
+            <select class="sel" x-model="f.source" @change="tPage = 1; load()">
               <option value="">All Sources</option>
               <template x-for="s in sourceOptions()" :key="s">
                 <option :value="s" x-text="s"></option>
@@ -98,7 +105,7 @@
           <label class="flt-field">
             {# ⭐ the STRATEGY's YAML intent — the SAME value Screens 19/20 use #}
             <span class="flt-k">Trade Type</span>
-            <select class="sel" x-model="f.trade_type" @change="load()">
+            <select class="sel" x-model="f.trade_type" @change="tPage = 1; load()">
               <option value="">All Types</option>
               <template x-for="t in ttOptions()" :key="t">
                 <option :value="t" x-text="t"></option>
@@ -109,7 +116,7 @@
             <span class="flt-k">Search Symbol / Strategy</span>
             <input type="search" class="sel" x-model="f.symbol"
                    placeholder="Search Symbol / Strategy"
-                   @change="load()" @keyup.enter="load()">
+                   @change="tPage = 1; load()" @keyup.enter="tPage = 1; load()">
           </label>
           <div class="flt-actions">
             <button class="btn-ghost" type="button" @click="resetFilters()">↻ Reset Filters</button>
@@ -645,7 +652,24 @@ function holdingsPage() {
       return (n < 0 ? "-₹ " : "₹ ") + Math.abs(n).toLocaleString("en-IN",
         {minimumFractionDigits: 0, maximumFractionDigits: 0});
     },
-    hhmmss(ts) { return ts ? String(ts).replace("T", " ").slice(11, 19) : ""; },
+    {# ⛔ A STAMP FROM AN EARLIER DAY MUST SAY WHICH DAY. `slice(11,19)` alone
+       rendered the 18-Aug reconciliation as a bare "15:45:02", which a reader
+       on 01-Sep necessarily takes for TODAY at 15:45 — and a green CRON dot
+       sits beside it. 🔬 Measured 01-Sep-2026: last_sync was 14 days old.
+       ⭐ Today keeps the bare time, so panel density is unchanged in the
+       normal case and the date appears ONLY when it carries information.
+       ⛔ NO APOSTROPHES IN THIS BLOCK: `script_of()` does not strip Jinja
+       comments, so one would open a JS string literal spanning newlines. #}
+    hhmmss(ts) {
+      if (!ts) return "";
+      const s = String(ts).replace("T", " ");
+      const day = s.slice(0, 10), t = s.slice(11, 19);
+      if (!day || day === (this.data.today || "")) return t;
+      const M = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                 "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+      const p = day.split("-");
+      return p[2] + "-" + (M[Number(p[1]) - 1] || p[1]) + " " + t;
+    },
     rowKey(r) { return (r.trade_id || "recon") + "|" + r.symbol + "|" + (r.product || "-"); },
 
     cell(r, c) {
