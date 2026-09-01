@@ -2373,3 +2373,85 @@ comes back in the payload but the template does not use it), and that DOM size
 defeats the capture injector — the same strain Entry 25 recorded for S14.
 ⭐ JS evaluation stayed responsive throughout and every measurement came back
 clean. 🏷️ **OPEN for 👤 Rama:** whether the feed should page client-side.
+
+
+---
+
+### Entry 28 — S19 STRATEGY RANKING APPROVED. ⛔ NOT PUSHED
+
+**Date/time:** 01-Sep-2026, approved ~13:4x IST · **Branch:** `feat/screen10-slippage-analytics`
+**Build:** `f1e97a9` · **Pushed: NO · Deployed: NO**
+
+⭐ 👤 The brief invoked the **PRE-BUILD REVIEW GATE** — S19 is business/signal-path
+adjacent — so the investigation came first and ⛔ no code was touched until it
+had cleared. ⭐ **It cleared as UI-ONLY**, and that verdict is the entry's point.
+
+#### 1. ⭐ WHAT ALREADY EXISTED — verified at `d5130bb` with file:line
+
+⭐ **The ranking engine is complete and correct, and it is NOT a parallel engine.**
+`services/strategy_ranking.py` owns the composite score (`_score` :93) in the
+artwork's own **35/25/20/20** weights (`SCORE_WEIGHTS` :56), the trend
+(`_classify_trend` :142) against a **real previous equal-length window**, the six
+KPIs (`_kpi` :324) and the five modes (`MODES` :48). 🔬 It reads
+`db_reader.closed_trades_range` :172 and aggregates through
+`analytics_period._aggregate` :174 ⇒ ⭐ **it REUSES the existing engine**; ⛔ no
+duplicate, ⛔ no shadow calculation. Export = `/api/export/strategy-ranking`
+(`analytics2.py:550`).
+⭐ Column drag already worked (`colDragMixin()` `strategy_ranking.html:313`,
+`draggable="true"` :136) and horizontal scroll was already contained to the wrap.
+
+⚖️ **A DATED RULING FOUND AND RESPECTED:** the table carries **16** headers against
+the spec's 15. The extra **TRADE TYPE** column is a **recorded prior instruction**
+(template header: *"inserted immediately after Strategy exactly as instructed"*),
+sourced from the strategy's own YAML `intent` through `strategy_meta.py`, and
+⛔ explicitly NOT the order product. ⇒ ⛔ left alone, ⛔ not reported as a deviation.
+
+#### 2. 🔴 THE ONLY GAP — THE TABLE-BEHAVIOUR CONTRACT
+
+🔬 `.sr-tbl-wrap` carried `overflow-x` **alone** (`style.css:4486`) with **no height
+bound**, so the wrap grew to fit every row and the **WHOLE PAGE** scrolled —
+**1353px against a 1264px viewport** — just to reach rows 13-16. 🔬 The header
+computed `position: static` ⇒ ⛔ nothing was frozen. ⭐ Real data returns **SIXTEEN**
+strategies, so this genuinely bit.
+
+⭐ **REUSED THE ESTABLISHED PATTERN, ⛔ did not write a second one:** S11's
+`.exec-rank-scroll thead th` (`:2850`) and S18's `.lav-feed thead th` (`:4081`)
+already do sticky-header-over-bounded-scroll.
+
+🔬🔬 **491px IS MEASURED AT SUB-PIXEL, AND THE ROUNDING MATTERED.** thead
+**30.92px**, each row **38.33px** ⇒ row 12's bottom edge sits at **490.92**.
+⚠️ Rounding to 31 and 38 gives **487**, and 487 shows only **ELEVEN** rows —
+⭐ on this table a 4px arithmetic error costs a whole row. ⇒ the figure is taken
+from the rendered box, ⛔ never from integer arithmetic.
+⛔ `max-height`, ⛔ never `height`: a day with fewer than twelve strategies must
+⛔ not open an empty region under the last row (S11's own choice). ⛔ No
+pagination substituted, ⛔ no row truncated — all sixteen stay reachable.
+
+#### 3. ⭐ VERIFIED IN THE BROWSER, ⛔ not from the source
+
+🔬 **12 rows fully visible** · wrap **491 client vs 645 scroll** ⇒ the body scrolls ·
+**the header's top does not move** across a full scroll to the bottom, which
+reveals **ranks 13-16** · **column drag still works with the sticky header** (the
+real HTML5 handlers were driven: TRADES moved 3→5, sort still fired, order
+restored) · page **1353 → 1199** · ⛔ no page-wide horizontal overflow.
+
+#### ⛔ WHAT THE APPROVAL DOES NOT MEAN
+
+🔴 **S19 IS NOT `VERIFIED LIVE`.** ⚠️ The default *Today* window holds only **2**
+completed trades and reads as dashes. ⭐ The approval render therefore used **the
+screen's OWN Date Range filter** — *This Month*, **117 REAL completed trades
+across 13 of 16 strategies** (2026-08-03→09-01). ⛔ No demo rows, ⛔ no config
+pointer, ⛔ nothing fabricated, and ⛔ the default period is unchanged in code.
+
+#### Gate
+
+🔬 **S19 75 passed** (74 baseline + the one new guard). ⭐ **RED-CAPABILITY PROVEN BY
+MUTATION:** turning `max-height` into `height` turned the guard red, and dropping
+`position: sticky` turned it red; both reverted, green restored.
+🔬 Full dashboard suite **2113 passed, 1 failed** = `test_c_venv_has_no_kiteconnect`,
+the environment artifact — ⭐ the passed count rose **2112 → 2113** by exactly the
+guard added, ⇒ ⛔ zero regressions.
+⛔ Scanner absent (0 in text, classes, attributes). ⛔ S16/S17 untouched — 👤 held to
+be built LAST. ⛔ Paper/live parity untouched — no mode-specific path added.
+🔬 `git diff --name-only` returned **nothing** under `backend/`, `services/`,
+`readers/` or `api/` ⇒ ⭐ the UI-only verdict is measured, ⛔ not asserted.
