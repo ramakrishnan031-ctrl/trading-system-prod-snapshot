@@ -2656,3 +2656,118 @@ workbook test's leftover *"Scanner not in header"* assertion became its opposite
 🔬 Full dashboard suite **2117 passed, 1 failed** = `test_c_venv_has_no_kiteconnect`,
 the environment artifact ⇒ ⛔ zero regressions.
 ⛔ No page-wide horizontal overflow. ⛔ S16/S17 untouched — 👤 held to be built LAST.
+
+---
+
+### Entry 31 — S22 HOLDINGS APPROVED. ⛔ NOT PUSHED
+
+**Date/time:** 01-Sep-2026, approved ~19:5x IST · **Branch:** `feat/screen10-slippage-analytics`
+**Build:** `4b08372` · **Pushed: NO · Deployed: NO**
+
+⭐⭐ **THE SCREEN WAS ALREADY BUILT TO THE CONTRACT.** The fifteen columns in the
+required order, pagination on the existing `tableMixin` (⛔ no parallel model),
+⛔ no Scanner column, ⛔ no serial, Sync Now present but **disabled with its
+reason**, and every price-derived figure declared a GAP rather than filled with a
+substituted entry price. ⛔ **None of that was touched.** Two defects were found,
+and ⛔ **neither was the KPI.**
+
+#### 1. ⭐ A FILTER RETURNS TO PAGE ONE
+
+🔬 Filtering 28 rows down to 21 while `tPage` was **3** rendered *"Showing 21 to
+21 of 21 holdings"* and **ONE row** — which a reader takes to mean *the filter
+matched almost nothing*, ⛔ not *the page is stale*.
+⭐ The rows-per-page select already reset the page and `resetFilters()` already
+set `tPage = 1`; ⛔ the five filter controls did not.
+⛔⛔ **THE RESET CANNOT LIVE INSIDE `load()`** — the shared refresh binding
+`@ops-refresh.window="load()"` fires on **every poll**, so putting it there would
+yank a reader back to page 1 mid-read. ⭐ **Both directions are pinned by tests**,
+and both were proven red-capable by mutation.
+
+#### 2. ⭐ A STALE STAMP NOW SAYS WHICH DAY — AND THIS IS THE WHOLE STORY
+
+🔬 `hhmmss()` did `slice(11, 19)` and **discarded the date**, so the **18-Aug**
+reconciliation drew as a bare `15:45:02` — beside a **green ● CRON dot** — on
+01-Sep. ⚠️ A reader necessarily takes that for *today at 15:45*.
+⭐ Today keeps the bare time ⇒ ⛔ panel density unchanged in the normal case; the
+date appears **ONLY when it carries information**.
+
+#### 3. ⚖️ THE KPI WAS NEVER WRONG — 👤 AND NO NUMBER WAS CHANGED TO MAKE IT AGREE
+
+👤 Rama asked whether `System Holdings = 0` beside a row reading `System Qty = 1`
+was a defect. ⛔ **It is not.** Two TIME BASES and two GRAINS, each publishing its
+own base in the payload:
+
+| value | source | base | means |
+|---|---|---|---|
+| System Holdings **0** | rows with `origin in (system, both)` | open system positions | **now** |
+| table System Qty **1** | `position_reconciliation.system_qty` | the 18-Aug record | **18-Aug** |
+| System Only **1** · Orphan **1** | `MISSING_AT_BROKER` | reconciled symbols | 18-Aug |
+| Unknown Position **1** | rows with no `strategy` | holdings rows | row-grain |
+
+🔬 **The 0 is MEASURED, ⛔ not assumed: `0` trades sit in `OPEN_STATES`** — all 821
+are FAILED/CLOSED/REJECTED/CLOSED_MANUAL/CANCELLED. The `UTTAMSUGAR` row carries
+`origin: "recon"` and is correctly excluded. ⭐ `_recon_only_row` had already named
+this exact case in its own docstring. ⭐ **Once the date is visible the difference
+explains itself** — which is why the fix was the timestamp, ⛔ not the KPI.
+
+#### 4. 🔬 VM EVIDENCE — PRIMARY SOURCES, BECAUSE THE REVIEW LOG HAD FAILED
+
+⛔ The latest `reports/log_review/eod_review_2026-09-01.md` **is itself a failure
+notice** (*"REVIEW FAILED — all Gemini cascade models exhausted"*) and carries no
+reconciliation content, so it could ⛔ not serve as evidence.
+· 🔬 `/var/log/syslog` — **`CRON[967509]` fired `reconcile_positions` TODAY at
+  15:45:01** ⇒ ⭐ **the cron is HEALTHY**, ⛔ not dead as the log mtime suggests;
+· 🔬 `scripts/reconcile_positions.py` writes **one row per symbol in the
+  broker∪system union** ⇒ ⭐ **a flat book writes NOTHING**, which is why
+  `cron-reconcile-positions.log` has not grown since 18-Aug;
+· ⚠️ ⇒ **"Last Reconciliation" is the last run that PRODUCED A ROW, ⛔ not the
+  last run.** ⛔ Left as-is: a run-level record does not exist to correct it with.
+
+#### 5. ⛔ WHAT WAS DELIBERATELY NOT DONE
+
+⛔ **Symbol stays `78px`.** 🔬 At a TRUE 1920 `UTTAMSUGAR` needs **101px** and
+truncates — 👤 Rama holds this as a **SEPARATE visual decision**. ⚠️ It reads fine
+in the screenshots only because the browser sits at 75% zoom.
+⛔ **The deferred global table rule was NOT applied** — 🔬 `style.css` has **ZERO**
+modifications and no sticky/frozen `thead` was added.
+⛔ S16/S17 untouched — 👤 held to be built LAST. ⛔ No other screen, ⛔ no unrelated
+production issue touched.
+
+#### ⚠️ TWO METHOD ERRORS OF MINE, RECORDED BECAUSE THEY GENERALISE
+
+⚠️ **A "1920" MEASUREMENT THAT WAS NOT 1920.** 🔬 The browser reports
+`devicePixelRatio 0.75`, so a maximised 1920 window is a **2549px CSS viewport**.
+⛔ The first overflow/clipping pass measured the wrong width and did not count;
+⭐ redone in **same-origin iframes at exact dimensions**, since a maximised window
+ignores resize.
+⚠️ **A VACUOUS ZERO.** 🔬 The panel-overlap detector returned `0 overlaps` — but a
+900px nudge ALSO returned 0, because the nudged panel simply left the viewport.
+⭐ Recalibrated until a **60px sideways nudge produced a detected 48×96 overlap**;
+⛔ only then was the zero worth reporting. ⭐ **A green is evidence only if it
+could have been red.**
+
+#### ⛔ WHAT THE APPROVAL DOES NOT MEAN
+
+🔴 **S22 IS NOT `VERIFIED LIVE`** — approved on a review render over a read-only
+extract, ⛔ never on the VM.
+⭐ **The 28-row render is DEMO data for density judgement only** — 👤 the artwork's
+own population — and is ⛔ **never** presented as trading evidence. ⭐ The REAL
+render carries **one** row, and that is the honest production state.
+
+#### Gate
+
+🔬 **Focused S22: 139 passed, 0 failed** (76 → 80 test functions; 4 added, all
+proven red-capable by mutation).
+🔬 **Full dashboard suite: 2122 passed, 1 failed** = `test_c_venv_has_no_kiteconnect`
+— 📄 the environment artifact (⛔ `ops_dashboard/.venv` does not exist on this PC,
+so the suite runs under the system python, which carries `kiteconnect` for live
+trading). ⭐ **Proven pre-existing by differential: stashed, it fails identically.**
+⇒ ⛔ **ZERO new failures.**
+⚠️ **One S15 failure appeared in a single ABNORMAL run** (`KeyError: 'timeline'`,
+2:14:33 wall time under 3 dashboards + Chrome) and ⛔ **did not reproduce**: runs
+1 and 3 are 554.17s / 552.96s with the SAME single failure. ⛔ Its mechanism was
+NOT proven — 3 hypotheses were wrong — so ⛔ no cause is asserted.
+🔬 Export parseable, 3 sheets, genuinely filtered (28 / 21 / 3 / 3, matching the
+UI). 🔬 @1920 **and** @1440: ⛔ no page overflow, ⛔ no clipped headers, 15 columns,
+6 KPIs, **0 overlaps across 19 panels**. 🔬 Console clean — the only messages all
+session were the canaries that PROVE the capture works.
