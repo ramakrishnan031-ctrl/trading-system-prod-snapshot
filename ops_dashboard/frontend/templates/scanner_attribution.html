@@ -8,13 +8,21 @@
     ACTIVITY METRICS · SCANNER RANKING · TREND SUMMARY · OPPORTUNITY QUALITY
     SCORE · SCANNER DRILLDOWN QUICK ACCESS · HEALTH TIMELINE.
 
-    ⛔⛔ NO SCANNER COLUMN IN THE MAIN TABLE (Rama, 16-Aug). Scanner and Strategy
-       are 1:1 in this system — measured: 16 scanners onto 16 distinct
+    ⚖️⚖️ THE SCANNER COLUMN IS BACK — 👤 Rama, 01-Sep-2026, SUPERSEDING his own
+       16-Aug ruling. That ruling said: "NO SCANNER COLUMN IN THE MAIN TABLE.
+       Scanner and Strategy are 1:1 — measured: 16 scanners onto 16 distinct
        strategies, each named after its strategy — so the artwork's `Scanner`
-       column is dropped and `Strategy (Primary)` becomes `Strategy`. ⛔ Every
-       OTHER approved column stays where the artwork puts it, `Health` included.
-    ⭐ The scanner identity survives in the SCANNER MAPPING panel, which is the
-       one place naming it is the point.
+       column is dropped and `Strategy (Primary)` becomes `Strategy`", with the
+       scanner identity surviving in the SCANNER MAPPING panel.
+    ⭐ THE NEW CONTRACT REVERSES IT AND ANSWERS ITS REASONING DIRECTLY: "Keep the
+       word Scanner wherever it is meaningful in this screen; do not rename or
+       remove the Scanner concept merely because it maps 1:1 to Strategy." The
+       approved order is now
+         # | Scanner | Strategy (Primary) | Trade Type | Health | …
+    ⚠️ THE 1:1 MEASUREMENT STILL HOLDS — it was never wrong, only its conclusion
+       was overturned. ⛔ So this is NOT a second dataset: the Scanner cell reads
+       the SAME row's own `scanners` list, which the payload has carried all
+       along. ⭐ The MAPPING panel keeps its job too; nothing is duplicated.
 
     ⛔ THE ARTWORK DRAWS NO FILTER ROW ON THIS SCREEN, so none is added: the
        ranking tabs are the only control it has. Adding dropdowns here would be
@@ -77,13 +85,15 @@
                              overKey === c.key ? 'is-over' : '', c.ctr ? 'ctr' : '']"
                     :style="c.w ? ('width:' + c.w) : ''"
                     draggable="true" role="button" tabindex="0"
-                    :title="c.label + ' · click to sort, drag to reorder'"
+                    :title="c.nosort ? (c.label + ' · row number of the current sort · drag to reorder')
+                                     : (c.label + ' · click to sort, drag to reorder')"
                     @dragstart="onDragStart(c.key, $event)"
                     @dragover.prevent="overKey = c.key"
                     @dragleave="overKey === c.key && (overKey = '')"
                     @drop.prevent="onDrop(c.key)"
                     @dragend="onDragEnd()"
-                    @click="headClick(c.key)" @keyup.enter="tSort(c.key)">
+                    @click="!c.nosort && headClick(c.key)"
+                    @keyup.enter="!c.nosort && tSort(c.key)">
                   <span x-text="c.label"></span><span
                         class="sca-arrow" x-show="tSortKey === c.key"
                         x-text="tArrow(c.key)"></span>
@@ -91,17 +101,47 @@
               </template>
             </tr></thead>
             <tbody>
-              <template x-for="r in tSorted(rows())" :key="r.strategy">
+              {# ⭐ `(r, i)` — the serial is the row's INDEX IN THE CURRENT SORT,
+                 ⛔ never read from the row and ⛔ never stored, so re-sorting
+                 renumbers 1..n on the spot. The medal treatment follows the
+                 top three POSITIONS, which is what the artwork draws. #}
+              <template x-for="(r, i) in tSorted(rows())" :key="r.strategy">
                 <tr>
                   <template x-for="c in cols" :key="c.key">
                     <td :class="[c.ctr ? 'ctr' : '', c.num ? 'mono' : '']">
-                      <template x-if="c.key === 'rank'">
-                        <span class="sca-rank" :class="'sca-medal-' + r.rank"
-                              x-text="r.rank"></span>
+                      <template x-if="c.key === 'serial'">
+                        <span class="sca-rank" :class="i < 3 ? ('sca-medal-' + (i + 1)) : ''"
+                              x-text="i + 1"></span>
+                      </template>
+                      {# ⭐ THE SCANNER NAME IS BACK IN THE TABLE (👤 Rama,
+                         01-Sep-2026), superseding the 16-Aug ruling that dropped
+                         it for being 1:1 with Strategy. ⛔ It is NOT a second
+                         dataset: it is the SAME row's own `scanners` list, which
+                         the payload has carried all along. #}
+                      <template x-if="c.key === 'scanner'">
+                        <span>
+                          <span x-show="(r.scanners || []).length" class="sca-nm"
+                                :title="(r.scanners || []).join(' · ')"
+                                x-text="(r.scanners || []).join(' · ')"></span>
+                          <span x-show="!(r.scanners || []).length" class="sca-ni"
+                                title="no scanner is mapped to this strategy">NOT INSTRUMENTED</span>
+                        </span>
                       </template>
                       <template x-if="c.key === 'display_name'">
                         <span class="sca-nm" :title="nameTitle(r)"
                               x-text="r.display_name"></span>
+                      </template>
+                      {# ⛔ DERIVED, ⛔ never inferred from the scanner's NAME —
+                         it is the strategy's own YAML `intent` through the one
+                         shared `strategy_meta` path Screens 19 and 20 use. #}
+                      <template x-if="c.key === 'trade_type'">
+                        <span>
+                          <span x-show="r.trade_type" class="sca-tt"
+                                :class="'sca-tt-' + (r.trade_type || '').toLowerCase()"
+                                x-text="r.trade_type"></span>
+                          <span x-show="!r.trade_type" class="sca-ni"
+                                title="this strategy's YAML declares no intent">NOT INSTRUMENTED</span>
+                        </span>
                       </template>
                       <template x-if="c.key === 'health'">
                         <span class="sca-hs" :class="'sca-hs-' + (r.health||'').toLowerCase()">
@@ -474,8 +514,15 @@ function scannerPage() {
        `w` is a FIXED-LAYOUT width bound to the COLUMN KEY, not to a position, so
        a drag cannot hand Rank's width to Net P&L. */
     DEFAULT_COLS: [
-      { key: "rank",          label: "Rank",          ctr: true, w: "62px" },
-      { key: "display_name",  label: "Strategy",                 w: "184px" },
+      /* ⭐ 👤 Rama, 01-Sep-2026 — the approved order is
+         # | Scanner | Strategy (Primary) | Trade Type | Health | …
+         ⛔ `#` is a SERIAL, ⛔ not the payload's `rank`: it is the row's index in
+         the CURRENT sort, presentation-only, the same contract S20 carries. The
+         payload's `rank` is untouched and still drives SCANNER RANKING. */
+      { key: "serial",        label: "#",   ctr: true, nosort: true, w: "58px" },
+      { key: "scanner",       label: "Scanner",                  w: "170px" },
+      { key: "display_name",  label: "Strategy (Primary)",       w: "184px" },
+      { key: "trade_type",    label: "Trade Type",    ctr: true, w: "104px" },
       { key: "health",        label: "Health",        ctr: true, w: "104px" },
       { key: "signals",       label: "Signals",       ctr: true, num: true, w: "84px" },
       { key: "accepted",      label: "Accepted",      ctr: true, num: true, w: "92px" },
@@ -488,9 +535,15 @@ function scannerPage() {
       { key: "quality_score", label: "Quality Score", ctr: true, w: "104px" },
       { key: "trend",         label: "Trend",         ctr: true, w: "108px" },
     ],
-    SPECIAL: ["rank", "display_name", "health", "quality_score", "trend"],
+    SPECIAL: ["serial", "scanner", "display_name", "trade_type", "health",
+              "quality_score", "trend"],
     cols: [],
-    COLS_KEY: "screen21.scanner.colOrder.v1",
+    /* ⭐ v2, 01-Sep-2026: the column SET changed — `rank` became the `#` serial
+       and Scanner + Trade Type were added. ⛔ THE BUMP IS NOT COSMETIC: a stored
+       v1 order lists the OLD thirteen keys and `initCols` appends anything
+       missing, so a returning operator would have got Scanner and Trade Type at
+       the FAR RIGHT and no `#` at all. Screens 14 and 20 both paid for this. */
+    COLS_KEY: "screen21.scanner.colOrder.v2",
 
     mode: "net_pnl",
 
@@ -627,10 +680,16 @@ function scannerPage() {
              + (q.unscored ? ", " + q.unscored + " with no signals" : "");
     },
     footNote() {
-      return "Scanner and Strategy are 1:1 in this system, so Strategy is the "
-             + "identity shown; the scanner name and its screener URL are in "
-             + "SCANNER MAPPING. Signals, Accepted and Rejected share the "
-             + "stored-signal base. All times are IST (Asia/Kolkata).";
+      /* ⚖️ 01-Sep-2026: the note used to say the scanner name lived ONLY in
+         SCANNER MAPPING, which described the 16-Aug arrangement. The column
+         is back, so the note says what is true now. ⛔ A stale explanation is
+         worse than none — it teaches the reader the wrong model. */
+      return "Scanner and Strategy are 1:1 in this system — the Scanner "
+             + "column and Strategy (Primary) name the SAME row, they are not "
+             + "two datasets; SCANNER MAPPING adds each scanner's screener "
+             + "URL. Trade Type is the strategy's own configured intent. "
+             + "Signals, Accepted and Rejected share the stored-signal base. "
+             + "All times are IST (Asia/Kolkata).";
     },
 
     profitCards() {

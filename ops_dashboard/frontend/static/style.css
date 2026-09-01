@@ -5088,6 +5088,14 @@ main.content:has(> .sca-page) { width: 100%; max-width: none; margin: 0;
 .sca-page .sca-pos { color: var(--pos); }
 .sca-page .sca-neg { color: var(--neg); }
 .sca-page .sca-ni { font-size: 13px; color: var(--dim); letter-spacing: .02em; }
+/* ⭐ TRADE TYPE — the same visual language Screen 20 settled, ⛔ not a new one.
+   👤 Rama, 01-Sep-2026: the column is DERIVED from the strategy's own YAML
+   `intent` through the shared `strategy_meta` path, ⛔ never inferred from the
+   scanner's name. */
+.sca-page .sca-tt { display: inline-block; padding: 2px 9px; border-radius: 6px;
+  font-size: 13px; font-weight: 600; white-space: nowrap; }
+.sca-page .sca-tt-intraday { background: rgba(var(--t-blue), .16);   color: var(--blue); }
+.sca-page .sca-tt-delivery { background: rgba(var(--t-purple), .16); color: var(--purple); }
 
 /* ── row 2: ACTIVITY · RANKING · TREND ───────────────────────────────────── */
 .sca-page .sca-row2 { display: grid; gap: 14px; align-items: stretch;

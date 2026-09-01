@@ -102,16 +102,33 @@ def test_scanner_and_strategy_are_one_to_one_in_the_production_map():
         "re-argued: " + str(sorted(strategies)))
 
 
-def test_there_is_no_scanner_column_anywhere_on_this_screen(client):
-    """⛔ THE BINDING RULE (Rama, 16-Aug). The identity shown is Strategy."""
+def test_the_scanner_column_is_the_rows_own_data_not_a_second_dataset(gui_config):
+    """⚖️ SUPERSEDES `test_there_is_no_scanner_column_anywhere_on_this_screen`.
+
+    👤 Rama's 16-Aug ruling dropped the Scanner column; his 01-Sep contract puts
+    it back and answers the reasoning directly. ⭐ WHAT THE OLD TEST WAS REALLY
+    PROTECTING — that Scanner must not become a SECOND, INDEPENDENT DATASET —
+    is what this one now guards instead, because that part never changed:
+    ⛔ "Scanner ↔ Strategy must remain one underlying identity/data source, not
+    duplicated records."
+    """
     tpl = _tpl()
     cols = tpl[tpl.index("DEFAULT_COLS:"):tpl.index("SPECIAL:")]
-    assert "scanner" not in cols.lower(), cols
-    assert '"Scanner"' not in cols
-
+    assert '"Scanner"' in cols and '"Strategy (Primary)"' in cols
     hdr = scanner_attribution.EXPORT_HEADER
-    assert "Scanner" not in hdr, hdr
-    assert "Strategy" in hdr
+    assert "Scanner" in hdr and "Strategy (Primary)" in hdr, hdr
+
+    # ⭐ THE CELL READS THE ROW'S OWN `scanners` LIST — ⛔ no second fetch, ⛔ no
+    #   parallel scanner table, ⛔ no name-derived guess.
+    assert 'x-text="(r.scanners || []).join' in tpl
+    assert "r.scanners" in tpl
+
+    # ⛔ and the service still resolves ONE identity: every row's scanner set
+    #   comes from the same strategy row, which is what 1:1 means.
+    p = scanner_attribution.build_scanner_attribution_screen(gui_config)
+    for r in p["rows"]:
+        for sc in (r["scanners"] or []):
+            assert sc == r["strategy"] or sc in r["strategy"] or r["strategy"] in sc, (sc, r["strategy"])
 
 
 def test_the_scanner_identity_is_preserved_where_it_belongs(gui_config):
@@ -127,14 +144,22 @@ def test_the_scanner_identity_is_preserved_where_it_belongs(gui_config):
 
 
 def test_the_table_columns_are_the_approved_ones_in_the_approved_order():
-    """The artwork's order with `Scanner` removed and `Strategy (Primary)`
-    renamed — ⛔ nothing else moved, and `Health` keeps its place."""
+    """⚖️ THE 01-Sep-2026 CONTRACT, which SUPERSEDES the 16-Aug removal.
+
+    👤 Rama, 16-Aug: drop the artwork's `Scanner` column because Scanner and
+    Strategy are 1:1. 👤 Rama, 01-Sep: "Keep the word Scanner wherever it is
+    meaningful in this screen; do not rename or remove the Scanner concept
+    merely because it maps 1:1 to Strategy" — and the approved order becomes
+    # | Scanner | Strategy (Primary) | Trade Type | Health | …
+    ⚠️ The 1:1 MEASUREMENT still holds; only its CONCLUSION was overturned.
+    """
     tpl = _tpl()
     block = tpl[tpl.index("DEFAULT_COLS:"):tpl.index("SPECIAL:")]
     labels = re.findall(r'label:\s*"([^"]+)"', block)
-    assert labels == ["Rank", "Strategy", "Health", "Signals", "Accepted",
-                      "Rejected", "Orders", "Trades", "Win %", "Profit Factor",
-                      "Net P&L", "Quality Score", "Trend"], labels
+    assert labels == ["#", "Scanner", "Strategy (Primary)", "Trade Type",
+                      "Health", "Signals", "Accepted", "Rejected", "Orders",
+                      "Trades", "Win %", "Profit Factor", "Net P&L",
+                      "Quality Score", "Trend"], labels
 
 
 def test_the_export_header_matches_the_table_columns():
@@ -665,9 +690,14 @@ def test_the_export_writes_the_same_rows_the_table_shows(gui_config):
     p = scanner_attribution.build_scanner_attribution_screen(gui_config)
     rows = scanner_attribution.export_rows(p)
     assert len(rows) == len(p["rows"]) + 1
-    for out, r in zip(rows[1:], p["rows"]):
-        assert out[0] == r["rank"]
-        assert out[1] == (r["display_name"] or r["strategy"])
+    # ⚖️ 01-Sep-2026 column order: # | Scanner | Strategy (Primary) | Trade Type
+    #   ⛔ col 0 is the SERIAL of the exported order, ⛔ not the payload's `rank`
+    #   — the rows arrive already ranked, so position IS the serial.
+    for i, (out, r) in enumerate(zip(rows[1:], p["rows"]), start=1):
+        assert out[0] == i, (out[0], i)
+        assert out[1] == (" · ".join(r["scanners"] or []) or "NOT INSTRUMENTED")
+        assert out[2] == (r["display_name"] or r["strategy"])
+        assert out[3] == (r["trade_type"] or "NOT INSTRUMENTED")
 
 
 def test_an_unmeasured_export_cell_is_never_blank(gui_config):
@@ -690,7 +720,10 @@ def test_the_export_is_a_real_parseable_workbook(client):
                              "Rejection Breakdown"]
     hdr = [c.value for c in wb["Scanner Attribution"][1]]
     assert hdr == list(scanner_attribution.EXPORT_HEADER)
-    assert "Scanner" not in hdr
+    # ⚖️ 01-Sep-2026: Scanner is REQUIRED in the header now (it was forbidden
+    #   under the 16-Aug ruling). ⛔ What must never happen is a SECOND dataset,
+    #   and its own test guards that.
+    assert "Scanner" in hdr and "Strategy (Primary)" in hdr, hdr
 
 
 def test_the_export_honours_the_filters_it_is_given(client):
@@ -1060,3 +1093,41 @@ def test_the_breakpoints_are_ordered_so_the_tiles_never_overflow():
     compress = block.index("@media (max-width: 1400px)")
     assert two_up < compress, "the two-up rule must precede the compress rule"
     assert 1900 > 1400, "the two-up breakpoint must be the wider of the two"
+
+
+def test_the_serial_is_presentation_only_and_trade_type_is_derived(gui_config):
+    """👤 Rama, 01-Sep-2026 — the two columns added to S21, and the two ways
+    they could each have been got wrong.
+
+    ⭐ THE SERIAL IS NOT THE PAYLOAD'S `rank`. It is the row's INDEX IN THE
+    CURRENT SORT, so re-sorting renumbers 1..n on the spot; `rank` is a
+    different quantity, is untouched, and still drives SCANNER RANKING.
+    ⛔ TRADE TYPE IS NEVER INFERRED FROM THE SCANNER'S NAME — the contract says
+    so explicitly. It is the strategy's own YAML `intent`, resolved through the
+    ONE shared `strategy_meta` path Screens 19 and 20 already use.
+    """
+    tpl = _tpl()
+    # the serial comes from the LOOP, never from the row
+    assert 'x-for="(r, i) in tSorted(rows())"' in tpl
+    assert 'x-text="i + 1"' in tpl
+    assert "r.serial" not in tpl
+    # ⛔ and it must not sort: sorting BY a row number sorts by the order the
+    #   sort itself produced
+    cols = tpl[tpl.index("DEFAULT_COLS:"):tpl.index("SPECIAL:")]
+    assert re.search(r'key: "serial".*nosort: true', cols), cols
+    assert 'c.nosort && headClick(c.key)' in tpl
+
+    # ⛔ THE STORED-ORDER KEY MUST BE BUMPED — a stored v1 order lists the OLD
+    #   thirteen keys and `initCols` appends anything missing, so a returning
+    #   operator would have got Scanner and Trade Type at the FAR RIGHT and no
+    #   `#` at all. Screens 14 and 20 both paid for exactly this.
+    assert 'COLS_KEY: "screen21.scanner.colOrder.v2"' in tpl
+
+    # ⭐ trade type is the SERVICE's value, and it is a real vocabulary — the
+    #   check can go red because the fixture carries real intents.
+    p = scanner_attribution.build_scanner_attribution_screen(gui_config)
+    seen = {r["trade_type"] for r in p["rows"]}
+    assert seen, "no rows at all — the check would be vacuous"
+    assert seen <= {"Intraday", "Delivery", None}, seen
+    # ⛔ nothing in the screen derives it from the name
+    assert "scanner.lower()" not in tpl and "startsWith" not in tpl

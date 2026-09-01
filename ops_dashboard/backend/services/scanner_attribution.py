@@ -3,18 +3,26 @@
 `gui/21. Scanner_Attribution.png` + `.txt` are BINDING for structure.
 
 ═══════════════════════════════════════════════════════════════════════════════
-⛔⛔ NO SCANNER COLUMN IN THE MAIN TABLE — STRATEGY IS THE IDENTITY (Rama, 16-Aug)
+⚖️ SCANNER *AND* STRATEGY BOTH NAME THE ROW — ONE IDENTITY, ⛔ NOT TWO DATASETS
 
 MEASURED, ⛔ not assumed: `config/scan_webhook_map.yaml` maps 16 scanners onto
 16 DISTINCT strategies, and every scanner name IS its strategy name. Scanner and
-Strategy are therefore 1:1 in this system, and printing both in one table would
-put the same identity in two columns. The artwork's `Scanner` column is dropped
-and `Strategy (Primary)` becomes `Strategy`; ⛔ every OTHER approved column of
-that table stays exactly where the artwork puts it, `Health` included.
+Strategy are therefore 1:1 in this system.
 
-⭐ The scanner identity is NOT lost. It survives (a) in the payload, (b) in the
-approved SCANNER MAPPING panel — whose whole purpose is to name the mapping, so
-it is the ONE place the scanner name belongs — and (c) in the export.
+⚖️ 01-Sep-2026 — 👤 RAMA SUPERSEDED HIS OWN 16-Aug RULING. That ruling dropped
+the artwork's `Scanner` column because printing both would put one identity in
+two columns. The new contract answers that directly: "Keep the word Scanner
+wherever it is meaningful in this screen; do not rename or remove the Scanner
+concept merely because it maps 1:1 to Strategy." The approved order is now
+  # | Scanner | Strategy (Primary) | Trade Type | Health | …
+⚠️ THE 1:1 MEASUREMENT ABOVE STILL HOLDS — it was never wrong, only its
+conclusion was overturned. ⛔ So the Scanner cell reads the SAME row's own
+`scanners` list: one identity, shown twice by request, ⛔ NOT two datasets.
+
+⭐ The scanner identity now appears (a) in the TABLE's own Scanner column,
+(b) in the payload, (c) in the SCANNER MAPPING panel — which keeps its job of
+carrying each scanner's screener URL — and (d) in the export. ⛔ All four read
+the same `scanners` value; ⛔ none of them is a separate source.
 
 ═══════════════════════════════════════════════════════════════════════════════
 ⭐ ONE POPULATION, ONE BASE — WHERE EVERY NUMBER COMES FROM
@@ -407,12 +415,6 @@ def build_scanner_attribution_screen(cfg: dict, health: Optional[str] = None,
                 "were never recorded. The artwork marks this panel Example; "
                 "those values are not shown as data.",
                 "No state history is stored, so past states cannot be shown."),
-            "scanner_column": _gap(
-                "scanner and strategy are 1:1 in this system (16 scanners map "
-                "onto 16 distinct strategies, each named after its strategy), "
-                "so the main table shows Strategy only; the scanner name is in "
-                "the SCANNER MAPPING panel and in the payload",
-                "Scanner and Strategy are 1:1 — see SCANNER MAPPING."),
         },
         "note": ("Signals, Accepted and Rejected all share the stored-signal "
                  "base; DUPLICATE and EXPIRED are two further outcomes of that "
@@ -681,11 +683,14 @@ def _mapping(registry: list, meta: dict) -> dict:
 
 
 # ── XLSX ─────────────────────────────────────────────────────────────────────
-#: ⭐ THE TABLE'S OWN COLUMNS, in the table's order — ⛔ no Scanner column, the
-#: same removal the screen makes, and a test asserts its absence in the file.
-EXPORT_HEADER = ("Rank", "Strategy", "Health", "Signals", "Accepted", "Rejected",
-                 "Orders", "Trades", "Win %", "Profit Factor", "Net P&L",
-                 "Quality Score", "Trend")
+#: ⭐ THE TABLE'S OWN COLUMNS, in the table's order — a test binds the two
+#: together, so the spreadsheet can never describe a different table.
+#: ⚖️ 01-Sep-2026: Scanner and Trade Type joined the table on 👤 Rama's contract,
+#: superseding the 16-Aug removal, so they join the export with it. ⛔ The
+#: export is NOT a second opinion about the columns.
+EXPORT_HEADER = ("#", "Scanner", "Strategy (Primary)", "Trade Type", "Health",
+                 "Signals", "Accepted", "Rejected", "Orders", "Trades", "Win %",
+                 "Profit Factor", "Net P&L", "Quality Score", "Trend")
 
 #: ⛔ Never a blank cell for an unmeasured value — a reader would read blank as
 #: zero. The project's marker travels into the spreadsheet.
@@ -705,9 +710,17 @@ def export_sheets(payload: dict) -> list:
     Reasons" was a single cause.
     """
     table = [list(EXPORT_HEADER)]
-    for r in payload.get("rows") or []:
+    #: ⭐ `#` is the SERIAL of the exported order, exactly as the screen renders
+    #: it — ⛔ not the payload's `rank`, which is a different quantity and stays
+    #: untouched. The rows arrive already ranked, so position IS the serial.
+    for i, r in enumerate(payload.get("rows") or [], start=1):
         table.append([
-            _cell(r.get("rank")), r.get("display_name") or r.get("strategy"),
+            i,
+            #: ⛔ the SAME row's own scanner list — ⛔ not a second dataset
+            _cell(" · ".join(r.get("scanners") or [])),
+            r.get("display_name") or r.get("strategy"),
+            #: ⛔ derived from the strategy's YAML intent, ⛔ never from a name
+            _cell(r.get("trade_type")),
             _cell(r.get("health")), _cell(r.get("signals")), _cell(r.get("accepted")),
             _cell(r.get("rejected")), _cell(r.get("orders")), _cell(r.get("trades")),
             _cell(r.get("win_rate")), _cell(r.get("profit_factor")),
