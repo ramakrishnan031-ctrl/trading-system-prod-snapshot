@@ -2901,3 +2901,208 @@ calibrated until three separate nudges each fired — a first zero was VACUOUS).
 ⛔ Shared `.tbl-scroll` untouched · ⭐ every new selector `.ctl-page`-scoped ·
 ⛔ deferred global table rule NOT implemented · ⛔ no other screen touched.
 ⏸ **S16 Configuration is now the ONLY screen left.**
+
+### Entry 33 — S16 CONFIGURATION APPROVED. ⛔ NOT PUSHED · 🏁 **THE 22nd AND LAST SCREEN**
+
+**Date/time:** 02-Sep-2026, approved ~14:0x IST · **Branch:** `feat/screen10-slippage-analytics`
+**Build:** `b776cc8` · **Pushed: NO · Deployed: NO**
+
+🏁 **THE GUI CAMPAIGN'S 22 SCREENS ARE ALL BUILT AND ALL SHOWN.** ⛔ That is ⛔ NOT
+"the campaign is finished" — ⏸ S06 still owes a re-render sighting, ⏸ S07 a
+re-approval, and ⏸ the global table rule is still DEFERRED. 📄 See the carry list.
+
+#### 1. 🔴 THE HEADLINE — 🔬 THE CONFIG SPLITS **NINE** PARAMETERS, ⛔ NOT THREE
+
+🔬 **MEASURED FROM THE ENFORCERS at the deployed SHA `39292d3`, ⛔ not from key
+names** — this is the whole finding, and it corrects a number this project has
+been carrying since 01-Sep:
+
+| where | what it resolves per book |
+|---|---|
+| `capital/position_sizer.py:375-384` | `risk_per_trade_pct` · `max_concentration_pct` · `max_position_value_pct` |
+| `capital/risk_engine.py:326-343` | `daily_loss_limit_pct` · `max_sector_exposure_pct` · the two COUNT caps |
+| `capital/risk_engine.py:557-560` · `:655-660` | ⭐ OPEN_POSITIONS and DAILY_TRADES **BRANCH on `bucket == "positional"`** |
+
+⇒ ⭐ **A DELIVERY ENTRY NEVER CONSULTS `max_open_positions` OR `max_daily_trades`
+AT ALL.** Add the capital bucket split and the leverage map ⇒ **NINE**.
+
+🔬 At the deployed config that is **5 vs 3** open positions and **10 vs 5** daily
+trades — ⚠️ **a LIVE difference, ⛔ not a cosmetic one.**
+🔬 **COMPLETENESS, from the config rather than from a list I wrote:** the deployed
+YAML holds **EXACTLY SEVEN** delivery-scoped keys and the panel names **all seven**.
+⭐ Now pinned by a test that SWEEPS the configuration, so a NEW delivery key added
+upstream cannot silently go unshown.
+
+⛔ **AN UNSET DELIVERY KEY RAISES AT BOOT — it never inherits.** The screen renders
+the unavailable marker on that side and marks the row `partial`; ⛔ it never
+borrows the intraday number. ⭐ Proven by dropping each of the eight keys in turn.
+
+#### 2. ⛔ AND THE CONVERSE — FOUR ARE GENUINELY GLOBAL
+
+⭐ **Minimum Eligible Score · Max Qty (Per Order) · Max Consecutive Losses · Price
+Drift Threshold** have ⛔ NO delivery twin. Shown **ONCE**, under `GLOBAL LIMITS`,
+🔑 **each with the reason it is shared** — 📄 `max_consecutive_losses` is
+deliberately shared (*"the streak breaker is a portfolio-wide circuit"*,
+`risk_engine.py:642-644`); a signal is scored before its product is chosen.
+⛔ **A duplicated value is a FABRICATED DISTINCTION** — the same rule S17 follows.
+👤 Rama confirmed this explicitly: *"Do NOT force Intraday/Delivery columns for"*
+those four.
+
+⚠️ 🔬 **TWO OF THE FOUR PARAMETERS THE SPEC NAMED AS MODE-SPECIFIC ARE NOT.**
+`min_pass_score` (60) is global; `max_single_order_qty` (10,000 **shares**) is
+global. ⛔ No delivery column was manufactured for either.
+
+#### 3. 🔴 TWO TRUTH DEFECTS IN **APPROVED S17**, ⏸ REPORTED AND ⛔ NOT TOUCHED
+
+👤 The S16 spec says *"Do not modify S17"*, so ⛔ nothing was changed. ⏸ Both stand:
+
+⛔ S17's **GLOBAL** table states *"one value governs BOTH modes — the config has no
+delivery variant"* over **Max Trades 10** and **Max Positions 5**. 🔬 **FALSE at
+the deployed config**: `max_open_delivery_positions: 3` and
+`max_daily_delivery_trades: 5` exist and gate every delivery entry. ⚠️ S17's
+`_limits` looked for a `delivery_*` PREFIX and these two use an **INFIX**.
+⛔ S17's *"Minimum Eligible Score"* reads `v3_chain.min_pass_score` — 📄 a value the
+config file itself labels a **non-gating SEED** (*"10a records the score, does NOT
+gate on it"*). ⭐ Same number (60), ⛔ wrong source. The live gate is
+`scoring_weights.yaml min_pass_score`, which is what S16 now reads.
+
+#### 4. ⭐ THE PANELS THAT REPLACED THE ARTWORK'S BOTTOM ROW
+
+⛔ **STRATEGY CONFIGURATION IS GONE** — the panel, the `strategies` payload key, the
+category tab AND the export sheet. ⭐ S17 owns strategy enable/disable; a read-only
+copy here is still a second strategy-control surface, and ⚠️ two screens showing
+the same switch is how they drift apart. ⛔ The **Scanners** tab went with it: it
+existed only to state a 1:1 relationship between two things this screen no longer
+shows. ⇒ 🔬 the category list is now **exactly the ten** the revised design names.
+
+⭐ **THE ROW IS REPLACED, ⛔ NOT EMPTIED:** `MODE-SPECIFIC CONFIGURATION` |
+`GLOBAL LIMITS`, at the artwork's own two-panel proportion. ⭐ Nine parameters left
+the SYSTEM CONFIGURATION quad and **each card states how many of its own moved**,
+so a shorter card explains itself rather than reading as one that quietly lost
+rows. 🔬 **Nothing is shown twice** — a test intersects the quad's labels with the
+mode panel's and requires the intersection EMPTY.
+
+#### 5. 🔬 MEASURED FIXES THE ARTWORK ALONE WOULD NOT HAVE FOUND
+
+⚠️ **THE RAIL WAS 96px TOO NARROW, AND THE COST WAS NOT COSMETIC.** 🔬 Edge-detected
+off `16. Configuration.png`: the content column spans x 192→1522 and the rail
+starts at 1146 ⇒ **28.3%**, i.e. **476px** at 1920. The build carried **380px** ⇒
+`CONFIGURATION COMPARISON` rendered a **horizontal scrollbar that showed the
+Parameter column and hid BOTH value columns** — a comparison panel with no values.
+
+⚠️ **`CONFIGURATION HISTORY` GAVE THE WIDTH TO THE WRONG COLUMNS.** 🔬 Auto layout
+returned **81px** to `Changed By` — a column that is ALWAYS the unavailable marker
+— and **55/61px** to `Old`/`New`, so an email broke into **five four-character
+fragments**. ⭐ The two value columns now carry a `min-width` floor.
+⚠️ ⛔ **`table-layout: fixed` was NOT the answer** — 📄 it is what collapsed S17's
+header into *"PARAMETERINTRADAY"*. ⭐ `min-width` on the CELL raises the column
+minimum without it.
+⚠️ 🔬 **A `width` ON AN `auto` TABLE IS ONLY A SUGGESTION** — the percentages alone
+came back **47/70/98/66/68/79**, overridden by the header words' own min-content.
+
+⭐ **PAGE HEIGHT 1760 → 1558px** at a true 1920 (**1.44×**), 4 clean main bands,
+main ends **1499** and the rail **1529** — ⭐ so the SECONDARY column is ⛔ not the
+taller one. ⚠️ 🔬 At the first attempt it WAS: 1582 vs 1499, fixed by defaulting
+the history to 6 rows (*"6 of 14"* + *View all*), ⛔ not by deleting anything.
+
+#### 6. 👤 THE RAIL POLISH — RAMA'S OWN INSTRUCTION, AND ITS ONE TRAP
+
+📜 *"Prefer sensible truncation/ellipsis with a clear tooltip/detail affordance."*
+⭐ Every rail cell is **ONE LINE** (uniform 26px rows, columns aligned down the
+panel). ⛔ **NOTHING IS HIDDEN, and there are THREE routes to every value, ⛔ not
+one:** the `title` (🔬 28 of 57 cells truncate; **all 28** carry the exact full
+value), a **FULL VALUES toggle** that unwraps every row in place (🔬 28 → 0
+truncated, page 1558 → 1673, no overflow) — ⭐ so a value is reachable **without a
+mouse** — and the XLSX export, which truncates nothing.
+⚠️ **A TOOLTIP ALONE WOULD HAVE BEEN THE WEAKER GUARANTEE this project has been
+caught by before.** ⭐ The toggle is what makes truncation a PRESENTATION choice.
+
+⚠️ **END-ELLIPSIS CUT OFF THE PART THAT IDENTIFIES A PATH.** 🔬 Found by LOOKING at
+the render: **four consecutive comparison rows became the identical string**
+*"trading_hours.mis_squar…"* — the panel showed four changes and **named none of
+them**. ⇒ ⭐ configuration paths **MIDDLE**-truncate. 🔬 7 of 7 unique again.
+⭐ The 24/11-character budgets are **MEASURED** (7.62px per mono glyph at 197px and
+97px), ⛔ not picked — a first draft at 26/14 put **TWO ellipses** on every path.
+
+#### 7. 👤 THE SEVEN CENTRED DATA-COLUMN HEADINGS (02-Sep)
+
+🔬 **WHAT WAS ACTUALLY WRONG, measured before it was described:** the **DATA** was
+ALREADY centred by 👤 Rama's own 14-Aug global rule
+`table td.dt-num { text-align: center !important }` (`style.css:1974`); only the
+**HEADERS** were still right-aligned from `.dt-num { text-align: right }` (`:437`),
+so each heading sat **off the edge of its own centred column**.
+⇒ ⭐ **This is S16 catching up with the SAME 14-Aug column-role spec S08 already
+follows** — 📄 *"data column HEADINGS …. CENTER (over their own data)"* (`:1978`).
+
+⭐ An opt-in `cfg16-hc` class names **each of the seven cells**, ⛔ rather than
+centring every `.dt-num` header on the page — ⭐ that is the difference between
+APPLYING a correction and GENERALISING one. 🔬 Computed `text-align` over EVERY
+`thead th`: **exactly 7 centred, 0 others**, 0 headers wrapped.
+🔬 **0 body cells on this page are right-aligned, before or after**, and the shared
+14-Aug rule is untouched (⭐ a test pins it).
+⚠️ 👤 The card said *"the eight highlighted header cells"* but enumerated **SEVEN**.
+⭐ Exactly the seven named were centred; ⛔ an eighth was NOT invented. ⏸ Reported
+before approval.
+
+#### ⚠️ THREE OF MY OWN GUARDS FIRED, AND ONE WAS VACUOUS
+
+⚠️ **THE VIEW-STATE BUTTON ALLOW-LIST WENT RED** on the new toggle — ⭐ working
+exactly as intended; the class was added to it deliberately.
+⛔ **A COMPLETENESS TEST PASSED A MUTATION IT SHOULD HAVE KILLED.** 🔬 The shared
+`conftest` fixture carries only **2 of the 7** delivery keys, so "no delivery key
+is left off the panel" was checking two of them. ⭐ It now sweeps
+`_DEPLOYED_SYSTEM` as well, and the mutation goes red.
+⛔⛔ **MY CSS RULE EXTRACTOR WAS SILENTLY CHECKING HALF THE STYLESHEET.**
+🔬 `(?:^|[{}])` **CONSUMES** the brace and `re.findall` does ⛔ not overlap — so each
+rule's closing brace was eaten by its own match and could not anchor the next.
+It returned **54 of 108** rules. ⚠️ **My non-vacuity FLOOR was too weak to notice**
+(the halved count still cleared it). ⭐ Fixed with a **lookbehind**, and the floor
+replaced by an **EXACT identity** (`rules == count("{") − count("@media")`), which
+⭐ DOES go red when the regex is reverted. 🔬 Re-swept: **0 unscoped rules**.
+⭐ **GENERALISE: ⛔ a FLOOR is not a non-vacuity check — an IDENTITY is.**
+
+#### Gate
+
+🔬 **Focused S16: 103 passed, 0 failed** (73 baseline + 30). ⭐ **35 of 35 mutations
+behaved as designed** — 34 RED, 1 deliberately GREEN (⭐ a CSS *comment* that merely
+mentions a banned declaration must **not** fail the guard that reads the
+stylesheet).
+🔬 **Full dashboard suite: 2159 passed, 1 failed** = `test_c_venv_has_no_kiteconnect`,
+📄 the environment artifact ⇒ ⛔ **ZERO new failures**. ⭐ The baseline **2129/1** was
+MEASURED, ⛔ not recalled — by stashing this work and re-running.
+⚠️ 🔬 **Three S17 failures in the first full run were 100% ENVIRONMENTAL** — a stale
+`PYTHONPATH` pointing at `D:\Projects\trading-system`, which has no `controls.py`.
+⛔ Not a regression; all 36 pass with the correct path.
+🔬 **@1920:** 1558px · 4 bands · ⛔ 0 page overflow · ⛔ 0 inner h-scroll · **0
+overlaps** (⭐ detector calibrated until four nudges each fired — ⚠️ a first zero
+counted parent-child containment and was thrown out) · ⛔ 0 clipped headings · ⛔ 0
+vertical clips · ⛔ 0 stray ellipsis outside the opt-in class · ⛔ 0 console messages
+(⭐ reader proven live with a probe).
+🔬 **@1440:** 2666px · 0 overlaps · 0 clips · ⛔ no overflow. ⭐ The rail drops under
+the main column below 1500 so ⛔ nothing is cramped; ⚠️ it is TALLER than a
+two-column 1440 would be — ⏸ reported BEFORE approval.
+⛔ Every CSS change falls inside the **SCREEN 16 block** (`style.css:6066-6433`) —
+🔬 verified by diff-hunk line ranges · ⛔ no shared rule edited · ⛔ no other screen
+touched · ⛔ `config_view.build_config_view` (`/api/config`) byte-unchanged.
+
+#### 🔬 THE RENDER THE APPROVAL WAS GIVEN ON
+
+⭐ **The DEPLOYED configuration**, extracted **read-only** with
+`git show 39292d3:config/system_config.yaml` — ⚠️ `gui09` forked 14-Aug, **BEFORE**
+the delivery keys landed on 22-Aug, so its own config would have rendered five of
+the nine mode rows unavailable and the review would have been of a config **nobody
+runs**. 🔬 All nine rows diffed against that YAML: **9 of 9 match**.
+⭐ Comparison and History were built from **THREE REAL historical versions** of the
+same file (`39292d3` · `52ccb4f` · `0197923`) ⇒ ⛔ the diffs are the diffs that
+genuinely happened. ⛔ **Nothing fabricated.**
+⭐ Harness lived **OUTSIDE the repo** (session scratchpad); ⛔ the production DB was
+never opened and ⛔ the VM was never touched.
+
+#### ⛔ WHAT THE APPROVAL DOES NOT MEAN
+
+🔴 **S16 IS NOT `VERIFIED LIVE`** — 🟢 VISUALLY APPROVED on a local review render
+over a read-only config extract, ⛔ never on the VM.
+⛔ **THE COMPOSITION IS CLOSER, ⛔ NOT MATCHED.** ⏸ Reported BEFORE approval:
+**1.44× vs the artwork's implied ~1.19×**; 1440 runs **2666px**; and the rail's
+6-column History is the tightest panel on the page — ⏸ moving it to the main
+column would fix it and cost ~180px of height, 👤 Rama's call.
