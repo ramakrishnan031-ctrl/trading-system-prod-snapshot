@@ -151,6 +151,38 @@ tr.st-AWAITING .cap-status, tr.st-UNAVAILABLE .cap-status { color: var(--dim); }
 .mono { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: .76rem; }
 .tbl-scroll { overflow-x: auto; }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   THE GLOBAL TABLE RULE — THE FREEZE PANE  (02-Sep-2026)
+   ═══════════════════════════════════════════════════════════════════════════
+   📜 Rama, deferred until all 22 screens were built: *"the freeze-pane /
+      body-scroll / header-drag rule is a GLOBAL pass after all 22 screens are
+      built"*. All 22 are approved as of 02-Sep, so this is that pass.
+
+   ⭐ ONE DECLARATION, replacing FOUR IDENTICAL COPIES. S11, S18, S19 and S20
+      each carried this rule in their own block — S20's own comment says it was
+      *"reusing S11/S18/S19 rather than a fourth implementation"*, which is
+      exactly the duplication a global pass exists to end. The four copies are
+      deleted; every one of them now resolves here.
+
+   ⭐ OPT-IN, ⛔ NOT BLANKET. A frozen header is only meaningful when the body
+      can scroll underneath it, so the class goes on the SCROLL WRAP and nowhere
+      else. 🔬 Measured 02-Sep across all 22 screens: 76 tables, of which
+      exactly 13 have a bounded or scrolling body. ⛔ The other 63 fit their
+      content and get nothing — a sticky header on a table that never scrolls
+      is a z-index and background liability for no gain.
+
+   ⛔ `top: 0` IS RELATIVE TO THE SCROLLING WRAP, not the page, so the page's
+      own scroll can never move it. The background is load-bearing: without it
+      rows show through the header as they pass under.
+
+   ⭐ WHY THE CLASS SITS ON THE WRAP AND THE SELECTOR REACHES THE `th`: CSS
+      cannot ask whether an element is height-bounded, so the bound and the
+      freeze must be declared together by hand. Keeping the marker on the wrap
+      means the two can never drift apart — a wrap that stops scrolling loses
+      its class and its sticky header in the same edit. */
+.tbl-freeze thead th { position: sticky; top: 0; z-index: 1;
+  background: var(--panel); }
+
 /* Rank toggle */
 .rank-toggle { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
 .rt-label { font-size: .7rem; color: var(--dim); text-transform: uppercase; letter-spacing: .05em; }
@@ -2847,8 +2879,8 @@ table td.ctr { text-align: center !important; }
    rail past the table at all. ⛔ Do not "fix" the residue with align-items. */
 .exec-page .exec-rank-scroll { max-height: 232px; overflow-y: auto; }
 .exec-page .exec-rank-scroll table { width: 100%; }
-.exec-page .exec-rank-scroll thead th { position: sticky; top: 0;
-  background: var(--panel); z-index: 1; }
+/* ⭐ the freeze pane now comes from the shared `.tbl-freeze` rule; this
+   screen's own copy is deleted, ⛔ not merely overridden. */
 
 /* ═══════════════════════════════════════════════════════════════════════════
    SCREEN 12 — SYSTEM HEALTH (15-Aug-2026).  Scoped to `.sysh-page`.
@@ -4078,8 +4110,7 @@ main.content:has(> .lav-page) { width: 100%; max-width: none; margin: 0;
    band — it is a scroll container, and a test pins that `overflow-y: auto`
    travels with the height. */
 .lav-page .lav-feed .lav-tbl-wrap { height: 430px; overflow-y: auto; }
-.lav-page .lav-feed thead th { position: sticky; top: 0; z-index: 1;
-  background: var(--panel); }
+/* ⭐ freeze pane → shared `.tbl-freeze`. */
 /* Alignment by ROLE, the established rule: labels/text LEFT, badges CENTRED.
    ⛔ No blanket centring — this table carries no numeric column. */
 .lav-page .lav-tbl th, .lav-page .lav-tbl td { text-align: left; }
@@ -4502,11 +4533,9 @@ main.content:has(> .sr-page) { width: 100%; max-width: none; margin: 0;
    PAGE sideways. ⛔ No pagination is substituted, ⛔ no row is truncated: all
    sixteen remain reachable by scrolling the body. */
 .sr-page .sr-tbl-wrap { overflow-x: auto; overflow-y: auto; max-height: 491px; }
-/* ⭐ the freeze-pane: the header stays put while the rows move underneath, and
-   it keeps its own background so rows can never show through it. ⛔ `top: 0` is
-   relative to the SCROLLING WRAP, so the page's own scroll cannot move it. */
-.sr-page .sr-tbl thead th { position: sticky; top: 0; z-index: 1;
-  background: var(--panel); }
+/* ⭐ the freeze pane — the header stays put while the rows move underneath.
+   Its reasoning now lives with the shared `.tbl-freeze` rule, which this screen
+   was the reference implementation for. */
 .sr-page .sr-tbl { width: 100%; table-layout: fixed; }
 .sr-page .sr-tbl td { padding: 7px 6px; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; text-align: left; }
@@ -4719,9 +4748,9 @@ main.content:has(> .sh-page) { width: 100%; max-width: none; margin: 0;
    is built, so ⛔ no shared/global selector is touched here. */
 .sh-page .sh-tbl-wrap { overflow-x: auto; overflow-y: auto;
   min-height: 350px; max-height: 546px; }
-/* ⭐ the freeze-pane, reusing S11/S18/S19 rather than a fourth implementation */
-.sh-page .sh-tbl thead th { position: sticky; top: 0; z-index: 1;
-  background: var(--panel); }
+/* ⭐ the freeze pane — this screen's comment already said it was "reusing
+   S11/S18/S19 rather than a fourth implementation"; it is now literally one
+   implementation, in the shared `.tbl-freeze` rule. */
 /* ⭐ min-width = the sum of the approved column widths, so the headings never
    compress into a wrap. Narrower viewports scroll inside `.sh-tbl-wrap`.
    ⭐ 1214 → 1258 = the serial column's own 44px. */

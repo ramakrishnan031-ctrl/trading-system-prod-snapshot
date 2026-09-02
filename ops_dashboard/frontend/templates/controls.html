@@ -107,7 +107,7 @@
           <h3 class="panel-title">2. STRATEGY CONTROLS
             <span class="panel-sub" x-text="stratCount()"></span>
           </h3>
-          <div class="tbl-scroll ctl-stratscroll">
+          <div class="tbl-scroll ctl-stratscroll tbl-freeze">
             <table class="dt-table">
               <thead><tr>
                 <th class="dt-th ctl-serial">#</th>
@@ -371,7 +371,14 @@
 
         <section class="panel ctl-histpanel">
           <h3 class="panel-title">12. HISTORY <span class="panel-sub">(recent changes)</span></h3>
-          <div class="tbl-scroll">
+          {# ⭐ THE ONE TABLE IN THE GUI WHOSE BODY ACTUALLY SCROLLED WHILE ITS
+             HEADER SCROLLED AWAY. 🔬 Measured 02-Sep at both viewports: 12 rows
+             of 498px inside a 188px bound, `overflow-y: auto`, and `thead th`
+             computing `position: static` — so Time / Module / Action / User
+             left the panel as soon as the reader moved past row four. ⛔ Not a
+             styling preference: it is the defect the deferred freeze-pane rule
+             exists to fix, and it was the only instance. #}
+          <div class="tbl-scroll tbl-freeze">
             <table class="dt-table">
               <thead><tr>
                 <th class="dt-th">Time</th><th class="dt-th">Module</th>

@@ -541,9 +541,16 @@ def test_the_table_is_a_frozen_header_over_a_scrolling_twelve_row_body():
     # ⛔ the horizontal scroll stays ON THE WRAP so columns cannot push the PAGE
     assert "overflow-x: auto" in wrap, wrap
 
-    # ⭐ the freeze-pane, reusing the S11/S18 pattern rather than a second one
-    head = re.search(r"\.sr-page \.sr-tbl thead th \{[^}]*\}", css).group(0)
+    # ⭐ THE FREEZE PANE IS NOW SHARED. 📄 It moved to the global
+    # `.tbl-freeze` rule on 02-Sep, when all 22 screens were approved and the
+    # deferred global table rule was built. ⚠️ This assertion deliberately
+    # checks the GUARANTEE rather than the declaration site: the wrap opts in,
+    # and the shared rule delivers sticky + top + background. ⛔ A future hoist
+    # cannot break it, but REMOVING the freeze still fails it.
+    assert "tbl-freeze" in _tpl(), "the wrap must opt into the shared freeze pane"
+    head = re.search(r"\.tbl-freeze thead th \{[^}]*\}", css).group(0)
     assert "position: sticky" in head and "top: 0" in head, head
+    assert "background:" in head, head
     assert "background:" in head, head        # ⛔ rows must not show through it
 
     # ⛔ the header must stay draggable — a frozen header is still a usable one

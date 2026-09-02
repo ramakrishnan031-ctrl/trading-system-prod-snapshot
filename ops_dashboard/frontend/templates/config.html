@@ -166,7 +166,7 @@
         {# Every other tab: the real leaves of that part of the running config. #}
         <div x-show="cat !== 'system'" x-cloak>
           <h4 class="cfg16-secttl" x-text="(activeCat().label || '') + ' CONFIGURATION'"></h4>
-          <div class="tbl-scroll cfg16-catscroll">
+          <div class="tbl-scroll cfg16-catscroll tbl-freeze">
             <table class="dt-table">
               <thead><tr>
                 <th class="dt-th">Parameter</th>
@@ -425,7 +425,7 @@
           <span class="cfg16-vs">vs</span>
           <span x-text="'Previous ' + dash(data.comparison && data.comparison.previous_date)"></span>
         </div>
-        <div class="tbl-scroll cfg16-cmpscroll">
+        <div class="tbl-scroll cfg16-cmpscroll tbl-freeze">
           <table class="dt-table" :class="railFull ? '' : 'cfg16-trunc'">
             <thead><tr>
               <th class="dt-th">Parameter</th>
@@ -460,7 +460,7 @@
                                    : 'Show every value in full, wrapped'"
                   x-text="railFull ? 'compact' : 'full values'"></button>
         </h3>
-        <div class="tbl-scroll cfg16-histscroll">
+        <div class="tbl-scroll cfg16-histscroll tbl-freeze">
           <table class="dt-table" :class="railFull ? '' : 'cfg16-trunc'">
             <thead><tr>
               <th class="dt-th">Date</th>

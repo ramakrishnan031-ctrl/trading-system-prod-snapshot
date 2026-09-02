@@ -105,7 +105,7 @@
                     @click="setLive(!live)" x-text="live ? '❙❙' : '▶'"></button>
           </div>
 
-          <div class="lav-tbl-wrap">
+          <div class="lav-tbl-wrap tbl-freeze">
             <table class="cap-table lav-tbl">
               <thead><tr>
                 {# ⭐ ONE `cols` array drives the header AND the body, so a drag
@@ -206,7 +206,7 @@
           {# 🔴 CAUGHT IN THE BROWSER at 1440: without this wrapper the five
              columns overflowed the panel and the LAST SIGNAL TIME header
              painted on top of the right rail. #}
-          <div class="lav-tbl-wrap">
+          <div class="lav-tbl-wrap tbl-freeze">
           <table class="cap-table lav-stbl">
             <thead><tr>
               <th class="lbl">Strategy</th>
@@ -328,7 +328,7 @@
           <h3 class="panel-title">ACTIVE POSITIONS <span class="lav-live-tag">(LIVE)</span>
             <span class="panel-sub" x-text="posBase()"></span>
           </h3>
-          <div class="lav-tbl-wrap">
+          <div class="lav-tbl-wrap tbl-freeze">
             <table class="cap-table lav-postbl">
               {# ⭐ The approved ten columns, in the approved order — Symbol
                  BEFORE Strategy. ⛔ No Scanner column, and none is invented. #}

@@ -237,7 +237,7 @@
     <section class="panel">
       <div class="exec-panel-head"><h3 class="panel-title">Strategy Execution Ranking</h3>
         <button class="btn-export" type="button" @click="exportXlsx()">⭳ Export XLSX</button></div>
-      <div class="exec-rank-scroll"><table class="cap-table"><thead><tr>
+      <div class="exec-rank-scroll tbl-freeze"><table class="cap-table"><thead><tr>
         <th class="lbl">Strategy</th><th>Avg Delay</th><th>Worst Delay</th><th>Fastest</th>
       </tr></thead><tbody>
         <template x-for="r in (data.per_strategy || [])" :key="r.strategy">
@@ -260,7 +260,7 @@
     <section class="panel">
       <div class="exec-panel-head"><h3 class="panel-title">Intraday &amp; Delivery Execution Analysis</h3>
         <button class="btn-export" type="button" @click="exportXlsx()">⭳ Export XLSX</button></div>
-      <div class="exec-rank-scroll"><table class="cap-table"><thead><tr>
+      <div class="exec-rank-scroll tbl-freeze"><table class="cap-table"><thead><tr>
         <th class="lbl">Trade Type</th><th>Orders</th><th>Avg Delay</th><th>Worst Delay</th><th>Fastest</th>
       </tr></thead><tbody>
         <template x-for="r in (data.per_trade_type || [])" :key="r.pipeline">
@@ -279,7 +279,7 @@
     <section class="panel">
       <div class="exec-panel-head"><h3 class="panel-title">Symbol Execution Ranking</h3>
         <button class="btn-export" type="button" @click="exportXlsx()">⭳ Export XLSX</button></div>
-      <div class="exec-rank-scroll"><table class="cap-table"><thead><tr>
+      <div class="exec-rank-scroll tbl-freeze"><table class="cap-table"><thead><tr>
         <th class="lbl">Symbol</th><th>Avg Delay</th><th>Worst Delay</th><th>Fastest</th>
       </tr></thead><tbody>
         <template x-for="r in (data.per_symbol || [])" :key="r.symbol">
