@@ -10,23 +10,32 @@
   📜 Rama, 17-Aug-2026: "SCREEN 17 CONTROLS MUST HAVE FULL CONTROLS. Screen 16
      stays informational." This screen is the INFORMATION BOARD.
 
-  ⛔ NOT ONE OPERATIONAL CONTROL LIVES HERE. No strategy toggle, no editable
-     field, no Apply / Cancel / Revert, no mutation endpoint. The artwork draws
-     the Enabled column as a switch; it is rendered here as a READ-ONLY STATE
-     PILL, because a switch on an information board is an operational control
-     wearing a different shape. Screen 17 owns every action.
+  ⛔ NOT ONE OPERATIONAL CONTROL LIVES HERE. No toggle, no editable field, no
+     Apply / Cancel / Revert, no mutation endpoint. Screen 17 owns every action.
 
-  ⛔ SCANNER IS NOT AN IDENTITY HERE, and both removals are BY DECISION:
-       · the artwork's Scanner COLUMN in Strategy Configuration, and
-       · the artwork's SCANNER MAPPING panel
-     Scanner→strategy is 1:1 — measured 18-Aug-2026 on the running config: 16
-     scanners → 16 distinct strategies, scanner-name == strategy-name on 16/16.
-     A Scanner column therefore prints the row's own identity twice, and a
-     mapping table makes a scanner a configuration object in its own right.
-     Screen 21 Scanner Attribution already owns the mapping and records the same
-     measurement. ⛔ The remaining panels keep the artwork's own placement;
-     Strategy Configuration simply takes the width the mapping panel occupied,
-     so no empty area is left behind.
+  ── REVISED DESIGN, 02-Sep-2026 (gui/16. Configuration.txt) ─────────────────
+  ⛔ THE ARTWORK'S WHOLE BOTTOM ROW IS GONE, and both halves for stated reasons:
+
+     · STRATEGY CONFIGURATION — Screen 17 owns strategy enable/disable. A
+       read-only copy of that table here is still a second strategy-control
+       surface, and two screens showing the same switch is how they drift apart.
+     · SCANNER MAPPING — scanner→strategy is 1:1 (measured 18-Aug: 16 scanners →
+       16 distinct strategies, scanner-name == strategy-name on 16/16), so the
+       panel makes a scanner a configuration object in its own right. Screen 21
+       already owns it.
+
+     ⭐ THE ROW IS NOT LEFT EMPTY. It now carries MODE-SPECIFIC CONFIGURATION and
+     GLOBAL LIMITS, at the same two-panel proportion the artwork drew.
+
+  🔑 MODE SEPARATION IS THE POINT OF THE REVISION. Where the configuration
+     defines a parameter separately per book, this screen shows BOTH columns;
+     where it does not, the parameter is shown ONCE with the reason it is shared.
+     ⛔ Nine parameters left the SYSTEM CONFIGURATION quad because printing them
+     there as single values told the reader the delivery book runs on the
+     intraday number — 5-vs-3 open positions and 10-vs-5 daily trades at the
+     deployed config, a live difference, not a cosmetic one.
+     ⛔ And nothing is shown twice: a parameter is in the quad or in the mode
+     panel, never in both.
 
   ⛔ NO VALUE ON THIS PAGE IS HARD-CODED. The artwork's numbers are mock data and
      the running configuration disagrees with most of them (Max Open Positions is
@@ -68,7 +77,12 @@
     <template x-for="k in (data.kpis || [])" :key="k.key">
       <div class="kpi-card" :class="'kpi-' + (k.tone || 'info')">
         <span class="kpi-label" x-text="k.label"></span>
-        <span class="kpi-val num" x-text="dash(k.value)"></span>
+        {# A mode-split KPI prints BOTH configured values, "intraday / delivery",
+           and its sub-line says so. ⛔ The intraday number alone would be a claim
+           about the delivery book that the configuration does not make. The
+           class only narrows the type — ⛔ it does not change the value. #}
+        <span class="kpi-val num" :class="k.split ? 'cfg16-kpisplit' : ''"
+              x-text="dash(k.value)"></span>
         <span class="cfg16-kpisub" x-text="k.sub || ''"></span>
       </div>
     </template>
@@ -106,6 +120,11 @@
                 </div>
               </template>
             </div>
+            {# ⛔ THESE THREE CARDS CARRY ONLY THE PARAMETERS OF THEIR GROUP THAT
+               GOVERN BOTH BOOKS. Every mode-split one moved to MODE-SPECIFIC
+               CONFIGURATION below, and each card says how many of its own left —
+               so a card that looks shorter than the artwork's says WHY, rather
+               than reading as a panel that quietly lost rows. #}
             <div class="cfg16-card">
               <h5 class="cfg16-cardttl">CAPITAL</h5>
               <template x-for="r in visibleRows(data.capital, 'capital')" :key="r.label">
@@ -114,6 +133,7 @@
                   <span class="cfg16-v num" x-text="dash(r.value)"></span>
                 </div>
               </template>
+              <p class="cfg16-moved" x-text="movedNote('capital')" x-show="movedNote('capital')" x-cloak></p>
             </div>
             <div class="cfg16-card">
               <h5 class="cfg16-cardttl">RISK</h5>
@@ -123,19 +143,22 @@
                   <span class="cfg16-v num" x-text="dash(r.value)"></span>
                 </div>
               </template>
+              <p class="cfg16-moved" x-text="movedNote('risk')" x-show="movedNote('risk')" x-cloak></p>
             </div>
             <div class="cfg16-card">
               <h5 class="cfg16-cardttl">POSITION SIZING</h5>
               {# ⚠️ The artwork draws "Lot Size Mode" and "Round to Nearest" here.
                  NEITHER KEY EXISTS in position_sizing (measured 18-Aug), so they
-                 are absent rather than invented; the real sizing bounds take
-                 their place and the panel keeps its five-row density. #}
+                 are absent rather than invented; the real sizing mechanics take
+                 their place and the panel keeps the artwork's density. #}
               <template x-for="r in visibleRows(data.position_sizing, 'position sizing')" :key="r.label">
                 <div class="cfg16-kv" :title="r.note || ''">
                   <span class="cfg16-k" x-text="r.label"></span>
                   <span class="cfg16-v num" x-text="dash(r.value)"></span>
                 </div>
               </template>
+              <p class="cfg16-moved" x-text="movedNote('position_sizing')"
+                 x-show="movedNote('position_sizing')" x-cloak></p>
             </div>
           </div>
         </div>
@@ -194,7 +217,13 @@
               <table class="dt-table cfg16-wtbl">
                 <thead><tr>
                   <th class="dt-th">Factor</th>
-                  <th class="dt-th dt-num">Weight (%)</th>
+                  {# 📜 Rama, 02-Sep-2026 — the SEVEN highlighted header cells are CENTRED.
+                     ⛔ The header ONLY: the numbers under them stay right-aligned, so a
+                     column of figures still scans down its own edge. `cfg16-hc` names
+                     each cell explicitly rather than centring every `.dt-num` header on
+                     the page — ⛔ the comparison, history and category tables were not
+                     highlighted and do not move. #}
+                  <th class="dt-th dt-num cfg16-hc">Weight (%)</th>
                 </tr></thead>
                 <tbody>
                   <template x-for="w in col" :key="w.key">
@@ -224,12 +253,12 @@
             <table class="dt-table">
               <thead><tr>
                 <th class="dt-th">Price Band (₹)</th>
-                <th class="dt-th dt-num">Allowed Slippage (₹)</th>
+                <th class="dt-th dt-num cfg16-hc">Allowed Slippage (₹)</th>
                 {# ⚠️ The artwork's third header reads "Allowed Slippage (%)". The
                    percentage the gate actually applies is a fraction of the STOP
                    DISTANCE, not of price — so the header names its base rather
                    than printing a real number against the wrong one. #}
-                <th class="dt-th dt-num">Allowed (% of stop)</th>
+                <th class="dt-th dt-num cfg16-hc">Allowed (% of stop)</th>
               </tr></thead>
               <tbody>
                 <template x-for="r in slipRows()" :key="r.band">
@@ -264,52 +293,87 @@
         </section>
       </div>
 
-      {# ── STRATEGY CONFIGURATION (artwork row 4, full width) ────────────── #}
-      <section class="panel cfg16-strat">
-        <h3 class="panel-title">STRATEGY CONFIGURATION
-          <span class="panel-sub" x-text="stratLabel()"></span>
-        </h3>
-        <div class="tbl-scroll cfg16-stratscroll">
-          <table class="dt-table">
+      {# ── MODE-SPECIFIC + GLOBAL LIMITS (artwork row 4's two panels) ────── #}
+      <div class="cfg16-row3">
+
+        <section class="panel cfg16-mode">
+          <h3 class="panel-title">MODE-SPECIFIC CONFIGURATION
+            <span class="panel-sub" x-text="modeLabel()"></span>
+          </h3>
+          {# Each row is TWO independently configured keys, and the Parameter cell
+             carries both key paths in its tooltip. ⛔ Neither column is derived
+             from the other: a delivery entry reads only the Delivery value and an
+             intraday entry only the Intraday one.
+             ⚠️ EQUAL IS NOT THE SAME AS SHARED. Six of the nine rows hold equal
+             numbers today, and the row still shows both — collapsing it would
+             claim one key where the config has two separately settable ones, and
+             the next config change would silently make the screen wrong. #}
+          <table class="dt-table cfg16-modetbl">
             <thead><tr>
-              <th class="dt-th">Strategy Name</th>
-              <th class="dt-th">Enabled</th>
-              <th class="dt-th">Trade Type</th>
-              <th class="dt-th">Status</th>
+              <th class="dt-th">Parameter</th>
+              <th class="dt-th dt-num cfg16-hc">Intraday</th>
+              <th class="dt-th dt-num cfg16-hc">Delivery</th>
+              <th class="dt-th">Scope</th>
             </tr></thead>
             <tbody>
-              <template x-for="s in stratRows()" :key="s.name">
+              <template x-for="m in modeRows()" :key="m.label">
                 <tr>
-                  <td class="dt-td" x-text="s.label"></td>
-                  {# READ-ONLY state pill. ⛔ Not a switch, not a button, not
-                     focusable — there is nothing on this screen to press. #}
-                  <td class="dt-td">
-                    <span class="cfg16-pill" :class="s.enabled ? 'cfg16-on' : 'cfg16-off'"
-                          x-text="s.enabled ? 'YES' : 'NO'"></span>
-                  </td>
-                  <td class="dt-td">
-                    <span class="cfg16-badge" x-text="dash(s.trade_type)"></span>
-                  </td>
-                  <td class="dt-td">
-                    <span class="cfg16-pill" :class="s.enabled ? 'cfg16-on' : 'cfg16-off'"
-                          x-text="s.status"></span>
-                  </td>
+                  <td class="dt-td" :title="m.source" x-text="m.label"></td>
+                  <td class="dt-td dt-num mono" x-text="modeVal(m.intraday, m.unit)"></td>
+                  {# ⚠️ A HALF-CONFIGURED PAIR IS MARKED, not smoothed over: an
+                     absent delivery key is the unavailable marker on its own
+                     side, because the boot loader REJECTS that config rather
+                     than borrowing the intraday number. #}
+                  <td class="dt-td dt-num mono" :class="m.partial ? 'cfg16-gap' : ''"
+                      x-text="modeVal(m.delivery, m.unit)"></td>
+                  <td class="dt-td cfg16-scope" x-text="m.note || ''"></td>
                 </tr>
               </template>
             </tbody>
           </table>
-        </div>
-        <div class="empty-state" x-show="!stratRows().length" x-cloak>
-          <div class="es-body" x-text="search ? 'No strategy matches this search.'
-            : 'No strategy YAML is readable in config/strategies/.'"></div>
-        </div>
-        <p class="cfg16-note">Read-only. Scanner is not shown as a separate identity —
-          scanner and strategy are 1:1 in this system, so the strategy name IS the
-          scanner name. Pausing or resuming a strategy is done on Controls.</p>
-      </section>
+          <div class="empty-state" x-show="!modeRows().length" x-cloak>
+            <div class="es-body" x-text="search
+              ? 'No mode-specific parameter matches this search.'
+              : 'No mode-specific parameter is readable in the current configuration.'"></div>
+          </div>
+          <p class="cfg16-note" x-text="data.mode_note || ''"></p>
+        </section>
+
+        <section class="panel cfg16-glob">
+          <h3 class="panel-title">GLOBAL LIMITS
+            <span class="panel-sub">one value, both books</span>
+          </h3>
+          {# ⛔ THIS PANEL PREVENTS A FABRICATED DISTINCTION. A reader who has just
+             seen nine parameters split per book will assume the rest are split
+             too. These are not — and each one says WHY it is shared, so the
+             answer is on the screen rather than in someone's memory. #}
+          <table class="dt-table cfg16-globtbl">
+            <thead><tr>
+              <th class="dt-th">Parameter</th>
+              <th class="dt-th dt-num cfg16-hc">Value</th>
+              <th class="dt-th">Why it is shared</th>
+            </tr></thead>
+            <tbody>
+              <template x-for="g in globalRows()" :key="g.label">
+                <tr>
+                  <td class="dt-td" :title="g.source" x-text="g.label"></td>
+                  <td class="dt-td dt-num mono" x-text="dash(g.value)"></td>
+                  <td class="dt-td cfg16-scope" x-text="g.reason"></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+          <div class="empty-state" x-show="!globalRows().length" x-cloak>
+            <div class="es-body" x-text="search ? 'No global limit matches this search.'
+              : 'No global limit is readable in the current configuration.'"></div>
+          </div>
+          <p class="cfg16-note" x-text="data.global_limits_note || ''"></p>
+        </section>
+      </div>
 
       <p class="cfg16-foot">All times are IST (Asia/Kolkata). Values are read from the
-        configuration the running system recorded for today and refresh with the page.</p>
+        configuration the running system recorded for today and refresh with the page.
+        Strategy enable/disable lives on Controls; this screen never changes a value.</p>
     </div>
 
     {# ── RIGHT RAIL (artwork's right column, in its own order) ───────────── #}
@@ -332,15 +396,37 @@
         </div>
       </section>
 
+      {# ── THE RAIL IS SECONDARY, AND IT IS NOW BUILT THAT WAY ─────────────
+         📜 Rama, 02-Sep-2026: "Configuration Comparison and Configuration
+         History are quite narrow. Long values … wrap into multiple lines and
+         make the panels visually dense. Prefer sensible truncation/ellipsis
+         with a clear tooltip/detail affordance … Comparison / History are
+         secondary."
+
+         ⭐ EVERY CELL IN BOTH RAIL TABLES IS ONE LINE, and the ROW is the unit
+         that stays aligned. ⛔ NOTHING IS HIDDEN, and there are THREE ways to
+         the full value, ⛔ not one: the `title` tooltip on the cell, the
+         FULL VALUES toggle on the panel (which unwraps every row in place —
+         so the value is reachable without a mouse), and the XLSX export, which
+         is built from this same payload and never truncates.
+         ⚠️ A tooltip ALONE would have been the weaker guarantee this project
+         has been caught by before; the toggle is what makes the truncation a
+         presentation choice rather than a data loss. #}
       <section class="panel">
-        <h3 class="panel-title">CONFIGURATION COMPARISON</h3>
+        <h3 class="panel-title">CONFIGURATION COMPARISON
+          <button type="button" class="cfg16-expand" @click="railFull = !railFull"
+                  :aria-pressed="railFull"
+                  :title="railFull ? 'Show one line per row'
+                                   : 'Show every value in full, wrapped'"
+                  x-text="railFull ? 'compact' : 'full values'"></button>
+        </h3>
         <div class="cfg16-cmphead" x-cloak>
           <span class="cfg16-cur" x-text="'Current ' + dash(data.comparison && data.comparison.current_date)"></span>
           <span class="cfg16-vs">vs</span>
           <span x-text="'Previous ' + dash(data.comparison && data.comparison.previous_date)"></span>
         </div>
         <div class="tbl-scroll cfg16-cmpscroll">
-          <table class="dt-table">
+          <table class="dt-table" :class="railFull ? '' : 'cfg16-trunc'">
             <thead><tr>
               <th class="dt-th">Parameter</th>
               <th class="dt-th">Old Value</th>
@@ -349,9 +435,10 @@
             <tbody>
               <template x-for="r in cmpRows()" :key="r.parameter">
                 <tr>
-                  <td class="dt-td mono" x-text="r.parameter"></td>
-                  <td class="dt-td mono cfg16-old" x-text="r.old"></td>
-                  <td class="dt-td mono cfg16-new" x-text="r.new"></td>
+                  <td class="dt-td mono" :title="r.parameter"
+                      x-text="railFull ? r.parameter : midTrunc(r.parameter, 24)"></td>
+                  <td class="dt-td mono cfg16-old" :title="r.old" x-text="r.old"></td>
+                  <td class="dt-td mono cfg16-new" :title="r.new" x-text="r.new"></td>
                 </tr>
               </template>
             </tbody>
@@ -367,9 +454,14 @@
       <section class="panel">
         <h3 class="panel-title">CONFIGURATION HISTORY
           <span class="panel-sub" x-text="histLabel()"></span>
+          <button type="button" class="cfg16-expand" @click="railFull = !railFull"
+                  :aria-pressed="railFull"
+                  :title="railFull ? 'Show one line per row'
+                                   : 'Show every value in full, wrapped'"
+                  x-text="railFull ? 'compact' : 'full values'"></button>
         </h3>
         <div class="tbl-scroll cfg16-histscroll">
-          <table class="dt-table">
+          <table class="dt-table" :class="railFull ? '' : 'cfg16-trunc'">
             <thead><tr>
               <th class="dt-th">Date</th>
               <th class="dt-th">Module</th>
@@ -381,11 +473,12 @@
             <tbody>
               <template x-for="(h, i) in histRows()" :key="i">
                 <tr>
-                  <td class="dt-td mono" x-text="h.date"></td>
-                  <td class="dt-td" x-text="h.module"></td>
-                  <td class="dt-td mono" x-text="h.parameter"></td>
-                  <td class="dt-td mono cfg16-old" x-text="h.old"></td>
-                  <td class="dt-td mono cfg16-new" x-text="h.new"></td>
+                  <td class="dt-td mono" :title="h.date" x-text="h.date"></td>
+                  <td class="dt-td" :title="h.module" x-text="h.module"></td>
+                  <td class="dt-td mono" :title="h.parameter"
+                      x-text="railFull ? h.parameter : midTrunc(h.parameter, 11)"></td>
+                  <td class="dt-td mono cfg16-old" :title="h.old" x-text="h.old"></td>
+                  <td class="dt-td mono cfg16-new" :title="h.new" x-text="h.new"></td>
                   {# ⛔ NEVER FABRICATED. No per-change author is recorded
                      anywhere in the system, so this column is the unavailable
                      marker and the reason sits under the table. #}
@@ -446,7 +539,37 @@ function configPage() {
   return Object.assign(pageBase("/api/config/screen"), {
     search: "",
     cat: "system",
-    histLimit: 8,
+    /* ⚙ SIX, ⛔ not eight. 📜 Rama, 02-Sep: "Comparison / History are
+       secondary. Main configuration content should remain visually primary."
+       🔬 At eight the rail ran to 1582px against the main column's 1499 — the
+       secondary column was the taller one. Six rows put it back under, and
+       ⛔ nothing is lost: the header says "6 of N" and "View all" is beside it. */
+    histLimit: 6,
+    /* Rail presentation only. ⛔ It selects nothing, filters nothing and reaches
+       no endpoint — the same rows are rendered either way, on one line or
+       wrapped. It exists so the full value of a truncated cell is reachable
+       WITHOUT a hover. */
+    railFull: false,
+
+    /* ⚠️ A CONFIGURATION PATH IS DISTINGUISHED BY ITS TAIL, and plain
+       `text-overflow: ellipsis` cuts the tail off. 🔬 Found by looking at the
+       render: FOUR consecutive comparison rows came back as the identical
+       string "trading_hours.mis_squar…" — the panel showed four changes and
+       named none of them. The head and the tail are both kept and the middle
+       gives way. ⛔ The `title` still carries the whole path, and FULL VALUES
+       still prints it untouched.
+
+       ⚙ 24 AND 11 ARE MEASURED, ⛔ not picked. 🔬 At 13px the mono glyph is
+       7.62px; the comparison path column renders 197px and the history one
+       97px, less 8px of cell padding ⇒ 24 and 11 characters. The first draft
+       used 26 and 14 and every path came back with TWO ellipses — the code's
+       and then the CSS's on top of it. */
+    midTrunc(s, n) {
+      s = String(s === null || s === undefined ? "" : s);
+      if (s.length <= n) return s;
+      const head = Math.ceil((n - 1) / 2), tail = Math.floor((n - 1) / 2);
+      return s.slice(0, head) + "…" + s.slice(s.length - tail);
+    },
 
     /* One matcher for every table on the page: a global search must not mean
        eight slightly different searches.
@@ -490,15 +613,45 @@ function configPage() {
       return (((this.data.slippage || {}).rows) || [])
         .filter(r => this.hit(r.band, r.max_rs, r.pct_of_sl, "slippage"));
     },
-    stratRows() {
-      return (this.data.strategies || [])
-        .filter(s => this.hit(s.label, s.name, s.trade_type, s.status, "strategy strategies"));
+    /* ── MODE-SPECIFIC ────────────────────────────────────────────────────
+       "intraday" and "delivery" are part of the match on EVERY row, so the
+       popular-search chips select the whole panel rather than emptying it —
+       the same rule the category chips already follow, and the same rule the
+       server applies to the export. */
+    modeRows() {
+      return (this.data.mode_specific || []).filter(m =>
+        this.hit(m.label, m.source, m.note, "intraday delivery mode-specific"));
     },
-    stratLabel() {
-      const all = (this.data.strategies || []);
-      const on = all.filter(s => s.enabled).length;
-      return all.length ? this.stratRows().length + " of " + all.length +
-                          " · " + on + " enabled" : "";
+    modeLabel() {
+      const all = (this.data.mode_specific || []);
+      if (!all.length) return "";
+      const n = this.modeRows().length;
+      const differ = all.filter(m => !m.same).length;
+      return n + " of " + all.length + " · " + differ + " differ by mode";
+    },
+    /* Formats a mode cell WITHOUT changing it: a fraction becomes a percentage,
+       a leverage multiple gets its ×, and null is the unavailable marker.
+       ⛔ Zero is a real configured value and prints as one — only null is
+       unavailable. */
+    modeVal(v, unit) {
+      if (v === null || v === undefined) return "—";
+      if (unit === "pct") return (Number(v) * 100).toFixed(2) + "%";
+      if (unit === "x") return Number(v) + "x";
+      return String(v);
+    },
+    globalRows() {
+      return (this.data.global_limits || []).filter(g =>
+        this.hit(g.label, g.value, g.source, g.reason, "global limits"));
+    },
+    /* The quad card's "N moved" line. ⛔ Rendered from the payload's own count,
+       never from a number typed into the template — the two would drift the
+       first time a parameter gained a delivery twin. */
+    movedNote(group) {
+      const n = (this.data.moved_to_mode_panel || {})[group];
+      return n ? (n + (n === 1 ? " parameter here is set per mode"
+                               : " parameters here are set per mode")
+                    + " — see Mode-Specific Configuration below.")
+               : "";
     },
     cmpRows() {
       return (((this.data.comparison || {}).rows) || [])

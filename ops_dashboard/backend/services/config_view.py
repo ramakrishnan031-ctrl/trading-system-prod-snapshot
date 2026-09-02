@@ -185,9 +185,49 @@ def build_config_view(cfg: dict, today: Optional[str] = None, now=None) -> dict:
 #    object in its own right. The artwork draws both; both are removed BY
 #    DECISION. Screen 21 Scanner Attribution already owns the mapping, and it
 #    documents the same 1:1 measurement.
+#
+# ── REVISED DESIGN, 02-Sep-2026 (`gui/16. Configuration.txt`) ────────────────
+# ⛔ STRATEGY CONFIGURATION IS GONE — the panel, the `strategies` payload key,
+#    the "Strategies" category tab and the export sheet. Screen 17 Controls owns
+#    strategy enable/disable, and a second strategy table here is a duplicate of
+#    an operational surface no matter how read-only it renders. The "Scanners"
+#    tab goes with it: it existed only to state the 1:1 relationship that Screen
+#    21 already owns, and with no strategy rows on this screen it states a
+#    relationship between two things neither of which is shown.
+#
+# 🔑 MODE SEPARATION IS THE POINT OF THE REVISION: where the YAML configures a
+#    parameter SEPARATELY for intraday and delivery, this screen must show both
+#    — ⛔ never one number standing for both books.
+#
+# 🔬 MEASURED 02-Sep-2026 AT THE DEPLOYED SHA (`origin/main` 39292d3), by tracing
+#    the ENFORCERS, ⛔ not by reading key names:
+#      · `capital/position_sizer.py:375-384` — a positional (delivery) entry is
+#        sized on `delivery_risk_per_trade_pct` / `delivery_max_concentration_pct`
+#        / `delivery_max_position_value_pct`; an intraday entry on the globals.
+#        An unset delivery key RAISES; ⛔ it does not inherit.
+#      · `capital/risk_engine.py:326-343` — a delivery entry is gated on
+#        `delivery_daily_loss_limit_pct`, `delivery_max_sector_exposure_pct`,
+#        `max_open_delivery_positions` and `max_daily_delivery_trades`.
+#      · `capital/risk_engine.py:557-560` + `:655-660` — the OPEN_POSITIONS and
+#        DAILY_TRADES checks BRANCH on `bucket == "positional"`: a delivery entry
+#        never consults `max_open_positions` / `max_daily_trades` at all.
+#    ⇒ NINE parameters are genuinely mode-split (the seven above plus the capital
+#    bucket split and the leverage map). ⛔ NOT three.
+#
+# ⛔ AND THE CONVERSE IS ENFORCED TOO: a parameter with no delivery twin is shown
+#    ONCE, under GLOBAL LIMITS, WITH the reason it is shared —
+#    `max_consecutive_losses` is deliberately shared (`risk_engine.py:642-644`,
+#    "no delivery variant. The streak breaker is a portfolio-wide circuit"),
+#    `min_pass_score` and `max_single_order_qty` have no delivery key anywhere.
+#    ⛔ Duplicating a global under two headings is a FABRICATED DISTINCTION.
 # ═══════════════════════════════════════════════════════════════════════════
 
 _UNAVAILABLE = "—"
+
+#: Broker short forms for the leverage products that have no column in a
+#: two-book table. ⛔ Used ONLY in the row's own note; the full key name is in
+#: its tooltip and a row of its own lives in the Capital category tab.
+_SHORT_PRODUCT = {"COVER_ORDER": "CO", "BRACKET_ORDER": "BO"}
 
 #: Artwork label → the key that actually holds it. Order IS the artwork's order.
 _HOURS_ROWS = (("Market Open", "market_open"), ("Market Close", "market_close"),
@@ -205,9 +245,12 @@ _FACTOR_LABELS = {
     "spread_check": "Spread", "circuit_check": "Circuit", "signal_age": "Signal Age",
 }
 
-#: The artwork's 12 category tabs → the snapshot top-level keys each one owns.
+#: The category tabs → the snapshot top-level keys each one owns.
 #: "advanced" is the REMAINDER bucket and is computed, never listed: every
 #: top-level key no other tab claims lands there, so nothing is silently dropped.
+#: ⛔ "Strategies" and "Scanners" WERE tabs here and are GONE (02-Sep revision) —
+#: the revised design's category list is exactly the ten below, and neither a
+#: strategy row nor a scanner row belongs on a screen that shows neither.
 _CATEGORIES = (
     ("system", "System", ("clock", "logging", "webhook", "live_feed",
                           "special_sessions", "signal_queue", "excluded_symbols",
@@ -221,10 +264,8 @@ _CATEGORIES = (
     ("position_sizing", "Position Sizing", ("position_sizing", "portfolio_allocator")),
     ("scoring", "Scoring", ()),
     ("slippage", "Slippage", ("slippage_bands",)),
-    ("strategies", "Strategies", ()),
     ("alerts", "Alerts", ("alerts",)),
     ("broker", "Broker", ("broker",)),
-    ("scanners", "Scanners", ()),
     ("advanced", "Advanced", ()),
 )
 
@@ -246,6 +287,35 @@ def _pct_direct(value, dp: int = 2):
     """A value already stored AS a percentage (broker_costs.yaml is)."""
     f = _f(value)
     return None if f is None else "%.*f%%" % (dp, f)
+
+
+def _inr(value):
+    """Rupees in the Indian grouping the rest of the dashboard uses. ⛔ Not a
+    rounding: paise are kept when there are any, dropped when there are none, so
+    a whole-rupee budget does not carry two meaningless zeros on a KPI card."""
+    f = _f(value)
+    if f is None:
+        return _UNAVAILABLE
+    whole, frac = divmod(round(abs(f) * 100), 100)
+    digits = str(int(whole))
+    if len(digits) > 3:
+        head, tail = digits[:-3], digits[-3:]
+        parts = []
+        while len(head) > 2:
+            parts.insert(0, head[-2:])
+            head = head[:-2]
+        if head:
+            parts.insert(0, head)
+        digits = ",".join(parts + [tail])
+    return ("-" if f < 0 else "") + digits + (".%02d" % frac if frac else "")
+
+
+def _yesno(value):
+    """A configured BOOLEAN as the artwork's plain word. ⛔ `None` stays None —
+    an unset flag is UNAVAILABLE, ⛔ never "No": "No" is a configured decision
+    and "unset" is the absence of one, and on a config board those must not read
+    the same."""
+    return None if value is None else ("Yes" if bool(value) else "No")
 
 
 def _time12(hhmm):
@@ -307,10 +377,33 @@ def _leaf_diff(old_system: dict, new_system: dict) -> list:
     return rows
 
 
+def _pair(intraday, delivery, fmt=str):
+    """A KPI value for a MODE-SPLIT parameter: 'intraday / delivery'.
+
+    ⛔ NOT a sum and ⛔ not the intraday value standing for both — the two books
+    are separately configured and separately enforced, so a single number on the
+    card would be a claim about the delivery book that the config does not make.
+    Either side missing renders as the unavailable marker on ITS OWN side, so a
+    half-configured pair is visible as exactly that.
+    """
+    if intraday is None and delivery is None:
+        return None
+    left = _UNAVAILABLE if intraday is None else fmt(intraday)
+    right = _UNAVAILABLE if delivery is None else fmt(delivery)
+    return "%s / %s" % (left, right)
+
+
 def _kpis(cfg, today, system, scoring, session, snap) -> list:
     """The artwork's six top KPI cards. Each carries a sub-line, and every
     sub-line that states a percentage states ITS BASE — a bare percentage with
-    no base is not a number."""
+    no base is not a number.
+
+    🔑 THREE OF THE SIX ARE MODE-SPLIT (Max Open Positions, Max Daily Trades,
+    Daily Loss Limit). They render `intraday / delivery` and their sub-line names
+    which side is which. ⛔ The artwork draws one number; one number here would
+    print the intraday cap over the delivery book, which at the deployed config
+    is 5-vs-3 and 10-vs-5 — a real, live difference, not a cosmetic one.
+    """
     risk = system.get("risk") if isinstance(system.get("risk"), dict) else {}
     broker = system.get("broker") if isinstance(system.get("broker"), dict) else {}
 
@@ -319,27 +412,37 @@ def _kpis(cfg, today, system, scoring, session, snap) -> list:
     paper = (mode or "").upper() == "PAPER"
 
     max_open = risk.get("max_open_positions")
+    max_open_d = risk.get("max_open_delivery_positions")
     open_now = db_reader.open_positions_count(cfg)
     max_trades = risk.get("max_daily_trades")
+    max_trades_d = risk.get("max_daily_delivery_trades")
     used_trades = db_reader.daily_trades_used(cfg, today)
 
-    def _util(used, cap):
+    def _util(used, cap, what):
+        """⛔ A BARE PERCENTAGE NAMES NOTHING. With two caps on the card, "80%"
+        has to say which one it is 80% of — the counter the system keeps is
+        account-wide, so it is reported against the INTRADAY cap and says so."""
         f = _f(cap)
         if f is None or f <= 0 or used is None:
-            return "%s (cap unavailable)" % used
-        return "%s (%.0f%%)" % (used, 100.0 * used / f)
+            return "%s %s (intraday cap unavailable)" % (used, what)
+        return "%s %s (%.0f%% of the intraday cap)" % (used, what, 100.0 * used / f)
 
     # Daily loss: the LIMIT is a percentage of opening capital, so the used
     # figure is shown against that exact base — ⛔ never a bare "remaining %".
+    # ⚠️ THE ₹ BUDGET IS STATED AGAINST THE INTRADAY LIMIT ONLY, and says so:
+    # the delivery limit scopes the PRE-TRADE gate, while the post-close
+    # portfolio breaker in fund_manager stays global (there is one account-wide
+    # realized P&L and no per-book attribution to split it with).
     loss_pct = _f(risk.get("daily_loss_limit_pct"))
+    loss_pct_d = _f(risk.get("delivery_daily_loss_limit_pct"))
     opening = db_reader.opening_capital(cfg, today)
     loss_used = round(db_reader.realized_loss_today(cfg, today), 2)
     if opening is not None and loss_pct is not None:
         budget = round(loss_pct * opening, 2)
-        loss_sub = "Used ₹%.2f of ₹%.2f (base: opening capital ₹%.2f)" % (
-            loss_used, budget, opening)
+        loss_sub = "Intraday / Delivery · used ₹%s of ₹%s (of opening capital)" % (
+            _inr(loss_used), _inr(budget))
     elif loss_pct is not None:
-        loss_sub = "Opening capital not yet recorded — ₹ budget unavailable"
+        loss_sub = "Intraday / Delivery · opening capital not recorded — ₹ budget unavailable"
     else:
         loss_sub = None
 
@@ -356,20 +459,23 @@ def _kpis(cfg, today, system, scoring, session, snap) -> list:
                 if session.get("last_updated") else "Last sync: unavailable",
          "tone": "info"},
         {"key": "max_open_positions", "label": "Max Open Positions",
-         "value": max_open, "sub": "Utilized: %s" % _util(open_now, max_open),
+         "value": _pair(max_open, max_open_d), "split": True,
+         "sub": "Intraday / Delivery · %s" % _util(open_now, max_open, "open now"),
          "tone": "info"},
         {"key": "max_daily_trades", "label": "Max Daily Trades",
-         "value": max_trades, "sub": "Completed: %s" % _util(used_trades, max_trades),
+         "value": _pair(max_trades, max_trades_d), "split": True,
+         "sub": "Intraday / Delivery · %s" % _util(used_trades, max_trades, "today"),
          "tone": "info"},
         {"key": "min_pass_score", "label": "Minimum Pass Score",
          "value": scoring.get("min_pass_score"),
-         "sub": ("High score: %s+" % scoring["high_score_threshold"])
+         "sub": ("High score: %s+ · one score gates both books"
+                 % scoring["high_score_threshold"])
                 if scoring.get("high_score_threshold") is not None
                 else "High-score threshold unavailable",
          "tone": "info"},
         {"key": "daily_loss_limit", "label": "Daily Loss Limit",
-         "value": _pct(risk.get("daily_loss_limit_pct")), "sub": loss_sub,
-         "tone": "warn"},
+         "value": _pair(loss_pct, loss_pct_d, lambda v: "%.2f%%" % (v * 100.0)),
+         "split": True, "sub": loss_sub, "tone": "warn"},
     ]
 
 
@@ -423,38 +529,138 @@ def _slippage(system) -> dict:
     }
 
 
-def _strategies(cfg) -> list:
-    """STRATEGY CONFIGURATION rows — Strategy Name · Enabled · Trade Type · Status.
+def _split(label, intraday, delivery, src, unit=None, note=None):
+    """One MODE-SPECIFIC row. `intraday`/`delivery` are the RAW configured values
+    of two INDEPENDENT keys — ⛔ neither is derived from the other, and ⛔ a
+    missing side is never filled from the other side. `same` is a FACT about
+    today's config, ⛔ not a reason to collapse the row: the two keys are
+    separately settable and separately enforced."""
+    return {"label": label, "intraday": intraday, "delivery": delivery,
+            "unit": unit, "source": src, "note": note,
+            "same": intraday == delivery,
+            "partial": (intraday is None) != (delivery is None)}
 
-    ⛔ NO SCANNER COLUMN. Scanner→strategy is 1:1 and the names are identical, so
-    the column would print the row's own identity a second time.
-    ⛔ `enabled` is DISPLAYED, never operated: this screen has no toggle, no
-    endpoint and no mutation path. Screen 17 owns that.
+
+def _mode_specific(system) -> list:
+    """Every parameter the running configuration defines SEPARATELY per book.
+
+    🔬 Each row's `source` names BOTH keys, and each key below was confirmed to
+    reach a live enforcer at the deployed SHA (see the block comment above):
+    position_sizer resolves the three sizing limits, risk_engine resolves the two
+    percentage gates and BRANCHES on `bucket == "positional"` for the two count
+    caps — a delivery entry never reads the intraday cap at all.
+
+    ⛔ NOTHING HERE IS DERIVED. A row whose delivery key is absent shows the
+    unavailable marker on the delivery side, which is the honest rendering of a
+    config that would REJECT a delivery entry at boot (the loader requires the
+    sizing keys and exits 5 when one is missing).
     """
-    rows = []
-    for name, s in sorted(config_reader.get_strategies(cfg).items(),
-                          key=lambda kv: (kv[1].get("display_name") or kv[0]).lower()):
-        on = bool(s.get("enabled"))
-        rows.append({
-            "name": name,
-            "label": s.get("display_name") or name,
-            "enabled": on,
-            "trade_type": s.get("intent"),          # INTRADAY | DELIVERY | None
-            "status": "ACTIVE" if on else "DISABLED",
-            "direction": s.get("direction"),
-        })
-    return rows
+    capital = system.get("capital") if isinstance(system.get("capital"), dict) else {}
+    sizing = system.get("position_sizing") if isinstance(system.get("position_sizing"), dict) else {}
+    risk = system.get("risk") if isinstance(system.get("risk"), dict) else {}
+    lev = capital.get("leverage_map") if isinstance(capital.get("leverage_map"), dict) else {}
+    # ⚠️ THE MAP HAS FOUR PRODUCTS AND THE OTHER TWO ARE NAMED, ⛔ not dropped:
+    # COVER_ORDER and BRACKET_ORDER are intraday products, so they have no column
+    # in a two-book table — but a Leverage row showing 2 of 4 configured
+    # multipliers would read as the whole map. They are named in the cell by the
+    # broker's own short forms, spelled in full in the row's tooltip, and each is
+    # already a row of its own in the Capital category tab.
+    _other_lev = {k: v for k, v in lev.items()
+                  if k not in ("INTRADAY", "DELIVERY") and _f(v) is not None}
+
+    return [
+        _split("Capital Allocation",
+               _f(capital.get("intraday_bucket_pct")), _f(capital.get("positional_bucket_pct")),
+               "capital.intraday_bucket_pct / .positional_bucket_pct", "pct",
+               "of deployable capital"),
+        # ⚠️ THE MAP HAS FOUR PRODUCTS, AND THE OTHER TWO ARE NAMED, ⛔ not
+        # dropped: COVER_ORDER and BRACKET_ORDER are intraday products, so they
+        # have no column in a two-book table — but a Leverage row that silently
+        # showed 2 of 4 configured multipliers would read as the whole map.
+        _split("Leverage", _f(lev.get("INTRADAY")), _f(lev.get("DELIVERY")),
+               "capital.leverage_map.INTRADAY / .DELIVERY"
+               + ((" (also " + ", ".join("%s %gx" % (k, _f(v))
+                                         for k, v in _other_lev.items()) + ")")
+                  if _other_lev else ""),
+               "x",
+               "CNC pinned at exactly 1.0"
+               + ((" · also " + ", ".join("%s %gx" % (_SHORT_PRODUCT.get(k, k), _f(v))
+                                          for k, v in _other_lev.items()))
+                  if _other_lev else "")),
+        _split("Risk Per Trade",
+               _f(sizing.get("risk_per_trade_pct")), _f(sizing.get("delivery_risk_per_trade_pct")),
+               "position_sizing.risk_per_trade_pct / .delivery_risk_per_trade_pct", "pct",
+               "of total capital"),
+        _split("Max Concentration",
+               _f(sizing.get("max_concentration_pct")),
+               _f(sizing.get("delivery_max_concentration_pct")),
+               "position_sizing.max_concentration_pct / .delivery_max_concentration_pct", "pct",
+               "of total capital, one symbol"),
+        _split("Max Position Value",
+               _f(sizing.get("max_position_value_pct")),
+               _f(sizing.get("delivery_max_position_value_pct")),
+               "position_sizing.max_position_value_pct / .delivery_max_position_value_pct", "pct",
+               "of total capital, per order"),
+        _split("Max Positions (Open)",
+               risk.get("max_open_positions"), risk.get("max_open_delivery_positions"),
+               "risk.max_open_positions / .max_open_delivery_positions", None,
+               "delivery counts toward the intraday cap"),
+        _split("Max Trades (Per Day)",
+               risk.get("max_daily_trades"), risk.get("max_daily_delivery_trades"),
+               "risk.max_daily_trades / .max_daily_delivery_trades", None,
+               "one-way, as above"),
+        _split("Daily Loss Limit",
+               _f(risk.get("daily_loss_limit_pct")), _f(risk.get("delivery_daily_loss_limit_pct")),
+               "risk.daily_loss_limit_pct / .delivery_daily_loss_limit_pct", "pct",
+               "pre-trade gate only"),
+        # ⚠️ THE BASE IS UNCONDITIONAL; the cap MODE only appends to it. An
+        # earlier draft made the whole note conditional on `sector_cap_mode`, so
+        # a config without that key printed two bare "40.00%" cells with nothing
+        # saying 40% OF WHAT. ⛔ Every percentage names its base, always.
+        _split("Sector Exposure",
+               _f(risk.get("max_sector_exposure_pct")),
+               _f(risk.get("delivery_max_sector_exposure_pct")),
+               "risk.max_sector_exposure_pct / .delivery_max_sector_exposure_pct", "pct",
+               "of total capital, one sector"),
+    ]
 
 
-def _categories(system, scoring, strategies, broker_costs, scan_map) -> list:
-    """The artwork's 12 category tabs, each carrying its REAL rows.
+def _global_limits(system, scoring) -> list:
+    """The limit-shaped parameters that have NO delivery twin, each WITH the
+    reason it is shared.
+
+    ⛔ THIS PANEL EXISTS TO PREVENT A FABRICATED DISTINCTION. A reader who sees
+    nine parameters split per book will assume the rest are split too; these four
+    are not, and saying so once is the only honest alternative to printing one
+    number under two headings.
+    """
+    sizing = system.get("position_sizing") if isinstance(system.get("position_sizing"), dict) else {}
+    risk = system.get("risk") if isinstance(system.get("risk"), dict) else {}
+    return [
+        {"label": "Minimum Eligible Score", "value": scoring.get("min_pass_score"),
+         "source": "scoring_weights.yaml min_pass_score",
+         "reason": "a signal is scored before its product is chosen"},
+        {"label": "Max Qty (Per Order)", "value": sizing.get("max_single_order_qty"),
+         "source": "position_sizing.max_single_order_qty",
+         "reason": "a shares-per-order sanity cap, not a lot cap"},
+        {"label": "Max Consecutive Losses", "value": risk.get("max_consecutive_losses"),
+         "source": "risk.max_consecutive_losses",
+         "reason": "the streak breaker is a portfolio-wide circuit"},
+        {"label": "Price Drift Threshold",
+         "value": _pct(risk.get("price_drift_threshold")),
+         "source": "risk.price_drift_threshold",
+         "reason": "an execution guard on price, independent of product"},
+    ]
+
+
+def _categories(system, scoring, broker_costs) -> list:
+    """The ten category tabs, each carrying its REAL rows.
 
     ⛔ NOTHING IS SILENTLY DROPPED: "Advanced" is the remainder of the snapshot
     tree after every other tab has taken its keys, so every leaf the running
-    system carries is reachable from some tab.
-    ⛔ THE "Scanners" TAB CARRIES NO PER-SCANNER ROW. It states the measured
-    strategy-to-scanner relationship and its count; one row per scanner would be
-    exactly the separate scanner identity this screen must not create.
+    system carries is reachable from some tab — including every `delivery_*` key
+    the Mode-Specific panel names, which stays reachable under Risk and Position
+    Sizing exactly as before.
     """
     claimed, out = set(), []
     for key, label, owns in _CATEGORIES:
@@ -469,11 +675,6 @@ def _categories(system, scoring, strategies, broker_costs, scan_map) -> list:
             for path, leaf in sorted(_flatten(scoring).items()):
                 rows.append({"parameter": "scoring_weights.%s" % path,
                              "value": _UNAVAILABLE if leaf is None else str(leaf)})
-        elif key == "strategies":
-            for s in strategies:
-                rows.append({"parameter": s["name"],
-                             "value": "%s / %s" % (s["status"],
-                                                   s["trade_type"] or _UNAVAILABLE)})
         elif key == "broker":
             for path, leaf in sorted(_flatten(broker_costs).items()):
                 rows.append({"parameter": "broker_costs.%s" % path,
@@ -485,13 +686,6 @@ def _categories(system, scoring, strategies, broker_costs, scan_map) -> list:
                 for path, leaf in sorted(_flatten({"entry_gate.slippage_control": slc}).items()):
                     rows.append({"parameter": path,
                                  "value": _UNAVAILABLE if leaf is None else str(leaf)})
-        elif key == "scanners":
-            names = sorted(set(scan_map.values()))
-            rows.append({"parameter": "scanners_mapped", "value": str(len(scan_map))})
-            rows.append({"parameter": "distinct_strategies_targeted", "value": str(len(names))})
-            rows.append({"parameter": "relationship",
-                         "value": "1:1 - scanner is not a separate configuration "
-                                  "object; the strategy is the identity"})
         out.append({"key": key, "label": label, "rows": rows, "count": len(rows)})
 
     remainder = [k for k in sorted(system) if k not in claimed and not k.startswith("_")]
@@ -526,17 +720,17 @@ def build_config_center(cfg: dict, today=None, now=None) -> dict:
     scoring = config_reader.get_scoring_weights(cfg)
     broker = system.get("broker") if isinstance(system.get("broker"), dict) else {}
     broker_costs = config_reader.get_broker_costs(cfg, broker.get("primary"))
-    strategies = _strategies(cfg)
-    scan_map = config_reader.get_scan_webhook_map(cfg)
 
     hours = system.get("trading_hours") if isinstance(system.get("trading_hours"), dict) else {}
     capital = system.get("capital") if isinstance(system.get("capital"), dict) else {}
     risk = system.get("risk") if isinstance(system.get("risk"), dict) else {}
     sizing = system.get("position_sizing") if isinstance(system.get("position_sizing"), dict) else {}
 
-    lev = capital.get("leverage_map") if isinstance(capital.get("leverage_map"), dict) else {}
-    lev_txt = " / ".join("%s %gx" % (k, _f(v)) for k, v in lev.items()
-                         if _f(v) is not None) or None
+    mode_specific = _mode_specific(system)
+    #: How many of THIS group's parameters moved to the Mode-Specific panel. The
+    #: quad card prints it, so a card that looks short says WHY it is short
+    #: rather than reading as a panel that lost rows.
+    _moved = {"capital": 2, "risk": 4, "position_sizing": 3}
 
     # ── CONFIGURATION COMPARISON: current vs the most recent snapshot whose hash
     #    DIFFERS. ⛔ Not "yesterday" — production ran 10 identical days in a row
@@ -589,39 +783,76 @@ def build_config_center(cfg: dict, today=None, now=None) -> dict:
                 db_reader.config_snapshot_history(cfg)),
         },
         "kpis": _kpis(cfg, today, system, scoring, session, snap),
-        "categories": _categories(system, scoring, strategies, broker_costs, scan_map),
+        "categories": _categories(system, scoring, broker_costs),
+        # ── THE SYSTEM CONFIGURATION QUAD ────────────────────────────────────
+        # ⛔ EVERY MODE-SPLIT PARAMETER HAS LEFT THESE CARDS. They used to print
+        # Max Open Positions, Max Daily Trades, Daily Loss Limit, Sector
+        # Exposure, Risk Per Trade, Max Position Size, Max Concentration and the
+        # capital split as SINGLE values — nine claims that the delivery book
+        # runs on the intraday number. Each card now holds only the parameters
+        # of its group that genuinely govern both books, and says how many of its
+        # own moved. ⛔ No parameter is shown in two places.
         "trading_hours": [_row(label, _time12(hours.get(key)))
                           for label, key in _HOURS_ROWS],
         "capital": [
-            _row("Intraday Allocation", _pct(capital.get("intraday_bucket_pct")),
-                 "share of deployable capital"),
-            _row("Delivery Allocation", _pct(capital.get("positional_bucket_pct")),
-                 "share of deployable capital"),
-            _row("Leverage", lev_txt, "per product, from leverage_map"),
             _row("SL Buffer", _pct(capital.get("sl_limit_offset_pct")),
-                 "sl_limit_offset_pct"),
-            _row("Emergency Exit Buffer", _pct(capital.get("emergency_exit_buffer_pct"))),
+                 "intraday stop-limit offset (sl_limit_offset_pct)"),
+            _row("GTT SL Buffer", _pct(capital.get("gtt_sl_limit_offset_pct")),
+                 "deeper offset for an overnight CNC OCO-GTT stop"),
+            _row("Emergency Exit Buffer", _pct(capital.get("emergency_exit_buffer_pct")),
+                 "marketable-limit band on a kill/emergency exit"),
+            _row("SL-M Margin Buffer", _pct(capital.get("slm_margin_buffer_pct")),
+                 "margin head-room for an unknown SL-M fill price"),
+            _row("Conditional Allocation",
+                 _yesno(capital.get("conditional_allocation_enabled")),
+                 "off = the fixed bucket split above applies"),
         ],
         "risk": [
-            _row("Max Open Positions", risk.get("max_open_positions")),
-            _row("Max Daily Trades", risk.get("max_daily_trades")),
-            _row("Max Consecutive Losses", risk.get("max_consecutive_losses")),
-            _row("Daily Loss Limit %", _pct(risk.get("daily_loss_limit_pct")),
-                 "of opening capital"),
-            _row("Sector Exposure %", _pct(risk.get("max_sector_exposure_pct")),
-                 ("mode: %s" % risk.get("sector_cap_mode"))
-                 if risk.get("sector_cap_mode") else None),
-            _row("Price Drift Threshold", _pct(risk.get("price_drift_threshold"))),
+            _row("Sector Cap Mode", risk.get("sector_cap_mode"),
+                 "observe = the cap LOGS a would-reject; it does not reject"),
+            _row("One Trade / Symbol+Direction",
+                 _yesno(risk.get("one_trade_per_symbol_direction_per_day")),
+                 "a second same-direction entry is rejected for the rest of the day"),
+            _row("Daily Loss Includes MTM",
+                 _yesno(risk.get("daily_loss_include_unrealized")),
+                 "off = the breach is enforced on realized P&L only"),
+            _row("Sector Unknown Alert", _pct(risk.get("sector_unknown_alert_pct")),
+                 "one-shot data-quality alert threshold"),
         ],
         "position_sizing": [
-            _row("Risk Per Trade", _pct(sizing.get("risk_per_trade_pct")),
-                 "of deployable capital"),
-            _row("Max Position Size", _pct(sizing.get("max_position_value_pct")),
-                 "max_position_value_pct"),
-            _row("Max Concentration", _pct(sizing.get("max_concentration_pct"))),
-            _row("Min Qty Threshold", sizing.get("min_qty_threshold")),
-            _row("Min Tick Size", sizing.get("min_tick_size")),
+            _row("Tiered Sizing", _yesno(sizing.get("enabled")),
+                 "off = a flat ₹ value per order"),
+            _row("Dynamic By Win-rate", _yesno(sizing.get("dynamic_by_winrate")),
+                 "performance weights applied after the tier multiplier"),
+            _row("Multiplier Range",
+                 ("%.2f× – %.2f×" % (_f(sizing["min_multiplier"]),
+                                        _f(sizing["max_multiplier"])))
+                 if _f(sizing.get("min_multiplier")) is not None
+                 and _f(sizing.get("max_multiplier")) is not None else None,
+                 "floor and cap on the performance weight"),
+            _row("Min Qty Threshold", sizing.get("min_qty_threshold"),
+                 "a signal sizing below this is rejected"),
+            _row("Min Tick Size", sizing.get("min_tick_size"),
+                 "penny-stock guard on the stop distance"),
+            _row("Lot Skew Rejection", _pct(sizing.get("lot_skew_rejection_threshold")),
+                 "skipped when lot size is 1"),
         ],
+        "moved_to_mode_panel": _moved,
+        # ── MODE-SPECIFIC + GLOBAL LIMITS ────────────────────────────────────
+        "mode_specific": mode_specific,
+        "global_limits": _global_limits(system, scoring),
+        # ⭐ THE CLAUSES THAT USED TO SIT IN NINE ROW NOTES LIVE HERE, ONCE.
+        # ⛔ Nothing was dropped to shorten the table: a qualification that is
+        # true of the whole panel belongs under the panel, not repeated in every
+        # row where it costs a second line of height each time.
+        "mode_note": "Each row is TWO independently configured keys: a "
+                     "delivery (CNC) entry reads only the Delivery column, an "
+                     "intraday (MIS/CO/BO) entry only the Intraday one. Neither "
+                     "inherits from the other — a missing delivery key is "
+                     "rejected at boot, never substituted.",
+        "global_limits_note": "One configured value governs BOTH books — the "
+                              "configuration defines no delivery variant. Each "
+                              "row states why it is shared.",
         "scoring": {
             "min_pass_score": scoring.get("min_pass_score"),
             "high_score_threshold": scoring.get("high_score_threshold"),
@@ -631,7 +862,6 @@ def build_config_center(cfg: dict, today=None, now=None) -> dict:
             "available": bool(weight_rows),
         },
         "slippage": _slippage(system),
-        "strategies": strategies,
         "broker_costs": [
             _row("Brokerage", _pct_direct(broker_costs.get("brokerage_pct_intraday"), 4),
                  ("capped at Rs %g per order" % _f(broker_costs["brokerage_flat_intraday"]))
@@ -655,7 +885,12 @@ def build_config_center(cfg: dict, today=None, now=None) -> dict:
         "history": history,
         "changed_by_note": "Change author is not captured anywhere in the system "
                            "(G-5, single operator) - shown as unavailable, never inferred.",
-        "search_categories": ["Risk", "Capital", "Strategy", "Score", "Slippage", "Broker"],
+        # ⛔ "Strategy" IS GONE FROM THE CHIPS. The artwork draws it, but with no
+        # strategy row on this screen it is a chip that empties every panel and
+        # returns nothing — a control that only ever fails. "Intraday" and
+        # "Delivery" take its place because those DO select something now.
+        "search_categories": ["Risk", "Capital", "Intraday", "Delivery",
+                              "Score", "Slippage", "Broker"],
     }
 
 
@@ -675,6 +910,18 @@ def export_sheets(payload: dict, q: str = "") -> list:
 
     slip = payload.get("slippage") or {}
     scoring = payload.get("scoring") or {}
+
+    def _mval(value, unit):
+        """A mode column cell. ⛔ The unit travels WITH the number: a bare 0.1 in
+        a spreadsheet cell is unreadable, and 10% written as 10 is wrong."""
+        if value is None:
+            return _UNAVAILABLE
+        if unit == "pct":
+            return "%.2f%%" % (float(value) * 100.0)
+        if unit == "x":
+            return "%gx" % float(value)
+        return value
+
     sheets = [
         ("KPIs", ["Metric", "Value", "Detail"],
          [[k.get("label"), k.get("value") if k.get("value") is not None else _UNAVAILABLE,
@@ -689,10 +936,18 @@ def export_sheets(payload: dict, q: str = "") -> list:
          [["TOTAL", scoring.get("total_weight")]]),
         ("Slippage", ["Price Band (Rs)", "Max Slippage (Rs)", "Max % of stop distance"],
          [[r.get("band"), r.get("max_rs"), r.get("pct_of_sl")] for r in slip.get("rows") or []]),
-        ("Strategies", ["Strategy", "Enabled", "Trade Type", "Status"],
-         [[s.get("label"), "YES" if s.get("enabled") else "NO",
-           s.get("trade_type") or _UNAVAILABLE, s.get("status")]
-          for s in payload.get("strategies") or []]),
+        # ⛔ THE "Strategies" SHEET IS GONE with the panel it exported. A workbook
+        # that still carried it would let a reader reconstruct exactly the
+        # strategy table this screen no longer owns.
+        ("Mode-Specific", ["Parameter", "Intraday", "Delivery", "Config Key", "Note"],
+         [[m.get("label"), _mval(m.get("intraday"), m.get("unit")),
+           _mval(m.get("delivery"), m.get("unit")), m.get("source"), m.get("note") or ""]
+          for m in payload.get("mode_specific") or []]),
+        ("Global Limits", ["Parameter", "Value", "Config Key", "Why it is shared"],
+         [[g.get("label"),
+           g.get("value") if g.get("value") is not None else _UNAVAILABLE,
+           g.get("source"), g.get("reason")]
+          for g in payload.get("global_limits") or []]),
         ("Broker Costs", ["Charge", "Value", "Note"], kv(payload.get("broker_costs") or [])),
         ("Comparison", ["Parameter", "Module", "Old Value", "New Value"],
          [[r.get("parameter"), r.get("module"), r.get("old"), r.get("new")]

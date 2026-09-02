@@ -6074,7 +6074,13 @@ main.content:has(> .cfg16-page) { width: 100%; max-width: none; margin: 0;
   padding: 12px 16px 10px 12px; }
 
 .cfg16-page { display: flex; flex-direction: column; gap: 12px; }
-.cfg16-page .panel { margin-bottom: 0; }
+/* ⚙ DENSITY. The artwork is a dense configuration centre: measured against the
+   PNG the build ran 1.63x the viewport where the artwork's own 1536x1024
+   proportions imply ~1.19x. The shared 16px panel padding is trimmed to 12/13px
+   ON THIS PAGE ONLY — ⛔ the shared `.panel` rule is untouched, so no other
+   screen moves. ⛔ Nothing is deleted and nothing is hidden to buy the height. */
+.cfg16-page .panel { margin-bottom: 0; padding: 12px 13px; }
+.cfg16-page .panel > .panel-title { margin-bottom: 9px; }
 .cfg16-page .panel-sub { font-size: 13px; color: var(--dim); font-weight: 500; }
 .cfg16-page .mono { font-size: 13px; }
 .cfg16-page .dt-td { font-size: 13px; }
@@ -6098,7 +6104,15 @@ main.content:has(> .cfg16-page) { width: 100%; max-width: none; margin: 0;
 .cfg16-page .kpi-warn .cfg16-kpisub { color: var(--orange); }
 
 /* Shell: main column + right rail, mirroring the artwork's composition. */
-.cfg16-page .cfg16-shell { display: grid; grid-template-columns: minmax(0, 1fr) 380px;
+/* ⚙ THE RAIL WIDTH IS THE ARTWORK'S OWN, ⛔ not a round number. Measured off
+   `16. Configuration.png` by edge detection: the content column spans x 192→1522
+   (1330px) and the rail starts at x 1146, so the rail is (1522-1146)/1330 =
+   28.3% of the content column. At a true 1920 that content column is 1692px
+   wide ⇒ 479px. ⚠️ The build carried 380px, and the cost was not cosmetic: the
+   rail's 3- and 6-column tables did not fit, so CONFIGURATION COMPARISON
+   rendered a horizontal scrollbar showing the Parameter column and hiding BOTH
+   value columns — a comparison panel with no values in it. */
+.cfg16-page .cfg16-shell { display: grid; grid-template-columns: minmax(0, 1fr) 476px;
   gap: 12px; align-items: start; }
 .cfg16-page .cfg16-main { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .cfg16-page .cfg16-rail { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
@@ -6127,7 +6141,7 @@ main.content:has(> .cfg16-page) { width: 100%; max-width: none; margin: 0;
 .cfg16-page .cfg16-cardttl { margin: 0 0 8px; font-size: 13px; font-weight: 700;
   letter-spacing: .04em; color: var(--text); }
 .cfg16-page .cfg16-kv { display: flex; align-items: baseline; justify-content: space-between;
-  gap: 10px; padding: 4px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+  gap: 10px; padding: 3px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
 .cfg16-page .cfg16-kv:last-child { border-bottom: 0; }
 .cfg16-page .cfg16-k { color: var(--muted); min-width: 0; flex: 1 1 auto; }
 /* ⚠️ FOUND BY RENDERING THE PAGE, not by the tests: `white-space: nowrap` here
@@ -6144,7 +6158,7 @@ main.content:has(> .cfg16-page) { width: 100%; max-width: none; margin: 0;
      `break-word` only breaks a token that cannot fit on a line of its own. */
   overflow-wrap: break-word; flex: 0 1 auto; max-width: 68%; }
 
-.cfg16-page .cfg16-catscroll { max-height: 340px; overflow: auto; }
+.cfg16-page .cfg16-catscroll { max-height: 300px; overflow: auto; }
 
 /* Scoring + slippage side by side, as the artwork draws them. */
 .cfg16-page .cfg16-row2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -6170,15 +6184,100 @@ main.content:has(> .cfg16-page) { width: 100%; max-width: none; margin: 0;
   line-height: 1.45; }
 .cfg16-page .cfg16-foot { margin: 2px 0 0; font-size: 13px; color: var(--dim); }
 
-/* Strategy table: read-only pills, ⛔ never switches. */
-.cfg16-page .cfg16-stratscroll { max-height: 640px; overflow: auto; }
-.cfg16-page .cfg16-pill { display: inline-block; padding: 2px 10px; border-radius: 999px;
-  font-size: 13px; font-weight: 700; letter-spacing: .02em; }
-.cfg16-page .cfg16-on { background: var(--pos-tint); color: var(--pos); }
-.cfg16-page .cfg16-off { background: var(--neg-tint); color: var(--neg); }
-.cfg16-page .cfg16-badge { display: inline-block; padding: 2px 9px; border-radius: 6px;
-  border: 1px solid var(--border); background: var(--panel2); color: var(--muted);
-  font-size: 13px; font-weight: 600; }
+/* ── ROW 4: MODE-SPECIFIC + GLOBAL LIMITS ───────────────────────────────────
+   ⛔ The Strategy-table rules that stood here are GONE with the panel (02-Sep).
+   The two panels take the artwork's own row-4 proportion — measured off
+   `16. Configuration.png`: the left panel spans 452px and the right 487px of a
+   947px main column (≈48 : 52). The mode table carries one more column, so the
+   split is nudged to 1.08fr : 1fr (≈52 : 48) rather than reproducing 48:52
+   exactly and squeezing four columns into the narrower half. */
+.cfg16-page .cfg16-row3 { display: grid;
+  grid-template-columns: minmax(0, 1.08fr) minmax(0, 1fr); gap: 12px;
+  align-items: stretch; }
+.cfg16-page .cfg16-row3 > .panel { display: flex; flex-direction: column; }
+/* ⚠️ `auto`, ⛔ NEVER `fixed`. S17 proved it on this exact shape: `fixed` gave
+   equal columns, every label wrapped to three lines, and the header collided
+   into "PARAMETERINTRADAY". A label column beside numeric ones needs `auto`. */
+.cfg16-page .cfg16-modetbl, .cfg16-page .cfg16-globtbl {
+  width: 100%; table-layout: auto; }
+/* ⚙ COLUMN SHARES, and they were MEASURED, not guessed. At the first render the
+   Parameter column took only 118px, so five of the nine labels wrapped to two
+   lines and the table stood 361px tall — ⛔ the Scope prose was NOT the cause;
+   every scope note already fitted one line in its 308px. Giving the label its
+   width and the scope the remainder puts every row back on one line. */
+.cfg16-page .cfg16-modetbl .dt-th:nth-child(1) { width: 30%; }
+.cfg16-page .cfg16-modetbl .dt-th:nth-child(2),
+.cfg16-page .cfg16-modetbl .dt-th:nth-child(3) { width: 14%; }
+/* ⚙ GLOBAL LIMITS — Rama, 02-Sep: keep the "why it is shared" column, "but
+   ensure it does not become visually oversized compared with the actual value
+   column." 🔬 It was 174 / 76 / 294 — the prose ran 3.9x the value it explains.
+   The value column doubles and the reason gives the width back, so the ratio is
+   ~1.9x and the NUMBER reads first. ⛔ The column is not removed and its text
+   is not cut; it is a footnote sized like one. */
+.cfg16-page .cfg16-globtbl .dt-th:nth-child(1) { width: 30%; }
+.cfg16-page .cfg16-globtbl .dt-th:nth-child(2) { width: 22%; }
+.cfg16-page .cfg16-modetbl .dt-td:first-child,
+.cfg16-page .cfg16-globtbl .dt-td:first-child { white-space: nowrap; }
+.cfg16-page .cfg16-modetbl .dt-td, .cfg16-page .cfg16-globtbl .dt-td {
+  padding-top: 4px; padding-bottom: 4px; }
+/* The Scope / reason column is prose beside numbers: it may wrap, it is dimmer
+   than the value it explains, and it takes what is left after the numbers. */
+.cfg16-page .cfg16-scope { color: var(--dim); font-size: 13px; line-height: 1.35;
+  white-space: normal; }
+/* ── THE HIGHLIGHTED HEADER CELLS ────────────────────────────────────────────
+   📜 Rama, 02-Sep-2026: "The highlighted table headers … must be CENTER
+   aligned … Do NOT center the entire tables. Only the specified/highlighted
+   HEADER cells must be centered."
+
+   SEVEN cells carry `cfg16-hc`, across five tables: Weight (%) in BOTH scoring
+   columns, Allowed Slippage (₹) and Allowed (% of stop), Intraday and Delivery,
+   and the Global Limits Value.
+
+   ⛔ NOT `.dt-th.dt-num` AS A CLASS OF SELECTOR. That would also have centred
+   the headers of tables Rama did not highlight, which is the difference between
+   applying a correction and generalising one. The opt-in class is also what a
+   test can count.
+
+   ⚠️ WHAT THIS ACTUALLY FIXES, measured before writing it down: the DATA under
+   these columns was ALREADY centred — Rama's 14-Aug global rule
+   `table td.dt-num { text-align: center !important }` (:1974) centres every
+   numeric body cell on every screen. Only the HEADERS were still right-aligned,
+   from the plain `.dt-num { text-align: right }` at :437, so each heading sat
+   off the edge of its own centred column. ⇒ ⭐ This is Screen 16 catching up
+   with the SAME 14-Aug column-role spec Screen 08 already follows — 📄 "data
+   column HEADINGS …. CENTER (over their own data)" (:1978).
+   ⛔ NO DATA ALIGNMENT CHANGES: 🔬 0 body cells on this page are right-aligned
+   before or after, and the global rule is untouched.
+   ⭐ Specificity: `.dt-num` right-aligns at (0,1,0); this is (0,3,0) and wins
+   for the header without an `!important` and without touching `td`. */
+.cfg16-page .dt-th.cfg16-hc { text-align: center; }
+
+/* The configured value is the subject of its row; the scope/reason beside it is
+   a footnote. Weight, ⛔ not size — the 13px floor holds everywhere. */
+.cfg16-page .cfg16-modetbl .dt-num, .cfg16-page .cfg16-globtbl .dt-num {
+  font-weight: 600; color: var(--text); }
+/* An absent delivery key. ⛔ Not an error colour — nothing has failed; the
+   configuration simply does not define that side, and the boot loader is the
+   thing that would reject it. */
+.cfg16-page .cfg16-gap { color: var(--yellow); }
+/* The quad's "N moved" pointer. Sits under the last row of its card and reads
+   as a note, ⛔ never as a value. */
+.cfg16-page .cfg16-moved { margin: 7px 0 0; padding-top: 6px;
+  border-top: 1px dashed var(--border); font-size: 13px; color: var(--dim);
+  line-height: 1.3; }
+/* The panel footnotes are prose under a table; 1.35 line-height at 13px keeps
+   them readable while costing a line less than the browser default. */
+.cfg16-page .cfg16-note { line-height: 1.35; }
+/* The rail's own tables are 2- and 6-column reference lists, not the page's
+   primary reading. One px off each cell edge, on this page only. */
+.cfg16-page .cfg16-rail .dt-td { padding: 5px 7px; }
+.cfg16-page .cfg16-rail .dt-th { padding: 5px 7px; }
+/* A mode-split KPI prints two numbers, tightened one hundredth of an em so the
+   pair sits on one line at 1920.
+   ⚠️ `white-space: nowrap` WAS HERE AND WAS WRONG — measured at 1440, where the
+   card is 187px and "3.00% / 3.00%" needs 204: the strip overflowed its own row
+   by 31px. ⛔ A KPI must wrap rather than push the page sideways. */
+.cfg16-page .cfg16-kpisplit { letter-spacing: -.01em; }
 
 /* Rail: comparison + history. Old/new keep the dashboard's own semantics. */
 .cfg16-page .cfg16-cmphead { display: flex; flex-wrap: wrap; align-items: baseline;
@@ -6187,8 +6286,98 @@ main.content:has(> .cfg16-page) { width: 100%; max-width: none; margin: 0;
 .cfg16-page .cfg16-vs { color: var(--dim); }
 .cfg16-page .cfg16-old { color: var(--muted); }
 .cfg16-page .cfg16-new { color: var(--pos); font-weight: 600; }
-.cfg16-page .cfg16-cmpscroll { max-height: 240px; overflow: auto; }
-.cfg16-page .cfg16-histscroll { max-height: 280px; overflow: auto; }
+/* ⚠️ `overflow: auto` gave BOTH axes, and the horizontal one is what hid the
+   values. The rail's tables now scroll VERTICALLY only and wrap instead:
+   ⛔ a dotted configuration path must never push its own Old/New columns out of
+   view. `break-word` (⛔ not `anywhere`) breaks only a token that cannot fit on a
+   line of its own — the path breaks, "3.00%" does not. */
+/* ⚙ THE RAIL PANELS ARE SECONDARY (Rama, 02-Sep) and are sized as such. With
+   every cell on one line the default rows all render, so these caps are now
+   HEAD-ROOM rather than a squeeze: 7 comparison rows and 8 history rows fit
+   without an internal scroll at the deployed configuration. */
+.cfg16-page .cfg16-cmpscroll { max-height: 250px; overflow-y: auto; overflow-x: hidden; }
+/* ⚙ THE RAIL'S HISTORY WAS THE SINGLE LARGEST VERTICAL EXCESS — measured 379px
+   against the artwork's own 191px equivalent at 1920. It is BOUNDED, ⛔ not
+   truncated: the panel header states "N of M", the list scrolls inside its
+   footprint, and "View all" is still there. ⛔ No row is removed. */
+.cfg16-page .cfg16-histscroll { max-height: 300px; overflow-y: auto; overflow-x: hidden; }
+.cfg16-page .cfg16-cmpscroll .dt-table,
+.cfg16-page .cfg16-histscroll .dt-table { table-layout: auto; width: 100%; }
+.cfg16-page .cfg16-cmpscroll .dt-td,
+.cfg16-page .cfg16-histscroll .dt-td { white-space: normal; overflow-wrap: break-word;
+  padding: 4px 6px; line-height: 1.3; }
+/* ⚠️ `break-word` ALONE DID NOT SHRINK THE TABLE, and the measurement said so:
+   the comparison table reported scrollWidth 813 inside a 447px panel. In an
+   `auto` table `break-word` does not lower a column's MIN-CONTENT width, so the
+   browser widened the column instead of breaking the token. `anywhere` does
+   lower it — and it is what lets a `.cfg16-trunc` table honour its column
+   shares instead of being pushed wide by one long email address. */
+.cfg16-page .cfg16-cmpscroll .dt-td,
+.cfg16-page .cfg16-histscroll .dt-td { overflow-wrap: anywhere; }
+
+/* ── COMPACT MODE (the default) ───────────────────────────────────────────────
+   ⭐ ONE LINE PER CELL, so every row is the same height and the columns line up
+   down the panel — the "compact wrapping that preserves row alignment" the
+   instruction asked for, taken to its end.
+   ⛔ NOT A DATA LOSS: every cell carries its full value in `title`, the panel's
+   FULL VALUES button unwraps all of them in place, and the XLSX export is built
+   from the same payload and truncates nothing. */
+.cfg16-page .cfg16-trunc .dt-td { white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; max-width: 0; }
+/* An ellipsised cell is a cell the reader may want to open. The cursor says so;
+   ⛔ nothing is clickable — this screen has no action. */
+.cfg16-page .cfg16-trunc .dt-td { cursor: help; }
+/* The toggle. Styled as a quiet text control in the panel title, ⛔ never as a
+   primary button: it changes presentation, not data. */
+.cfg16-page .cfg16-expand { margin-left: auto; background: transparent;
+  color: var(--muted); border: 1px solid var(--border); border-radius: 999px;
+  padding: 1px 9px; font-size: 13px; font-weight: 600; font-family: inherit;
+  cursor: pointer; white-space: nowrap; }
+.cfg16-page .cfg16-expand:hover { color: var(--blue); border-color: var(--blue); }
+.cfg16-page .cfg16-expand[aria-pressed="true"] { color: var(--blue);
+  border-color: var(--blue); background: var(--accent-tint); }
+/* The old/new value columns keep their own share so a long path cannot starve
+   them — the failure the horizontal scrollbar was hiding. */
+.cfg16-page .cfg16-cmpscroll .dt-th:first-child { width: 44%; }
+.cfg16-page .cfg16-cmpscroll .dt-th:nth-child(2),
+.cfg16-page .cfg16-cmpscroll .dt-th:nth-child(3) { width: 28%; }
+/* ⚙ THE HISTORY COLUMN SHARES, and this one was a real defect the FIRST
+   measurement showed: left to `auto`, DATE+MODULE+PARAMETER+"CHANGED BY" took
+   312 of 427px and left OLD 55px and NEW 61px — so the two columns that carry
+   the actual change broke an email address into five fragments of four
+   characters, while a column that is always the unavailable marker held 81px.
+   ⭐ The change gets the width; the metadata gets what it needs and no more. */
+.cfg16-page .cfg16-histscroll .dt-th:nth-child(1) { width: 11%; }
+.cfg16-page .cfg16-histscroll .dt-th:nth-child(2) { width: 12%; }
+.cfg16-page .cfg16-histscroll .dt-th:nth-child(3) { width: 24%; }
+.cfg16-page .cfg16-histscroll .dt-th:nth-child(4),
+.cfg16-page .cfg16-histscroll .dt-th:nth-child(5) { width: 22%; }
+.cfg16-page .cfg16-histscroll .dt-th:nth-child(6) { width: 9%; }
+/* ⚠️ A `width` ON AN `auto` TABLE IS A SUGGESTION, AND THE MEASUREMENT PROVED
+   IT: with the percentages above alone the columns came back 47/70/98/66/68/79
+   — the header words' own min-content overrode them and OLD/NEW stayed narrow.
+   `min-width` on the CELL does raise the column's minimum, so the two columns
+   that carry the change are floored here. ⛔ `table-layout: fixed` is NOT the
+   answer: it is what collapsed Screen 17's header into "PARAMETERINTRADAY".
+   ⭐ In compact mode `max-width: 0` above lets the share win, and this floor
+   still holds the two value columns open. */
+.cfg16-page .cfg16-histscroll .dt-td:nth-child(4),
+.cfg16-page .cfg16-histscroll .dt-td:nth-child(5) { min-width: 82px; }
+/* "Changed By" has no source and always renders the unavailable marker; it
+   keeps its column and its header (both are named in the approved design) but
+   ⛔ it does not take width from the change it sits beside. */
+.cfg16-page .cfg16-histscroll .dt-td:nth-child(6) { white-space: nowrap; width: 1%; }
+.cfg16-page .cfg16-histscroll .dt-th:nth-child(6) { text-transform: none;
+  letter-spacing: 0; }
+/* ⚠️ AND THE FLOOR THEN PUSHED THE TABLE 32px WIDE OF ITS PANEL — measured, not
+   assumed: 459px of columns in a 427px container, i.e. the horizontal scrollbar
+   coming straight back. Six columns pay 4px of cell padding each side instead
+   of 7, which returns 36px — ⛔ the floor is not given back, because the floor
+   is the reason the change is readable at all. */
+.cfg16-page .cfg16-histscroll .dt-td,
+.cfg16-page .cfg16-histscroll .dt-th { padding-left: 4px; padding-right: 4px; }
+.cfg16-page .cfg16-cmpscroll .dt-th { padding: 5px 6px; white-space: normal; }
+.cfg16-page .cfg16-histscroll .dt-th { padding: 5px 4px; white-space: normal; }
 .cfg16-page .cfg16-more { margin-top: 8px; background: transparent; color: var(--blue);
   border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px;
   font-size: 13px; font-weight: 600; font-family: inherit; cursor: pointer; }
@@ -6220,9 +6409,22 @@ main.content:has(> .cfg16-page) { width: 100%; max-width: none; margin: 0;
 @media (max-width: 1500px) {
   .cfg16-page .cfg16-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
-@media (max-width: 1280px) {
+@media (max-width: 1500px) {
+  /* ⚙ THE RAIL DROPS UNDER THE MAIN COLUMN HERE, ⛔ not at 1280 as before, and
+     the measurement is why: the rail is a fixed 476px, so at 1440 it took 39%
+     of the content width and left the main column 724px — the categories panel
+     stood 627px tall and the page ran 2.40x. Below 1500 every panel is better
+     served by the full width than by a two-column split. ⭐ The same reflow
+     Screen 17 already uses at this breakpoint. ⛔ Nothing is hidden: the rail's
+     panels keep their order and their content. */
   .cfg16-page .cfg16-shell { grid-template-columns: minmax(0, 1fr); }
+  .cfg16-page .cfg16-rail { display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start; }
+}
+@media (max-width: 1280px) {
+  .cfg16-page .cfg16-rail { grid-template-columns: minmax(0, 1fr); }
   .cfg16-page .cfg16-row2 { grid-template-columns: minmax(0, 1fr); }
+  .cfg16-page .cfg16-row3 { grid-template-columns: minmax(0, 1fr); }
   .cfg16-page .cfg16-thresh { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .cfg16-page .cfg16-slipparams { grid-template-columns: minmax(0, 1fr); }
 }
