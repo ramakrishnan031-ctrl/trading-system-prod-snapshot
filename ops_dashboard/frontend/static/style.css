@@ -2005,6 +2005,51 @@ table td.dt-num,
 table td.rt,
 table td.ctr { text-align: center !important; }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   THE GLOBAL TABLE RULE — A DATA COLUMN'S HEADING SITS OVER ITS OWN DATA
+   ═══════════════════════════════════════════════════════════════════════════
+   📜 The other half of Rama's 14-Aug column-role spec, written directly below:
+      *"data column HEADINGS …. CENTER (over their own data)"*. The rule above
+      centres the DATA; this centres the HEADING that names it. Screen 08 has
+      followed both since 14-Aug and Screen 16 since 02-Sep; ⛔ the rest followed
+      only the first half, so a heading sat off the edge of its own column.
+
+   🔬 MEASURED 02-Sep-2026 across all 29 routes, ⛔ not inferred: 460 header/body
+      column pairs, of which 377 agreed and 83 did not. The 83 split three ways
+      and ⛔ they do NOT all resolve the same direction:
+
+        · 33 `right/center` — a `.dt-num` heading right-aligned over centred
+          data. ⭐ THIS RULE FIXES EXACTLY THESE: S02 ×1, S03 ×15, S07 ×14,
+          S17 ×3.
+        · 36 `left/center` — a PLAIN heading over centred data. ⛔ NOT fixed
+          here: the heading carries no class to key on, so the fix is per-column
+          markup, and 32 of the 36 are on non-campaign routes (/capacity ×18,
+          /capital ×5, /exposure ×3, /statistics ×3, /alerts, /reports, /vm)
+          which ⛔ must not be restyled in a campaign pass. Reported, not touched.
+        · 14 `center/left` — a heading DELIBERATELY centred by a per-column
+          `hc: true` flag over a left-aligned badge column (S04 ×5, S05 ×5,
+          S06 ×4). ⛔ PRESERVED: those flags are an approved per-column decision
+          from an earlier pass, and this rule does not overturn one.
+
+   ⭐ SCOPED BY THE MARKER THE CODEBASE ALREADY USES, exactly as the data rule
+      above is: a heading is centred only when it carries the same class that
+      marks its column as data. ⛔ Never a bare `th`, which would move every
+      label heading in the GUI.
+   ⚠️ `!important`, FOR THE SAME REASON THE DATA RULE ABOVE TOOK IT, and the
+      measurement forced it: without it the rule moved only 6 of the 33. About a
+      dozen page-scoped rules right-align these headings at (0,3,0) —
+      `.strat-page .st-tbl .rt`, `.tex-page …`, `.ord-page …`, `.pos-page …` —
+      and beat a (0,1,2) global selector. 🔬 A first draft without it left S02,
+      S03 and S07 untouched while reporting success, which is exactly the
+      "source contains the rule" trap this pass was told not to fall into.
+   🔬 SAFE BECAUSE THE DATA IS ALREADY CENTRED: 0 body cells in the entire GUI
+      are right-aligned (measured), so no heading is being moved away from data
+      it was correctly aligned with. */
+table th.cap-num,
+table th.dt-num,
+table th.rt,
+table th.ctr { text-align: center !important; }
+
 /* ── SCREEN-08 alignment BY COLUMN ROLE (14-Aug-2026, Rama's final spec) ──────
    ⛔ NOT a blanket rule. Each role is targeted separately, as instructed:
        row / side labels ....... LEFT   (plain <td>, untouched — no rule needed)

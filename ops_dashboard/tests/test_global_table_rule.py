@@ -226,3 +226,55 @@ class TestHeaderDrag:
                         r"onDrop\s*\(\s*targetKey\s*\)\s*\{",
                         r"onDragEnd\s*\(\s*\)\s*\{"):
                 assert not re.search(pat, src), (name, pat, "re-implements a handler")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Header alignment — the other half of the 14-Aug column-role spec
+# ─────────────────────────────────────────────────────────────────────────────
+class TestHeaderFollowsItsColumn:
+
+    def test_the_header_rule_mirrors_the_data_rule_it_pairs_with(self) -> None:
+        """📜 14-Aug column-role spec: *"data column HEADINGS …. CENTER (over
+        their own data)"*. The data rule centres the cell; this centres the
+        heading that names it. ⭐ Both key on the SAME markers, so a column
+        cannot be data for one rule and not the other."""
+        css = _css_no_comments()
+        data = re.search(r"((?:table td\.[a-z-]+,\s*)+table td\.[a-z-]+ \{[^}]*\})", css).group(1)
+        head = re.search(r"((?:table th\.[a-z-]+,\s*)+table th\.[a-z-]+ \{[^}]*\})", css).group(1)
+        markers = lambda block: sorted(re.findall(r"\.([a-z-]+) ?\{|\.([a-z-]+),", block))
+        d = sorted(set(re.findall(r"td\.([a-z-]+)", data)))
+        h = sorted(set(re.findall(r"th\.([a-z-]+)", head)))
+        assert d == h, (d, h)
+        assert "center" in head and "!important" in head, head
+
+    def test_the_header_rule_never_targets_a_bare_th(self) -> None:
+        """⛔ A bare `th` would move every LABEL heading in the GUI. The rule is
+        only allowed to reach a heading the codebase has already marked as
+        sitting over data."""
+        for sel, body in _rules():
+            if "text-align: center" not in body or not sel.strip().startswith("table th"):
+                continue
+            for part in sel.split(","):
+                last = part.strip().split()[-1]
+                assert "." in last, ("the GLOBAL header rule reached a bare th", sel)
+        # ⚠️ SCOPED TO THE GLOBAL RULE ON PURPOSE. A first draft swept every
+        # centred selector and went red on `.ord-page .ord-grp th` — S05's
+        # group-band header row, deliberately centred across its span long before
+        # this pass. ⛔ That is a screen-specific approved decision, not a
+        # violation, and a guard that cannot tell them apart is the wrong guard.
+
+    def test_the_deliberate_per_column_hc_flags_survive(self) -> None:
+        """⛔ THE EXCEPTION THIS RULE MUST NOT OVERTURN. S04, S05 and S06 carry
+        an explicit per-column `hc: true` that centres a heading over a
+        LEFT-aligned badge column — an approved decision from an earlier pass.
+        🔬 14 columns. The global rule keys on data markers, which those columns
+        do not carry, so it cannot reach them."""
+        tpls = _templates()
+        counts = {n: len(re.findall(r"\bhc:\s*true", s)) for n, s in tpls.items()}
+        assert counts.get("signals.html") == 10, counts.get("signals.html")
+        assert counts.get("orders.html") == 14, counts.get("orders.html")
+        assert counts.get("positions.html") == 19, counts.get("positions.html")
+        css = _css_no_comments()
+        for scope in (".sig-page", ".ord-page", ".pos-page"):
+            assert re.search(re.escape(scope) + r"[^{]*th\.hc \{[^}]*text-align: center",
+                             css), scope
