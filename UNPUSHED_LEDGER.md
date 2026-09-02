@@ -3450,3 +3450,94 @@ deferred *until all 22 are done*, and they are.
 push authorisation has ever been given for this branch.
 ⏸ **S17's control plane** stays DESIGNED-BUT-NEVER-BUILT, and ⏸ **S17's two truth
 defects** (📄 Entry 33 §3) stay reported and untouched.
+
+---
+
+## 🟢 WINDOW CLOSED — 02-Sep-2026 (Wed) 23:39 IST · MERGED AND PUSHED
+
+**Merge commit:** `686df1c847d415958c4df406b77503bb45975749`
+**Parents:** `39292d3` (main, first parent) + `0bbe127` (`feat/screen10-slippage-analytics`)
+**Method:** MERGE, ⛔ not rebase. 🔬 This history is ⛔ not linear (**25** merge commits
+reachable from `origin/main`) and every prior `ops_dashboard` integration landed as a
+merge — `7b1c92d` (G2a-G2c), `b4aea6f` (G5), `9815786` (login redesign). A rebase would
+have replayed 121 commits and re-resolved one conflict up to 121 times.
+
+### RETIRED — these entries are no longer unpushed
+- 🟢 **Entries 21–35 (the GUI campaign window, 14-Aug→02-Sep)** — **PUSHED** in `686df1c`.
+  🔬 Measured after the fact, ⛔ not from intent: `git ls-remote origin refs/heads/main`
+  → `686df1c…`; VM bare `git --git-dir=…/trading-system.git rev-parse main` → `686df1c…`;
+  VM deployed work-tree `rev-parse HEAD` → `686df1c…`. All three independently measured.
+- 🟢 **Entry 21 of the 29-Aug window** (`fix/mis-autosquareoff-28aug`, the 8-commit unit)
+  — was already **PUSHED** at `effff24`→`39292d3`; it is the first parent of this merge.
+
+### ⛔ STILL UNPUSHED — ⛔ NOT retired by this merge
+- 🗿🔴 **F2-CORE — `feat/f2-core-30aug` @ `587b306`.** 🔬 `git branch -r --contains 587b306`
+  is **EMPTY** — it exists on ⛔ **no** remote. It carries its **own** independently
+  numbered ledger entry (its tip commit is literally `docs(ledger): Entry 22 -- F2-CORE`),
+  which lives ⛔ only on that branch and is ⛔ **not** in this file. 👤 Held under OPTION 2:
+  criterion 7 unproven for the GLOBAL-STOP channel ⇒ 6 of 7 ⇒ ⛔ does not ship.
+  ⛔ **Never delete or squash that branch.** ⚠️ Its gate does ⛔ not survive a SHA change —
+  ⭐ RE-GATE on resume. *(Recorded here because it previously existed only in session
+  memory — the D-AE failure mode: a record written where the next reader will not look.)*
+
+### 🔬 THE MEASUREMENTS THAT AUTHORISED THE PUSH
+| | invocation | result |
+|---|---|---|
+| **Baseline A** — main `39292d3` | `pytest tests/unit tests/integration -q` | `PYTEST_RC=1` · **10F / 6007P / 5S** |
+| **C** — merge `686df1c` | same, same dir, same env | `PYTEST_RC=1` · **10F / 6007P / 5S** |
+| **Baseline B** — GUI `0bbe127` | `pytest tests -q` from `ops_dashboard/` | `PYTEST_RC=1` · **1F / 2171P** |
+| **C** — merge `686df1c` | same | `PYTEST_RC=1` · **1F / 2171P** |
+
+⭐ **The failure SETS are identical, ⛔ not merely the counts** — zero new, zero vanished,
+on both axes. Interpreter, part of the baseline: `C:\python311\python.exe`, Python 3.11.9,
+**pytest 9.0.3 / pytest-cov 7.1.0** (the exact `requirements-dev.txt` pins).
+⚠️ Both wrappers reported *"exit code 0"* while pytest's own RC was **1** — **G7.1**, exactly
+as written. The RC recorded above is pytest's, captured with ⛔ no pipe.
+⚠️ The 3 `test_t4_deploy_preflight` failures in the gate are the documented **`venv/`-absent
+phantoms** (§V2); both `venv/` directories on this PC are **empty**. The 1 GUI failure is
+`test_c_venv_has_no_kiteconnect` — 🔬 an environment artifact: it runs `sys.executable -m pip
+show kiteconnect`, and `ops_dashboard/.venv` does ⛔ not exist on this PC, so it measures the
+system interpreter. 🔬 On the **VM**, `ops_dashboard/venv/bin/python` reports **not found**
+and `ops_dashboard/backend` never imports it ⇒ ⭐ the deployed GUI cannot reach the broker.
+
+⚠️ 🔬 **AN ENVIRONMENT TRAP MEASURED AND DEFEATED, worth carrying forward:** this session's
+shell inherited **`PYTHONPATH=D:\Projects\trading-system`** — a ⛔ *different worktree*. The
+GUI suite runs with cwd `…/ops_dashboard`, which contains ⛔ no `ops_dashboard` package, so
+every `from ops_dashboard… import` fell through to that env var and resolved against the
+**primary tree** (parked on `feat/delivery-config-split`, which has ⛔ no S17 `controls.py`).
+⇒ 🔬 **4 phantom S17 failures that exist at `0bbe127` too** — ⛔ the merge caused none of them.
+🔬 Proven by re-running the same file three ways: inherited PYTHONPATH → 4F; cleared → 4F;
+`PYTHONPATH=D:\Projects\trading-system-gui09` → **36 passed, RC 0**. ⭐ **The GUI suite must
+be run with `PYTHONPATH` = the root of the tree under test.** ⛔ The trading gate is immune
+(`python -m` puts cwd first) and its `.env` is unreachable (`find_dotenv` walks *up*).
+
+### 🔬 WHAT THE PUSH ACTUALLY CHANGED IN THE DEPLOYED TREE
+`git diff --name-only 39292d3 686df1c` outside `ops_dashboard/` and `docs/` is exactly
+**`PATHS.md`** and **`UNPUSHED_LEDGER.md`**. Across `core/ capital/ orders/ signals/
+screening/ strategies/ alerts/ broker/ allocation/ regime/ v3_chain/ utils/ scripts/
+config/ deploy/ tests/ main.py` the diff is **EMPTY**.
+⇒ ⭐ **The engine executes byte-identical code at tomorrow's 08:15 boot.** This deploy is
+GUI + documentation only.
+
+### ⏸ OWED, AND ⛔ NOT DONE BY THIS PUSH
+- 👤 **RAMA: `sudo systemctl restart gui-dashboard`.** 🔬 The post-receive hook contains
+  **zero** references to `systemctl`/`restart`/`reload`/`service` — measured on the **LIVE**
+  VM hook, ⛔ not the repo copy. The unit runs `ops_dashboard/venv/bin/python -m backend.app`
+  with ⛔ no file-watching; it has been up since **06:19:53** and ⭐ **will keep serving the
+  OLD templates until restarted.** ⛔ Until then the push looks like it did nothing.
+- ⏸ **Browser verification of the refitted screens** — blocked on that restart.
+  🔴 ⛔ **NO screen is `VERIFIED LIVE`**; every approval to date was a LOCAL render.
+
+### ⛔ UNCHANGED, CARRIED FORWARD — ⛔ none of these were touched
+S14's horizontal overflow (+9 @1920, +67 @1440) · S08's sub-13px headers · S17's two truth
+defects · S05/S04's long unbounded tables · R3/R4/R10 density & typography · the 36
+`left`/`center` header residuals (32 on non-campaign routes). ⛔ **S14 is ⛔ NOT fixed.**
+⭐ **S01 has ⛔ no table** — the campaign refitted **21** table-bearing screens, ⛔ not 22.
+
+### ⚠️ A SEPARATE FINDING, ⛔ NOT ADDRESSED HERE
+🔬 The **local** branch `main` (worktree `D:\Projects\trading-system-main`) sits at
+`3dff752` — **90 ahead / 94 behind** `origin/main`, diverging at `645728d` (07-Aug). Its 90
+commits are docs-only and its tip's subject appears ⛔ nowhere on `origin/main`. ⛔ This push
+did ⛔ not use it: the refspec was the explicit `686df1c:refs/heads/main`. ⚠️ **A plain
+`git push origin main` from that worktree would have pushed `3dff752`.** ⏸ Left for a
+deliberate pass.
