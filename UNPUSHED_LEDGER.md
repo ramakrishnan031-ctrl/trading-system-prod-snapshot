@@ -3218,3 +3218,103 @@ over the fixture DB, ⛔ never on the VM.
 — 📄 approved 14-Aug under the PREVIOUS ledger; `66fc82e` landed after it, unseen;
 ⭐ the 13px-floor decision makes it a **RE-approval**. ⇒ ⭐ same render-only path.
 ⏸ **The global table rule is DUE** — it was deferred *until all 22 are done*.
+
+### Entry 35 — S07 TRADE EXPLORER RE-APPROVED. ⛔ NOT PUSHED · 🏁 **22 of 22 — THE LAST QUALIFIED SCREEN CLOSES**
+
+**Date/time:** 02-Sep-2026, approved ~15:0x IST · **Branch:** `feat/screen10-slippage-analytics`
+**Rendered build:** `18d992a` · **Code changed THIS TASK: NO** · **Pushed: NO · Deployed: NO**
+
+🏁 **EVERY GUI SCREEN IS NOW FULLY APPROVED — 🟢 22 / 22, ⛔ 0 QUALIFIED, ⛔ 0
+PENDING.** ⛔ **THAT IS NOT "THE CAMPAIGN IS FINISHED"** — see the standing below.
+
+⭐ **RENDER-ONLY, like S06.** 🔬 `git status --porcelain` = **0** before and after;
+🔬 `git diff HEAD` over `trade_explorer.html` + `style.css` + the S07 test file =
+**0 lines**. ⛔ No defect required a correction, so ⛔ nothing was touched.
+
+#### ⭐ THE TWO THINGS THAT RE-OPENED S07 — BOTH VERIFIED ON THE LIVE RENDER
+
+**① `66fc82e` (21-Aug) — 👤 Rama's ruling:** *"Broker = Filled for this screen's
+SL/TGT representation"*.
+🔬 **VERIFIED:** `sl_initial:System` · `sl_filled:Filled` · `tgt_initial:System` ·
+`tgt_filled:Filled` — ⭐ **exactly TWO sub-columns each**, ⛔ no Broker.
+🔬 Group row: `QTY×2 · ENTRY ₹×2 · SL ₹×2 · TGT ₹×2 · P&L ₹×3`. 🔬 `COLS_KEY` is at
+**`screen07.trades.colOrder.v3`** — ⭐ bumped, as the commit's own rule requires.
+
+**② THE GUTTER, and the collision measurement re-run:** 🔬 cell padding is
+**`6px 3px`** · **ZERO** adjacent column pairs at ≤1px clearance · 🔬 minimum text
+gap **6px** across 12 rows, at BOTH viewports. 📄 The 1px version had **9** such
+pairs at 1920.
+
+**③ THE 13px FLOOR — 🔬 measured by COMPUTED font-size, so INHERITED rules are
+caught, ⛔ not just S07's own block** (📄 whose declared sizes are all 13px):
+
+| screen | grip `⠿` 10px | arrow `↕` 9px | ⭐ **READABLE text < 13px** |
+|---|---|---|---|
+| S05 Orders (approved) | 18 | 18 | **0** |
+| S06 Positions (approved) | 23 | 23 | **0** |
+| **S07 Trade Explorer** | 25 | 25 | **0** |
+
+⇒ ⭐ **NO readable content anywhere on S07 is under 13px.** The 50 sub-13px nodes
+are **two ICON glyphs**, one pair per sortable column, from the **approved
+`.ord-page` rule S05 and S06 already carry**. ⇒ ⛔ **NOT an S07 defect** — and
+changing it would touch **shared CSS and three screens**, 👤 explicitly out of scope.
+
+#### Gate
+
+🔬 **@1920×1080 (TRUE, via an iframe):** **1504px (1.393×)** · ⛔ 0 page horizontal
+overflow · ⛔ 0 clipped cells · ⭐ **the table fits FLUSH — 0px hidden inside
+`.ord-scroll`**.
+⭐ **THAT IS BETTER THAN `66fc82e` PREDICTED.** 📄 It recorded *"at 1920 the table
+now scrolls 17px inside `.ord-scroll` where it previously fit flush"* and stated
+that cost openly. 🔬 It is **0** today. ⛔ Cause NOT chased — ⛔ do not claim one.
+🔬 **@1440×900:** **1716px (1.907×)** · ⛔ 0 page overflow · ⛔ 0 clipped cells ·
+⚠️ **393px hidden inside `.ord-scroll`** — ⭐ the fallback S05 and S06 already use.
+🔬 **25 columns · 12 body rows** at both.
+🔬 **S07 focused: 76 passed, 0 failed.** 🔬 **S05 + S06 + components (the shared
+table machinery): 120 passed, 0 failed.** ⛔ No environment-only failure in either
+— 📄 the `kiteconnect` artifact lives in `test_isolation.py`, ⛔ outside both sets.
+
+⭐ **FILLED FOR REVIEW:** 11 trades — TGT Hit 3 · SL Hit 2 · Manual Exit 1 ·
+Expired 1 · Open 4 — plus the four-panel deck.
+🔬 **AGAINST THE SPEC:** Filters · the common column standard · the ENTRY/SL/TGT
+groups · SLIPPAGE · ROI/P&L/Charges/Net · RR analysis · Export XLSX · and the
+**TRADE LIFECYCLE** drawer (`OVERVIEW · LIFECYCLE · SL/TGT · PERFORMANCE`) are all
+present.
+
+#### ⚠️ INSTRUMENTATION LIMITS — ⭐ STATED BY THE SCREEN, ⛔ NOT HIDDEN BY IT
+
+⭐ **THE LIFECYCLE IS INCOMPLETE BY DATA, ⛔ NOT BY BUILD.** 📄 The spec asks for a
+timestamp at **every** stage; 🔬 three of its nine — *Validated · Risk Passed ·
+Capital Passed* — are **NOT PERSISTED**. The drawer prints *"Validation / Risk /
+Capital — not captured (G-2)"* and explains it is ⛔ **not back-filled from the
+trade's own timestamps**. ⭐ Exactly the right behaviour.
+🔬 Coverage line under the table: *"slippage: 1 recorded, 10 reproduced from entry
+prices · ROI: 7 valued · planned R:R: 3 recorded."*
+
+#### ⚠️ A RECORD DISCREPANCY IN `66fc82e`'s OWN MESSAGE — ⛔ NOT TOUCHED
+
+📄 It states *"Columns 28 -> 26"*. 🔬 **The real counts are 27 → 25**
+(`154abf2`=27 · `66fc82e`=25 · HEAD=25). ⭐ **The DELTA of 2 is right** and the
+screen is right; ⛔ only the two ABSOLUTE figures are off by one.
+⛔ **NOT corrected** — it is committed history, and 👤 the call is Rama's.
+
+#### ⚠️ WHAT WAS APPROVED INCLUDES `efeb0b7`, ⛔ NOT `66fc82e` ALONE
+
+🔬 `trade_explorer.html` is **22 lines different** from `66fc82e` — ⭐ the SAME
+`colDragMixin()` refactor that caught me on S06 (📄 Entry 34's rider). ⭐ Checked
+FIRST this time, ⛔ not assumed. ⭐ Both commits were already in the rendered tree.
+
+#### ⛔ WHAT THE APPROVAL DOES NOT MEAN
+
+🔴 **S07 IS NOT `VERIFIED LIVE`** — 🟢 VISUALLY APPROVED on a local review render
+over the fixture DB, ⛔ never on the VM. ⭐ **This is true of ALL 22.**
+
+#### ⏸ THE STANDING — 🏁 22/22 APPROVED, AND WHAT REMAINS
+
+⏸ **THE GLOBAL TABLE RULE IS NOW DUE** and ⛔ has no blocker left — 📄 it was
+deferred *until all 22 are done*, and they are.
+🔴 ⛔ **NO screen is `VERIFIED LIVE`** — every approval was a LOCAL render.
+🔴 ⛔ **NOTHING IS PUSHED** — 119 commits against `origin/main` `39292d3`, and ⛔ no
+push authorisation has ever been given for this branch.
+⏸ **S17's control plane** stays DESIGNED-BUT-NEVER-BUILT, and ⏸ **S17's two truth
+defects** (📄 Entry 33 §3) stay reported and untouched.
