@@ -3110,13 +3110,45 @@ column would fix it and cost ~180px of height, 👤 Rama's call.
 ### Entry 34 — S06 POSITIONS: THE CORRECTED RENDER WAS SIGHTED AND APPROVED. ⛔ NOT PUSHED
 
 **Date/time:** 02-Sep-2026, approved ~14:4x IST · **Branch:** `feat/screen10-slippage-analytics`
-**Build:** ⭐ **`b47e148` (20-Aug) — UNCHANGED** · **Code changed: NO** · **Pushed: NO · Deployed: NO**
+**Build:** `92b927c` (the render) · the correction is `b47e148` (20-Aug) · **Code changed THIS TASK: NO** · **Pushed: NO · Deployed: NO**
 
 ⭐ **THIS ENTRY CLOSES A DEBT, ⛔ IT DOES NOT RECORD A CHANGE.** 👤 Rama's card:
 *"This is a VISUAL RE-APPROVAL task only … If the existing corrected screenshot is
 still available, show it rather than changing code."*
 🔬 `git status --porcelain` = **0** before and after. ⛔ No commit of code, ⛔ no new
 test, ⛔ no CSS. ⭐ The only artefact is this record.
+
+#### ⚠️ CORRECTION TO THIS ENTRY'S OWN FIRST DRAFT — ⛔ "UNCHANGED" WAS FALSE
+
+⛔ I first wrote **"Build: `b47e148` — UNCHANGED"**. 🔬 **THAT IS WRONG, and the
+diff says so:** `positions.html` is **22 lines different** between `b47e148` and
+HEAD. ⭐ `efeb0b7` — *"the column reorder becomes ONE implementation, not
+fifteen"* — landed AFTER the correction and **replaced S06's own inline
+`onDragStart`/`onDrop`/`onDragEnd` with the shared `colDragMixin()`**.
+
+⚠️ ⭐ **THAT IS NOT AN IDLE DETAIL: the drag is exactly what the correction depends
+on.** 📄 `b47e148` states the separator is computed from the **CURRENT column
+order** (`groups()` / `isSep()` keyed by `c.key`), ⛔ **never `nth-child`**, so a
+drag carries the separator with its band — and `efeb0b7` re-implemented that drag.
+
+🔬 **SO IT WAS MEASURED ON THE LIVE RENDER, ⛔ not assumed:**
+
+| column order | separators per row |
+|---|---|
+| default | **5** |
+| `symbol` moved INTO the `ENTRY ₹` band | **7** — ⭐ the separators FOLLOWED the columns |
+| after the screen's own `resetCols()` | **5** |
+
+⇒ ⭐ **THE CORRECTION SURVIVES THE REFACTOR.** A foreign column dropped inside a
+band creates new boundaries and the rules move to them — ⛔ they are not
+positional. 🔬 `onDragStart` / `onDrop` / `onDragEnd` are present, now from the
+shared mixin.
+
+⛔ **WHAT RAMA APPROVED THEREFORE INCLUDES `efeb0b7`**, ⛔ not `b47e148` alone.
+⭐ Both were already committed and in the tree that was rendered; ⛔ nothing was
+changed for this task. ⭐ **GENERALISE: "the correction is unchanged" and "the
+FILE is unchanged" are different claims — 🔬 check the file, ⛔ never infer it
+from the commit that made the correction.**
 
 #### ⭐ WHAT WAS OWED, AND WHY
 
