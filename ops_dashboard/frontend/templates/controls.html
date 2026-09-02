@@ -3,66 +3,672 @@
 {% block title %}AlgoCore Systems — Controls{% endblock %}
 {% block nav_controls %}active{% endblock %}
 {% block content %}
-{# G5d: READ-ONLY Controls summary (L4). ZERO write path — this template contains
-   NO form / button / POST. Composes /api/controls-summary from config + kill-switch
-   + strategy flags. The G3 Future Controls section is a disabled placeholder. #}
-<div x-data="controlsPage()" x-init="load()" @ops-refresh.window="load()">
-  <h2 class="panel-title">Controls <span class="panel-sub">read-only summary · view only · no runtime writes (G3)</span></h2>
+{#
+  SCREEN 17 — CONTROLS. The operational control surface.
 
-  {% call kpi_row() %}
-    {{ kpi_card("Trading Mode", "data.trade_type ? data.trade_type.label : '—'", tone="info") }}
-    {{ kpi_card("Strategies Enabled", "data.strategies ? (data.strategies.enabled_count + ' / ' + data.strategies.total) : '—'", tone="info") }}
-    {{ kpi_card("Telegram Alerts", "telegramLabel()", tone="info") }}
-    {{ kpi_card("Kill Switch", "data.kill_switch ? data.kill_switch.state : '—'", tone="info") }}
-  {% endcall %}
+  📜 Rama, 17-Aug-2026: "SCREEN 17 CONTROLS MUST HAVE FULL CONTROLS." L4's
+     read-only interpretation is SUPERSEDED. Screen 16 stays informational.
+  📜 Design authority: docs/decisions/CONTROL_PLANE_DESIGN_17-Aug-2026.md
+  🖼️ Visual authority: gui/17. Controls.png — panel order, headings, density and
+     colour semantics (green = enabled, red = disabled) follow the artwork.
 
-  <div class="two-col">
-    <section class="panel">
-      <h3 class="panel-title">Active Runtime Limits</h3>
-      <div class="cfg-block">
-        <div class="cfg-row"><span class="cfg-key">Max Daily Trades</span><span x-text="lim('max_daily_trades')"></span></div>
-        <div class="cfg-row"><span class="cfg-key">Max Open Positions</span><span x-text="lim('max_open_positions')"></span></div>
-        <div class="cfg-row"><span class="cfg-key">Max Concentration</span><span x-text="pctOf('max_concentration_pct')"></span></div>
-        <div class="cfg-row"><span class="cfg-key">Daily Loss Limit</span><span x-text="pctOf('daily_loss_limit_pct')"></span></div>
-        <div class="cfg-row"><span class="cfg-key">Trade Type</span><span x-text="data.trade_type ? (data.trade_type.trade_type + ' · force_intraday=' + data.trade_type.force_intraday_only) : '—'"></span></div>
-      </div>
-    </section>
-    <section class="panel">
-      <h3 class="panel-title">Kill Switch</h3>
-      <div class="cfg-block">
-        <div class="cfg-row"><span class="cfg-key">State</span><span x-text="ks('state')"></span></div>
-        <div class="cfg-row"><span class="cfg-key">Reason</span><span x-text="ks('reason')"></span></div>
-        <div class="cfg-row"><span class="cfg-key">Since</span><span x-text="ks('since')"></span></div>
-        <div class="cfg-row"><span class="cfg-key">By</span><span x-text="ks('by')"></span></div>
-      </div>
-      <p class="panel-sub" x-show="data.telegram_alerts" x-cloak x-text="data.telegram_alerts ? data.telegram_alerts.note : ''"></p>
-    </section>
+  ⛔ SCANNER CONTROLS (artwork panel 3) IS REMOVED BY DECISION, not by omission:
+     scanner = strategy 1:1 (measured — 16 scanners → 16 distinct strategies,
+     scanner-name == strategy-name on 16/16), so a separate scanner control would
+     print one identity twice. The STRATEGY list IS the operational control list.
+     ⛔ THE ARTWORK'S NUMBERING IS PRESERVED, ⛔ NOT made contiguous: every
+     remaining panel keeps its artwork number and 3 is simply absent, so Search
+     stays 13 and Export stays 14 exactly as the artwork draws them. There is
+     also NO scanner KPI and NO scanner row in the rail — a scanner count is
+     the strategy count under a second name.
+
+  ⛔ NO CONTROL IS EVER RENDERED AS APPLIED ON THE BASIS OF THE REQUEST. Every
+     control reads its state from `data`, which is re-loaded from the runtime
+     after each action. When the control plane is unreachable every control is
+     disabled and says so — an operator must never be shown a button that would
+     silently do nothing.
+#}
+<div class="ctl-page" x-data="controlsPage()" x-init="load()" @ops-refresh.window="load()">
+
+  <h2 class="panel-title">Controls
+    <span class="panel-sub">Safe operational control panel — 95% View, 5% Control</span>
+  </h2>
+
+  {# ── LIVE-PLANE BANNER — the honesty gate for the whole screen ───────── #}
+  <div class="ctl-banner" x-cloak
+       :class="planeUp() ? 'ctl-banner-ok' : 'ctl-banner-off'">
+    <span x-text="planeUp() ? '● CONTROL PLANE CONNECTED' : '○ CONTROL PLANE UNAVAILABLE'"></span>
+    <span class="ctl-banner-sub"
+          x-text="planeUp()
+            ? 'controls act on the running trading process'
+            : (reason() || 'controls are disabled; showing configuration only')"></span>
   </div>
 
-  <section class="panel">
-    <h3 class="panel-title">Enabled Strategies <span class="panel-sub" x-text="data.strategies ? data.strategies.enabled_count + ' of ' + data.strategies.total : ''"></span></h3>
-    <div class="tw-scanners" x-text="(data.strategies && data.strategies.enabled.length) ? data.strategies.enabled.join(', ') : '—'"></div>
-  </section>
+  {# ── KPI STRIP (artwork top row) ─────────────────────────────────────── #}
+  {% call kpi_row() %}
+    {{ kpi_card("Trading Status", "summary('trading_status')", tone="info") }}
+    {{ kpi_card("Trading Mode", "data.trading_mode ? data.trading_mode.label : '—'", tone="info") }}
+    {{ kpi_card("Active Strategies", "summary('active_strategies')", tone="info") }}
+    {# ⛔ NO SCANNER KPI. scanner = strategy 1:1, so an "Active Scanners" card
+       would restate the strategy count under a second name. Rama, 17-Aug:
+       strategy is the authoritative identity; the artwork's scanner slot is
+       filled by the real, non-duplicative Paused Strategies count. #}
+    {{ kpi_card("Paused Strategies", "summary('paused_strategies')", tone="warn") }}
+    {{ kpi_card("Alerts", "summary('alert_status')", tone="info") }}
+    {# Artwork KPI. Real audit source; renders '—' when nothing is recorded. #}
+    {{ kpi_card("Last Control Change", "lastChange()", tone="info") }}
+  {% endcall %}
 
-  <section class="panel">
-    <h3 class="panel-title">G3 Future Controls</h3>
-    <div class="empty-state">
-      <div class="es-icon">🎛️</div>
-      <div class="es-title">Future — G3 control plane (not implemented)</div>
-      <div class="es-body" x-text="data.future_controls ? data.future_controls.note : 'A control plane requires G3 design; no write path exists.'"></div>
+  <div class="ctl-shell">
+    <div class="ctl-main">
+
+      {# ── ROW 1 ─────────────────────────────────────────────────────── #}
+      <div class="ctl-row ctl-row1">
+
+        <section class="panel ctl-mode">
+          <h3 class="panel-title">1. TRADING MODE CONTROLS</h3>
+          <div class="ctl-modegrid">
+            <div class="ctl-toggles">
+              <div class="ctl-trow">
+                <span class="ctl-tlabel">Intraday Trading</span>
+                <span class="ctl-state"
+                      :class="onoff(data.trading_mode && data.trading_mode.intraday_enabled)"
+                      x-text="data.trading_mode && data.trading_mode.intraday_enabled ? 'ON' : 'OFF'"></span>
+              </div>
+              <div class="ctl-trow">
+                <span class="ctl-tlabel">Delivery Trading</span>
+                <span class="ctl-state"
+                      :class="onoff(data.trading_mode && data.trading_mode.delivery_enabled)"
+                      x-text="data.trading_mode && data.trading_mode.delivery_enabled ? 'ON' : 'OFF'"></span>
+              </div>
+            </div>
+            <div class="ctl-states">
+              <div class="ctl-sub">POSSIBLE STATES</div>
+              <template x-for="s in modeStates" :key="s.k">
+                <div class="ctl-radio">
+                  <span class="ctl-dot" :class="isMode(s.k) ? 'ctl-dot-on' : ''"></span>
+                  <span x-text="s.label"></span>
+                </div>
+              </template>
+            </div>
+            <div class="ctl-legend">
+              <div class="ctl-sub">LEGEND</div>
+              <div class="ctl-lrow"><i class="ctl-sw ctl-sw-on"></i> Enabled</div>
+              <div class="ctl-lrow"><i class="ctl-sw ctl-sw-off"></i> Disabled</div>
+            </div>
+          </div>
+          <p class="ctl-note">Trading mode comes from <code>trade_type</code> +
+            <code>force_intraday_only</code>, which are boot-time configuration.
+            <b>Changing it requires a restart</b> — it is shown here, and changed in
+            Configuration.</p>
+        </section>
+
+        <section class="panel ctl-strat">
+          <h3 class="panel-title">2. STRATEGY CONTROLS
+            <span class="panel-sub" x-text="stratCount()"></span>
+          </h3>
+          <div class="tbl-scroll ctl-stratscroll tbl-freeze">
+            <table class="dt-table">
+              <thead><tr>
+                <th class="dt-th ctl-serial">#</th>
+                <th class="dt-th">Strategy Name</th>
+                <th class="dt-th">Trade Type</th>
+                <th class="dt-th">Status</th>
+                <th class="dt-th ctl-actcol">Action</th>
+              </tr></thead>
+              <tbody>
+                <template x-for="(r, i) in strategyRows()" :key="r.name">
+                  <tr :class="r.shadow ? 'ctl-shadowrow' : ''">
+                    <td class="dt-td ctl-serial" x-text="i + 1"></td>
+                    <td class="dt-td">
+                      <span x-text="r.label"></span>
+                      {# ⛔ A SHADOW IS NOT A PAUSED STRATEGY — it is held behind a
+                         promotion gate and must never read as something an
+                         operator merely switched off and could switch back on. #}
+                      <span class="ctl-shadow" x-show="r.shadow" x-cloak
+                            title="fail-closed: never trades until its promotion gate">SHADOW</span>
+                    </td>
+                    <td class="dt-td"><span class="ctl-badge" x-text="r.trade_type"></span></td>
+                    <td class="dt-td">
+                      <span class="ctl-state" :class="onoff(effEnabled(r))"
+                            x-text="effEnabled(r) ? 'ON' : 'OFF'"></span>
+                      <span class="ctl-diverge" x-show="r.diverged" x-cloak
+                            title="the running process and the YAML disagree">≠ config</span>
+                    </td>
+                    <td class="dt-td ctl-actcol">
+                      <button type="button" class="ctl-sw"
+                              :class="effEnabled(r) ? 'ctl-sw-on' : 'ctl-sw-off'"
+                              :disabled="!planeUp() || busy || r.shadow"
+                              @click="!r.shadow && toggleStrategy(r)"
+                              :aria-label="'toggle ' + r.label"></button>
+                    </td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
+          <p class="ctl-note">A toggle pauses/resumes the strategy <b>now</b> and
+            persists the decision for the next boot. Scanner = strategy (1:1), so
+            this list is the operational control list.</p>
+        </section>
+      </div>
+
+      {# ── ROW 2 ─────────────────────────────────────────────────────── #}
+      <div class="ctl-row ctl-row2">
+
+        <section class="panel">
+          <h3 class="panel-title">4. ALERT CONTROLS</h3>
+          <div class="ctl-trow">
+            <span class="ctl-tlabel">Telegram Alerts</span>
+            <span class="ctl-state" :class="onoff(data.alerts && data.alerts.telegram_enabled)"
+                  x-text="tri(data.alerts && data.alerts.telegram_enabled)"></span>
+          </div>
+          <p class="ctl-note">Read from configuration; the bot is not probed.
+            Alert delivery is <b>boot-time configuration</b>, shown here for
+            operational awareness.</p>
+        </section>
+
+        <section class="panel ctl-limits">
+          <h3 class="panel-title">5. RUNTIME LIMIT CONTROLS</h3>
+          {# ⛔⛔ THE ARTWORK DRAWS ALL SEVEN PARAMETERS TWICE, under an Intraday
+             table and a Delivery table. 🔬 Measured 01-Sep-2026: the config
+             splits only THREE of them. Printing one global number under two
+             headings would tell the operator the modes are independently
+             configured when they are not — on the screen whose whole purpose is
+             to say what the system will actually do. ⛔ A duplicated value is a
+             fabricated distinction. 👤 Rama chose the honest mixed layout. #}
+          <div class="ctl-limgrid">
+          <div class="ctl-limcol">
+          <h4 class="ctl-subh">MODE-SPECIFIC <span>separately configured per mode</span></h4>
+          <table class="dt-table ctl-limtbl">
+            <thead><tr>
+              <th class="dt-th">Parameter</th>
+              <th class="dt-th dt-num">Intraday</th>
+              <th class="dt-th dt-num">Delivery</th>
+              <th class="dt-th dt-num">New Value</th>
+            </tr></thead>
+            <tbody>
+              <template x-for="l in modeLimits()" :key="l.label">
+                <tr>
+                  <td class="dt-td" x-text="l.label" :title="l.source"></td>
+                  <td class="dt-td dt-num" x-text="limVal(l.intraday, l.pct)"></td>
+                  <td class="dt-td dt-num" x-text="limVal(l.delivery, l.pct)"></td>
+                  <td class="dt-td dt-num">
+                    <input x-show="l.key" class="ctl-input" type="number" step="0.01" min="0"
+                           :disabled="!planeUp() || busy" x-model="staged[l.key]"
+                           :placeholder="limVal(l.intraday, l.pct)"
+                           title="stages the intraday value; the delivery variant is set in Configuration">
+                    <span x-show="!l.key" class="ctl-ni" x-cloak>—</span>
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+
+          </div>
+          <div class="ctl-limcol">
+          <h4 class="ctl-subh">GLOBAL <span x-text="globalNote()"></span></h4>
+          <table class="dt-table ctl-limtbl">
+            <thead><tr>
+              <th class="dt-th">Parameter</th>
+              <th class="dt-th dt-num">Value</th>
+              <th class="dt-th dt-num">New Value</th>
+            </tr></thead>
+            <tbody>
+              <template x-for="l in globalLimits()" :key="l.label">
+                <tr>
+                  <td class="dt-td" x-text="l.label" :title="l.source || ''"></td>
+                  {# ⛔ NOT INSTRUMENTED, ⛔ never 0 — a 0 here would claim a
+                     configured limit of zero lots, which is a different and
+                     much more dangerous statement than "no source exists". #}
+                  <td class="dt-td dt-num" :class="l.measured ? '' : 'ctl-ni'"
+                      :title="l.measured ? (l.source || '') : l.reason"
+                      x-text="l.measured ? limVal(l.value, false) : 'NOT INSTRUMENTED'"></td>
+                  <td class="dt-td dt-num">
+                    <input x-show="l.key" class="ctl-input" type="number" step="1" min="1"
+                           :disabled="!planeUp() || busy" x-model="staged[l.key]"
+                           :placeholder="limVal(l.value, false)">
+                    <span x-show="!l.key" class="ctl-ni" x-cloak>—</span>
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+          </div>
+          </div>
+          <p class="ctl-note">Applies to decisions made <b>after</b> the change; a
+            decision already in flight may still use the previous value.</p>
+        </section>
+
+        <section class="panel ctl-protect">
+          <h3 class="panel-title">6. MARKET PROTECTION CONTROLS</h3>
+
+          <button type="button" class="ctl-act ctl-act-warn"
+                  :disabled="!planeUp() || busy" @click="pauseEntries()">
+            <b x-text="entriesPaused() ? 'Resume New Entries' : 'Pause New Entries'"></b>
+            <span x-text="entriesPaused()
+              ? 'Entries are paused. Click to resume.'
+              : 'Stop new entries. Manage existing positions.'"></span>
+          </button>
+
+          <div class="ctl-act ctl-act-info ctl-act-state">
+            <b>Allow Existing Position Management</b>
+            <span x-text="exitsLabel()"></span>
+          </div>
+
+          <div class="ctl-act ctl-act-muted ctl-act-state">
+            <b>Allow Exits Only</b>
+            <span>No runtime owner exists for an active flatten. Reported, not offered.</span>
+          </div>
+
+          <button type="button" class="ctl-act ctl-act-danger"
+                  :disabled="!planeUp() || busy" @click="askFullStop()">
+            <b>Full Trading Stop</b>
+            <span>Persisted kill switch. Halts trading for the rest of the day.</span>
+          </button>
+        </section>
+      </div>
+
+      {# ── ROW 3 ─────────────────────────────────────────────────────── #}
+      <div class="ctl-row ctl-row3">
+
+        <section class="panel">
+          <h3 class="panel-title">7. READINESS CHECK</h3>
+          <div class="ctl-ready">
+            <template x-for="r in (data.readiness || [])" :key="r.name">
+              <div class="ctl-rtile" :class="readyCls(r.state)">
+                <div class="ctl-rname" x-text="r.name"></div>
+                <div class="ctl-rstate" x-text="r.state"></div>
+                <div class="ctl-rdetail" x-text="r.detail"></div>
+              </div>
+            </template>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h3 class="panel-title">8. CHANGE PREVIEW</h3>
+          <table class="dt-table" x-show="pending().length" x-cloak>
+            <thead><tr>
+              <th class="dt-th">Parameter</th>
+              <th class="dt-th dt-num">Old Value</th>
+              <th class="dt-th ctl-arrowcol"></th>
+              <th class="dt-th dt-num">New Value</th>
+            </tr></thead>
+            <tbody>
+              <template x-for="p in pending()" :key="p.key">
+                <tr>
+                  <td class="dt-td" x-text="p.label"></td>
+                  <td class="dt-td dt-num" x-text="p.old"></td>
+                  <td class="dt-td ctl-arrowcol">→</td>
+                  <td class="dt-td dt-num ctl-new" x-text="p.next"></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+          <div class="empty-state" x-show="!pending().length">
+            <div class="es-body">No staged changes.</div>
+          </div>
+        </section>
+
+        <section class="panel ctl-confirm">
+          <h3 class="panel-title">9. CONFIRM CHANGE</h3>
+          <div x-show="pending().length" x-cloak>
+            <p class="ctl-warn">⚠ You are about to apply:</p>
+            <ul class="ctl-list">
+              <template x-for="p in pending()" :key="p.key">
+                <li><span x-text="p.label"></span>:
+                  <b x-text="p.old"></b> → <b class="ctl-new" x-text="p.next"></b></li>
+              </template>
+            </ul>
+            <p class="ctl-note" x-show="criticalPending()" x-cloak>
+              <b>Critical change.</b> Type <code>CONFIRM</code> to apply.</p>
+            <input class="ctl-input ctl-confirminput" x-show="criticalPending()" x-cloak
+                   x-model="confirmText" placeholder="CONFIRM">
+          </div>
+          <div class="empty-state" x-show="!pending().length">
+            <div class="es-body">Nothing to confirm.</div>
+          </div>
+          <p class="ctl-err" x-show="actionError" x-cloak x-text="actionError"></p>
+          <p class="ctl-ok" x-show="actionOk" x-cloak x-text="actionOk"></p>
+        </section>
+      </div>
+
+      {# ── ROW 4 — INFORMATION panels (Rama §7: info may duplicate) ──── #}
+      <div class="ctl-row ctl-row4">
+
+        <section class="panel">
+          <h3 class="panel-title">10. BROKER COSTS <span class="panel-sub">(per order)</span></h3>
+          <table class="dt-table">
+            <tbody>
+              <template x-for="c in brokerCosts()" :key="c.k">
+                <tr><td class="dt-td" x-text="c.k"></td>
+                    <td class="dt-td dt-num" x-text="c.v"></td></tr>
+              </template>
+            </tbody>
+          </table>
+          <div class="empty-state" x-show="!brokerCosts().length" x-cloak>
+            <div class="es-body">No broker-cost snapshot available.</div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h3 class="panel-title">11. CONFIGURATION COMPARISON</h3>
+          <table class="dt-table">
+            <thead><tr>
+              <th class="dt-th">Parameter</th><th class="dt-th">Change</th>
+            </tr></thead>
+            <tbody>
+              <template x-for="d in drift()" :key="d">
+                <tr><td class="dt-td" x-text="d"></td>
+                    <td class="dt-td">changed</td></tr>
+              </template>
+            </tbody>
+          </table>
+          <div class="empty-state" x-show="!drift().length" x-cloak>
+            <div class="es-body">No configuration change detected.</div>
+          </div>
+        </section>
+
+        <section class="panel ctl-histpanel">
+          <h3 class="panel-title">12. HISTORY <span class="panel-sub">(recent changes)</span></h3>
+          {# ⭐ THE ONE TABLE IN THE GUI WHOSE BODY ACTUALLY SCROLLED WHILE ITS
+             HEADER SCROLLED AWAY. 🔬 Measured 02-Sep at both viewports: 12 rows
+             of 498px inside a 188px bound, `overflow-y: auto`, and `thead th`
+             computing `position: static` — so Time / Module / Action / User
+             left the panel as soon as the reader moved past row four. ⛔ Not a
+             styling preference: it is the defect the deferred freeze-pane rule
+             exists to fix, and it was the only instance. #}
+          <div class="tbl-scroll tbl-freeze">
+            <table class="dt-table">
+              <thead><tr>
+                <th class="dt-th">Time</th><th class="dt-th">Module</th>
+                <th class="dt-th">Action</th><th class="dt-th">User</th>
+              </tr></thead>
+              <tbody>
+                <template x-for="(h, i) in (data.control_history || [])" :key="i">
+                  <tr>
+                    <td class="dt-td mono" x-text="hhmmss(h.ts || h.timestamp) || dash(null)"
+                      :title="h.ts || h.timestamp"></td>
+                    <td class="dt-td" x-text="dash(h.module || h.src_table)"></td>
+                    <td class="dt-td" x-text="dash(h.action || h.event_type)"></td>
+                    <td class="dt-td" x-text="dash(h.user || h.actor)"></td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
+          <div class="empty-state" x-show="!(data.control_history || []).length" x-cloak>
+            <div class="es-body">No audit rows for today.</div>
+          </div>
+        </section>
+      </div>
     </div>
-  </section>
+
+    {# ── RIGHT RAIL ─────────────────────────────────────────────────── #}
+    <aside class="ctl-rail">
+
+      <section class="panel">
+        <h3 class="panel-title">ACTIVE CONTROLS SUMMARY</h3>
+        <div class="cfg-block">
+          <div class="cfg-row"><span class="cfg-key">Trading Mode</span>
+            <span x-text="summary('trading_mode')"></span></div>
+          <div class="cfg-row"><span class="cfg-key">Active Strategies</span>
+            <span x-text="summary('active_strategies')"></span></div>
+          <div class="cfg-row"><span class="cfg-key">Paused Strategies</span>
+            <span x-text="summary('paused_strategies')"></span></div>
+          <div class="cfg-row"><span class="cfg-key">Trading Status</span>
+            <span x-text="summary('trading_status')"></span></div>
+          <div class="cfg-row"><span class="cfg-key">Alert Status</span>
+            <span x-text="summary('alert_status')"></span></div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h3 class="panel-title">CONTROL HISTORY</h3>
+        <div class="ctl-hist">
+          <template x-for="(h, i) in (data.control_history || []).slice(0, 6)" :key="i">
+            <div class="ctl-hrow">
+              <span class="ctl-htime mono" x-text="hhmmss(h.ts || h.timestamp) || dash(null)"
+                    :title="h.ts || h.timestamp"></span>
+              <span x-text="dash(h.action || h.event_type)"></span>
+            </div>
+          </template>
+        </div>
+        <div class="empty-state" x-show="!(data.control_history || []).length" x-cloak>
+          <div class="es-body">No control actions recorded.</div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h3 class="panel-title">SIMULATION MODE</h3>
+        <div class="ctl-simrow">
+          <template x-for="m in ['LIVE','PAPER','DISABLED']" :key="m">
+            <div class="ctl-sim" :class="simCls(m)">
+              <b x-text="m"></b>
+              <span x-text="simIs(m) ? 'Active' : 'Not active'"></span>
+            </div>
+          </template>
+        </div>
+        <p class="ctl-note">Display only — mode changes belong to Configuration.</p>
+      </section>
+
+      <section class="panel">
+        <h3 class="panel-title">APPLY CONTROLS</h3>
+        <div class="ctl-apply">
+          <button type="button" class="ctl-btn ctl-btn-ok"
+                  :disabled="!planeUp() || busy || !pending().length || !confirmSatisfied()"
+                  @click="applyLimits()">✓ Apply Changes</button>
+          <button type="button" class="ctl-btn ctl-btn-mute"
+                  :disabled="busy || !pending().length" @click="cancelStaged()">✕ Cancel</button>
+          <button type="button" class="ctl-btn ctl-btn-danger"
+                  :disabled="busy || !pending().length" @click="revertStaged()">↺ Revert</button>
+        </div>
+        <p class="ctl-note">
+          <b>Cancel</b> discards staged edits. <b>Revert</b> restores every field to
+          the live runtime value. Neither contacts the trading process.</p>
+      </section>
+
+      <section class="panel">
+        <h3 class="panel-title">13. SEARCH CONTROLS</h3>
+        <input class="flt" placeholder="Search strategies / controls…"
+               x-model.debounce.200ms="search">
+      </section>
+
+      {# ── 14. EXPORT — the artwork's own number, unchanged.
+             Uses the SAME workbook writer as every other screen
+             export — ⛔ no second export architecture. The route rebuilds the
+             SAME payload this screen was served, so a cell cannot disagree
+             with the panel above it. ⛔ Read-only: it never touches the
+             control plane. #}
+      <section class="panel">
+        <h3 class="panel-title">14. EXPORT</h3>
+        <p class="ctl-note">Export the control data this screen is showing.</p>
+        <a class="ctl-btn ctl-btn-ok ctl-exp-btn" :href="exportUrl()"
+           title="Download this screen's control data as XLSX">
+          <span>⇩</span><span>Export to XLSX</span></a>
+      </section>
+    </aside>
+  </div>
+
+  <p class="ctl-foot">All times are IST (Asia/Kolkata). Values refresh from the
+     running system; control actions display the state the runtime returns.</p>
 </div>
+
 <script>
 function controlsPage() {
-  return Object.assign(pageBase("/api/controls-summary"), {
-    lim(k) { const v = (this.data.limits || {})[k]; return (v === null || v === undefined) ? "—" : v; },
-    pctOf(k) { const v = (this.data.limits || {})[k]; return (v === null || v === undefined) ? "—" : (v * 100).toFixed(0) + "%"; },
-    ks(k) { const s = this.data.kill_switch || {}; return (s[k] === null || s[k] === undefined || s[k] === "") ? "—" : s[k]; },
-    telegramLabel() {
-      const t = this.data.telegram_alerts;
-      if (!t) return "—";
-      return t.configured === null ? "not set in snapshot" : (t.configured ? "ON" : "OFF");
+  return Object.assign(pageBase("/api/controls/screen"), {
+    staged: {}, confirmText: "", busy: false, search: "",
+    actionError: "", actionOk: "",
+
+    /* 14. EXPORT — the same builder the screen reads, so the workbook cannot
+       disagree with the panels. GET only; it never reaches the control plane. */
+    exportUrl() { return "/api/export/controls-screen"; },
+
+    modeStates: [
+      {k: "INTRADAY_ONLY", label: "Intraday Only"},
+      {k: "DELIVERY_ONLY", label: "Delivery Only"},
+      {k: "BOTH",          label: "Both (Intraday + Delivery)"},
+      {k: "ALL_DISABLED",  label: "All Disabled"},
+    ],
+    limitDefs: [
+      {key: "max_daily_trades",     label: "Max Trades (Per Day)", step: "1",    min: "1"},
+      {key: "max_open_positions",   label: "Max Positions (Open)", step: "1",    min: "1"},
+      {key: "max_concentration_pct", label: "Max Concentration",   step: "0.01", min: "0"},
+      {key: "daily_loss_limit_pct", label: "Daily Loss Limit",     step: "0.01", min: "0"},
+    ],
+    // ── truth helpers ───────────────────────────────────────────────────
+    planeUp() { return !!(this.data.control_plane && this.data.control_plane.available); },
+    reason()  { return this.data.control_plane ? this.data.control_plane.reason : ""; },
+    summary(k) { const s = this.data.active_controls_summary || {}; return this.dash(s[k]); },
+    tri(v) { return v === true ? "ON" : (v === false ? "OFF" : "—"); },
+    onoff(v) { return v ? "ctl-on" : "ctl-off"; },
+    isMode(k) { return this.data.trading_mode && this.data.trading_mode.state === k; },
+    entriesPaused() {
+      const m = this.data.market_protection || {}; return m.entries_paused === true;
+    },
+    entriesLabel() {
+      const m = this.data.market_protection || {};
+      if (m.entries_paused === null || m.entries_paused === undefined) return "—";
+      return m.entries_paused ? "PAUSED" : "OPEN";
+    },
+    exitsLabel() {
+      if (!this.planeUp()) return "Unknown — control plane unavailable.";
+      return this.entriesPaused()
+        ? "Active: entries are paused, exits and position management continue."
+        : "Active: exits are always permitted unless a HARD kill is set.";
+    },
+    stratCount() {
+      const s = this.data.strategies; if (!s) return "";
+      return s.enabled_count + " of " + s.total + " enabled";
+    },
+    strategyRows() {
+      const rows = (this.data.strategies && this.data.strategies.rows) || [];
+      const q = (this.search || "").trim().toLowerCase();
+      return q ? rows.filter(r => (r.label + " " + r.name).toLowerCase().includes(q)) : rows;
+    },
+    // ⛔ live value wins; the YAML value is only a fallback for display when the
+    // plane is down, and the row is flagged `diverged` when they disagree.
+    effEnabled(r) { return r.live_enabled === null || r.live_enabled === undefined
+                            ? r.configured_enabled : r.live_enabled; },
+    {# ⛔ THE RAW ISO STRING WAS BEING PRINTED. 🔬 Measured 01-Sep-2026: a
+       32-character stamp in a monospace font took 244px of the history row and
+       left 14px for the action text, which then wrapped ONE CHARACTER PER LINE
+       and made the panel 4393px tall. ⭐ The same raw value also broke the
+       LAST CONTROL CHANGE card across three lines.
+       ⭐ Control history spans DAYS, so a stamp from an earlier day names that
+       day; today keeps the bare time. ⛔ NO APOSTROPHES IN THIS BLOCK. #}
+    hhmmss(ts) {
+      if (!ts) return "";
+      const s = String(ts).replace("T", " ");
+      const day = s.slice(0, 10), t = s.slice(11, 19);
+      if (!day || day === (this.data.today || "")) return t;
+      const M = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                 "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+      const q = day.split("-");
+      return q[2] + "-" + (M[Number(q[1]) - 1] || q[1]) + " " + t;
+    },
+    lastChange() {
+      const v = (this.data.active_controls_summary || {}).last_control_change;
+      return v ? this.hhmmss(v) : "—";
+    },
+    modeLimits()   { return (this.data.limits && this.data.limits.mode_specific) || []; },
+    globalLimits() { return (this.data.limits && this.data.limits.global) || []; },
+    globalNote()   { return (this.data.limits && this.data.limits.global_note) || ""; },
+    limVal(v, pct) {
+      if (v === null || v === undefined || v === "") return "—";
+      const n = Number(v);
+      if (!isFinite(n)) return String(v);
+      return pct ? (n * 100).toFixed(2) + "%" : String(n);
+    },
+    liveLimit(l) {
+      const lim = this.data.limits || {};
+      const v = (lim.live && lim.live[l.key] !== null && lim.live[l.key] !== undefined)
+        ? lim.live[l.key] : (lim.configured || {})[l.key];
+      return (v === null || v === undefined) ? "—" : v;
+    },
+    pending() {
+      const out = [];
+      for (const l of this.limitDefs) {
+        const raw = this.staged[l.key];
+        if (raw === "" || raw === null || raw === undefined) continue;
+        const next = Number(raw), old = Number(this.liveLimit(l));
+        if (!isFinite(next) || next === old) continue;
+        out.push({key: l.key, label: l.label, old: this.liveLimit(l), next: next});
+      }
+      return out;
+    },
+    // Critical parameters need a typed confirmation (artwork panel "CONFIRM CHANGE").
+    criticalPending() {
+      return this.pending().some(p => p.key === "daily_loss_limit_pct"
+                                   || p.key === "max_open_positions");
+    },
+    confirmSatisfied() {
+      return !this.criticalPending() || this.confirmText.trim().toUpperCase() === "CONFIRM";
+    },
+    readyCls(s) { return s === "READY" ? "ctl-r-ok" : (s === "NOT READY" ? "ctl-r-bad" : "ctl-r-unk"); },
+    simIs(m) { return (this.data.simulation_mode || {}).mode === m; },
+    simCls(m) { return this.simIs(m) ? "ctl-sim-on" : ""; },
+    brokerCosts() {
+      const cv = this.data.config_view || {};
+      const groups = cv.groups || [];
+      const g = groups.find(x => (x.name || "").toLowerCase().includes("broker"));
+      if (!g || !g.data) return [];
+      return Object.keys(g.data).map(k => ({k: k, v: String(g.data[k])}));
+    },
+    drift() {
+      const cv = this.data.config_view || {};
+      const d = cv.drift || {};
+      return d.changed_keys || d.keys || [];
+    },
+    // ── actions ─────────────────────────────────────────────────────────
+    async send(action, payload) {
+      this.busy = true; this.actionError = ""; this.actionOk = "";
+      try {
+        const r = await fetch("/api/controls/action", {
+          method: "POST", credentials: "same-origin",
+          headers: {"Content-Type": "application/json", "Accept": "application/json"},
+          body: JSON.stringify({action: action, payload: payload || {}}),
+        });
+        const b = await r.json();
+        if (!b.reachable) { this.actionError = "Control plane unreachable: " + (b.error || ""); }
+        else if (!b.applied) { this.actionError = "Not applied: " + (b.error || ("status " + b.upstream_status)); }
+        else { this.actionOk = "Applied. Runtime state refreshed."; }
+      } catch (e) {
+        this.actionError = "Request failed: " + String(e.message || e);
+      } finally {
+        // ⛔ ALWAYS re-read the runtime. The screen shows what the system reports,
+        // never what was requested — including after a failure.
+        await this.load();
+        this.busy = false;
+      }
+    },
+    async pauseEntries() {
+      await this.send(this.entriesPaused() ? "entries.resume" : "entries.pause", {});
+    },
+    async toggleStrategy(r) {
+      await this.send("strategy.toggle", {name: r.name, enabled: !this.effEnabled(r)});
+    },
+    async askFullStop() {
+      const typed = window.prompt(
+        "FULL TRADING STOP\n\n" +
+        "This activates the REAL persisted kill switch. New entries stop " +
+        "immediately and trading halts for the remainder of the day; recovery " +
+        "before the next boot uses deploy/resume.sh.\n\n" +
+        "This is NOT the same as Pause New Entries.\n\n" +
+        "Type: FULL TRADING STOP");
+      if (!typed) return;
+      await this.send("trading.stop", {confirm: typed, reason: "operator via Screen 17"});
+    },
+    async applyLimits() {
+      const payload = {};
+      for (const p of this.pending()) payload[p.key] = p.next;
+      await this.send("limits.update", payload);
+      this.staged = {}; this.confirmText = "";
+    },
+    cancelStaged() { this.staged = {}; this.confirmText = ""; this.actionError = ""; this.actionOk = ""; },
+    revertStaged() {
+      this.staged = {}; this.confirmText = "";
+      for (const l of this.limitDefs) this.staged[l.key] = "";
     },
   });
 }

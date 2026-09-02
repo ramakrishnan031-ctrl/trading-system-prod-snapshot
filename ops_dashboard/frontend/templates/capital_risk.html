@@ -1,361 +1,704 @@
 {% extends "base.html" %}
-{% from "components.html" import kpi_row, kpi_card, two_state_panel, export_button, events_alerts_panel %}
+{# The shared export macro is DISABLED for this screen (no export route). It is
+   still rendered, because B6's gate is per-screen and a screen that silently
+   drops it looks like the flag was flipped globally. #}
+{% from "components.html" import export_button %}
 {% block title %}AlgoCore Systems — Capital &amp; Risk{% endblock %}
 {% block nav_capital_risk %}active{% endblock %}
 {% block content %}
 {#
-  SCREEN-08 (14-Aug-2026). Composes the PRESERVED endpoints /api/risk,
-  /api/capital, /api/exposure, /api/capacity, /api/pnl and adds ONE new read-only
-  endpoint /api/capital/segments. Every figure is engine truth from the DB.
+  ══════════════════════════════════════════════════════════════════════════
+  SCREEN-08 · CAPITAL & RISK — FULL REPLACEMENT, 24-Aug-2026
+  ══════════════════════════════════════════════════════════════════════════
+  Rebuilt from the ground up against the approved design baseline:
+      gui/08. Capital_Risk.png   — composition, density, proportions
+      gui/08. Capital_Risk.txt   — labels, ordering, semantics, data truth
+  ⛔ The previous composition was NOT patched. It is gone: the old page had
+  drifted into a tall, sparse, card-heavy stack. This is a dense control-tower
+  screen — four panels across the top, one 5+5b flow band, a compact 6/7/8 row,
+  and a compact 9/10 row.
 
-  FOUR QUANTITIES ARE KEPT VISUALLY APART — conflating them is why this screen
-  exists:
-    Real cash         broker cash the engine believes it holds (fm_ledger)
-    Real allocation   real cash x bucket pct (MIS 70 / GTT 30, from config)
-    Segment capacity  real allocation x leverage (5x / 1x) — BUYING POWER, not cash
-    Real committed    trades.margin_reserved — cash actually committed
+  ⭐ DENSITY IS BOUGHT FROM PADDING, COLUMNS AND PROPORTION — ⛔ NEVER FROM
+  FONT SIZE. The 13px readability floor (Rama Q2, 19-Aug) is untouched: every
+  data cell is >= 13px. The reference source's 9px table headings were NOT
+  copied; the app's own `.cap-table` label scale is used instead.
+
+  DATA — every figure is an existing binding. ⛔ Nothing new was queried and
+  ⛔ nothing is invented:
+      /api/capital/segments  real cash · MIS/GTT segments · pinned simulation · strategies
+      /api/risk              daily loss · open positions · consecutive losses
+      /api/exposure          long/short/net/gross · exposure %
+      /api/capacity          daily orders · open positions limits
+      /api/capital           fm_ledger rows (section 9 curve)
+      /api/alerts            section 7 events
+
+  FOUR QUANTITIES STAY VISUALLY APART — conflating them is why this screen exists:
+      real cash         broker cash the engine believes it holds (fm_ledger)
+      real allocation   real cash x bucket pct (MIS 70 / GTT 30, from config)
+      segment capacity  real allocation x leverage (5x / 1x) — BUYING POWER, not cash
+      real committed    trades.margin_reserved — cash actually committed
   Order notional is DERIVED as committed x leverage, never the reverse.
 
-  The mockup's BEFORE/AFTER pay-in panels are a PINNED SIMULATION and are NOT
-  reproduced here: no simulation mode exists, so the screen shows the actual
-  current state only. Pay-in / pay-out have no GUI-readable source (the engine
-  does not persist them and isolation rule I4 forbids a broker call), so they
-  render as an explicit not-observed state rather than an invented number.
+  ⛔ PAY-IN / PAY-OUT ARE GONE FROM THE LIVE SCREEN (approved): not trackable,
+  no labels, no placeholders, no reserved gap. "Additional Cash" survives ONLY
+  inside 5b, which is a pinned hypothetical.
 #}
 <style>
-  /* Screen-08 only. Scoped to classes this template introduces, so no other
-     screen's rendering can change. */
-  .badge-live, .badge-sim { font-size:11px; font-weight:700; letter-spacing:.04em;
-    padding:2px 8px; border-radius:10px; margin-left:8px; vertical-align:middle; }
-  .badge-live { background:rgba(46,160,67,.18); color:#3fb950; border:1px solid rgba(63,185,80,.45); }
-  .badge-sim  { background:rgba(210,153,34,.18); color:#d29922; border:1px solid rgba(210,153,34,.45); }
-  /* The simulation block is visually set apart so it can never be mistaken for
-     live data at a glance. */
-  .sim-panel { border:1px dashed rgba(210,153,34,.55); }
-  .three-col { display:grid; grid-template-columns:minmax(220px,1fr) minmax(260px,1.2fr) minmax(260px,1.2fr);
-    gap:12px; align-items:start; }
-  @media (max-width:1200px) { .three-col { grid-template-columns:1fr; } }
-  .basis-warn { color:#d29922; }
-  .seg-total td { border-top:1px solid rgba(240,246,252,.18); font-weight:600; }
+/* ═════ SCREEN-08 ONLY. Every selector is .cap-page-scoped, so no other screen
+   can change. ═════ */
+.cap-page { --cap-gap: 8px; }
+
+/* Page heading — compact, one line, mirroring the artwork's title block. */
+.cap-page .cap-h1 { margin: 0 0 6px; font-size: 1.25rem; font-weight: 800;
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.cap-page .cap-h1 .cap-sub { font-size: .8rem; font-weight: 400; color: var(--muted); }
+.cap-page .cap-live { font-size: .72rem; font-weight: 700; color: var(--green); }
+
+/* ── THE FOUR COMPOSITION ROWS. Ratios read off the approved PNG. ── */
+.cap-page .cap-top  { display: grid; gap: var(--cap-gap); align-items: stretch;
+  grid-template-columns: 1.05fr 1.05fr 1fr 1.38fr; margin-bottom: var(--cap-gap); }
+.cap-page .cap-flow { display: grid; gap: var(--cap-gap); align-items: stretch;
+  grid-template-columns: 1.06fr 1fr; margin-bottom: var(--cap-gap); }
+.cap-page .cap-mid  { display: grid; gap: var(--cap-gap); align-items: stretch;
+  grid-template-columns: 1.5fr 1fr 1.5fr; margin-bottom: var(--cap-gap); }
+.cap-page .cap-bot  { display: grid; gap: var(--cap-gap); align-items: stretch;
+  grid-template-columns: 1fr 1.62fr; margin-bottom: 6px; }
+/* ⚠️ WHERE THE COMPOSITION REFLOWS, AND WHY THAT NUMBER.
+   The artwork is drawn 4-across for a WIDE viewport: at 1920 the four top
+   panels get ~430px each and Limits Monitor's six columns fit. Forcing the same
+   4-across at 1440 was MEASURED to push Limits Monitor's STATUS column off the
+   panel and to squeeze 5b's row labels down to single letters. Shrinking type
+   to make it fit is forbidden (13px floor), so below ~1560px the row reflows to
+   2x2 instead. ⛔ That is a deliberate reflow, not the sparse stack the previous
+   build drifted into: the panels stay dense, only their arrangement changes. */
+@media (max-width: 1240px) {
+  .cap-page .cap-top { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 1360px) {
+  .cap-page .cap-mid { grid-template-columns: 1fr; }
+  .cap-page .cap-bot { grid-template-columns: 1fr; }
+}
+@media (max-width: 1040px) {
+  .cap-page .cap-top, .cap-page .cap-flow { grid-template-columns: 1fr; }
+}
+/* 5b holds THREE blocks side by side. Below ~1620px the label column in
+   BEFORE/AFTER ellipses, so the simulation INPUT takes its own full-width row
+   and the two value blocks keep half each. */
+@media (max-width: 1620px) {
+  .cap-page .seg-3 { grid-template-columns: 1fr 1fr; }
+  .cap-page .seg-3 > :first-child { grid-column: 1 / -1; }
+  .cap-page .seg-3 > :first-child .sr { padding: 1px 2px; }
+}
+
+/* Compact panel: the artwork's panels are ~10px padded, not 16. */
+.cap-page .panel { padding: 8px 9px 7px; margin: 0; border-radius: 8px;
+  display: flex; flex-direction: column; min-width: 0; }
+.cap-page .panel-title { margin: 0 0 6px; font-size: .82rem; font-weight: 800;
+  letter-spacing: .01em; color: var(--blue); gap: 6px; flex-wrap: wrap; }
+.cap-page .panel-title .pt-note { font-size: .7rem; font-weight: 400; color: var(--muted); }
+
+/* Badges — LIVE / ENGINE TRUTH vs PINNED SIMULATION must never be confusable. */
+.cap-page .bdg { font-size: .66rem; font-weight: 800; letter-spacing: .05em;
+  padding: 1px 7px; border-radius: 9px; white-space: nowrap; }
+.cap-page .bdg-live { background: rgba(var(--t-green), .16); color: var(--green);
+  border: 1px solid rgba(var(--t-green), .45); }
+.cap-page .bdg-sim { background: rgba(var(--t-yellow), .16); color: #d29922;
+  border: 1px solid rgba(var(--t-yellow), .5); }
+.cap-page .sim-panel { border: 1px dashed rgba(210, 153, 34, .55); }
+.cap-page .sim-warn { font-size: .7rem; color: #d29922; font-weight: 400; }
+
+/* ── KPI TILE. Dense: the artwork's tiles are ~54px tall, two or three across.
+   ⭐ 1.02rem ≈ 16px — well ABOVE the 13px floor; it is the 1.7rem global
+   `.kpi-val` that is wrong at this density, not the floor. ── */
+.cap-page .ck-grid { display: grid; gap: 5px; }
+.cap-page .ck-2 { grid-template-columns: 1fr 1fr; }
+.cap-page .ck-3 { grid-template-columns: 1fr 1fr 1fr; }
+.cap-page .ck { background: var(--card); border: 1px solid var(--card-bd);
+  border-radius: 6px; padding: 6px 8px; min-width: 0; }
+.cap-page .ck-l { display: block; font-size: .68rem; text-transform: uppercase;
+  letter-spacing: .05em; color: var(--dim); line-height: 1.25;
+  overflow-wrap: anywhere; }
+.cap-page .ck-v { display: block; margin-top: 2px; font-size: 1.02rem; font-weight: 700;
+  font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cap-page .ck-s { display: block; font-size: .68rem; color: var(--muted); margin-top: 1px; }
+.cap-page .v-green { color: var(--green); } .cap-page .v-red { color: var(--red); }
+.cap-page .v-blue { color: var(--blue); }  .cap-page .v-amber { color: #d29922; }
+.cap-page .v-dim { color: var(--dim); }
+
+/* Footnote inside a panel. */
+.cap-page .cap-note { font-size: .7rem; color: var(--muted); margin-top: 5px;
+  line-height: 1.3; }
+
+/* ── TABLES. 13px data, compact padding. ⛔ The floor is not touched. ── */
+.cap-page .tbl-wrap { overflow-x: auto; min-width: 0; }
+.cap-page .ct { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.cap-page .ct th { text-align: left; font-size: .68rem; text-transform: uppercase;
+  letter-spacing: .05em; color: var(--dim); font-weight: 600; padding: 3px 5px;
+  border-bottom: 1px solid var(--card-bd); white-space: nowrap; }
+.cap-page .ct td { font-size: 13px; padding: 3px 5px; white-space: nowrap;
+  border-bottom: 1px solid rgba(var(--t-gray), .12); }
+.cap-page .ct tbody tr:last-child td { border-bottom: 0; }
+.cap-page .ct .num { text-align: right; }
+.cap-page .ct .tot td { border-top: 1px solid var(--card-bd); font-weight: 700; }
+.cap-page .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+  margin-right: 5px; vertical-align: 1px; }
+.cap-page .s-green { color: var(--green); } .cap-page .s-green .dot { background: var(--green); }
+.cap-page .s-amber { color: #d29922; }      .cap-page .s-amber .dot { background: #d29922; }
+.cap-page .s-red { color: var(--red); }     .cap-page .s-red .dot { background: var(--red); }
+.cap-page .s-dim { color: var(--dim); }     .cap-page .s-dim .dot { background: var(--dim); }
+
+/* ── SECTION 5 / 5b segment lists. ── */
+.cap-page .seg-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.cap-page .seg-3 { display: grid; grid-template-columns: .78fr 1.11fr 1.11fr; gap: 9px; }
+.cap-page .seg-h { margin: 0 0 4px; text-align: center; font-size: .72rem; font-weight: 800;
+  letter-spacing: .04em; text-transform: uppercase; }
+.cap-page .seg-mis { color: var(--green); } .cap-page .seg-gtt { color: #d8863a; }
+.cap-page .seg-neutral { color: var(--muted); }
+.cap-page .sr { display: flex; justify-content: space-between; gap: 8px;
+  padding: 2px 2px; border-bottom: 1px solid rgba(var(--t-gray), .12); font-size: 13px; }
+.cap-page .sr:last-child { border-bottom: 0; }
+.cap-page .sr .k { color: var(--muted); min-width: 0; line-height: 1.25;
+  overflow-wrap: anywhere; }
+.cap-page .sr .v { font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; }
+/* 5b BEFORE/AFTER: label + MIS + GTT, values right-aligned in their own columns
+   (the artwork's own shape, and it fits where a single "a / b" string did not). */
+.cap-page .mg { display: grid; grid-template-columns: minmax(92px, 1.25fr) auto auto; gap: 0 6px; }
+.cap-page .mg-h { font-size: .64rem; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--dim); text-align: right; padding: 0 0 3px; white-space: nowrap; }
+.cap-page .mg-mis { color: var(--green); } .cap-page .mg-gtt { color: #d8863a; }
+.cap-page .mg-k { font-size: 13px; color: var(--muted); padding: 2px 0;
+  border-bottom: 1px solid rgba(var(--t-gray), .12);
+  line-height: 1.25; overflow-wrap: anywhere; }
+.cap-page .mg-v { font-size: 13px; font-weight: 600; text-align: right; padding: 2px 0;
+  border-bottom: 1px solid rgba(var(--t-gray), .12);
+  font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* TOTALS strip that closes 5 and 5b */
+.cap-page .tot-strip { display: grid; gap: 6px; margin-top: 5px; padding-top: 5px;
+  border-top: 1px solid var(--card-bd); }
+.cap-page .tot-strip .tl { font-size: .66rem; text-transform: uppercase;
+  letter-spacing: .05em; color: var(--dim); line-height: 1.2;
+  overflow-wrap: anywhere; }
+.cap-page .tot-strip .tv { font-size: 13px; font-weight: 700;
+  font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cap-page .tot-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.cap-page .tot-strip .tf { font-size: .66rem; color: var(--dim); white-space: nowrap;
+  font-variant-numeric: tabular-nums; }
+
+/* ── SECTION 8 usage bars ── */
+/* ── SECTION 9 chart + SECTION 10 gauge ── */
+.cap-page .chart-wrap { display: flex; gap: 8px; align-items: stretch; min-height: 0; max-height: 210px; }
+.cap-page .chart-svg { flex: 1 1 auto; min-width: 0; }
+.cap-page .chart-side { flex: 0 0 118px; display: flex; flex-direction: column;
+  justify-content: center; gap: 6px; }
+.cap-page .gauge-wrap { display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
+  align-items: center; }
+.cap-page .legend { display: flex; gap: 12px; justify-content: center;
+  font-size: .7rem; color: var(--muted); margin-bottom: 1px; }
+.cap-page .legend b { font-weight: 600; }
+
+/* ── FOOTER strip ── */
+.cap-page .cap-foot { border: 1px solid var(--border); border-radius: 8px;
+  padding: 5px 10px; text-align: center; font-size: .72rem; color: var(--muted); }
 </style>
-{# `cap-page` scopes Screen-08's alignment rules. Without it the heading-centring
-   below would reach every .cap-table on every screen — an unintended change. #}
-<div class="cap-page" x-data="capitalRiskPage()" x-init="load()" @ops-refresh.window="load()">
-  <h2 class="panel-title">Capital &amp; Risk
-    <span class="panel-sub" x-text="seg.today || ''"></span></h2>
 
-  <!-- ZONE 1 · CAPITAL OVERVIEW (TOTAL REAL CASH) -->
-  <section class="panel">
-    <h3 class="panel-title">1 · Capital Overview
-      <span class="panel-sub">total real cash — <span x-text="seg.real_cash ? seg.real_cash.formula : ''"></span></span></h3>
-    {% call kpi_row() %}
-      {{ kpi_card("Opening Cash", "money(rc('opening'))", tone="info") }}
-      {{ kpi_card("Pay-in (Today)", "movementText('payin_today')", tone="info") }}
-      {{ kpi_card("Pay-out (Today)", "movementText('payout_today')", tone="info") }}
-      {{ kpi_card("Total Real Cash", "money(rc('total_live'))", tone="info") }}
-      {{ kpi_card("Real Cash Consumed", "money(rc('consumed'))", tone="warn") }}
-      {{ kpi_card("Real Cash Available", "money(rc('available'))", tone="pos") }}
-    {% endcall %}
-    {# ⛔ The limitation is stated ON the screen, not just in a comment: without
-       it, ₹5,588.60 reads as "the account holds this now", which is not what the
-       figure means when the engine has not re-synced. #}
-    <p class="panel-sub basis-warn" x-show="!movementObserved()" x-cloak>
-      <strong>⚠ Engine truth, not the broker's live balance.</strong>
-      <span x-text="basisNote()"></span>
-      <span x-text="syncNote()"></span>
-    </p>
-    <p class="panel-sub" x-show="!movementObserved()" x-cloak
-       x-text="movementReason()"></p>
-  </section>
+{# `x-init="load()"` + the refresh listener is the established screen contract
+   (`pageBase` provides load(), NOT init()). #}
+<div class="dash-page cap-page" x-data="capitalRiskPage()" x-init="load()"
+     @ops-refresh.window="load()">
 
-  <div class="two-col">
-    <!-- ZONE 2 · RISK SUMMARY -->
-    <section class="panel">
-      <h3 class="panel-title">2 · Risk Summary
-        <span class="panel-sub" x-text="lossLimitSub()"></span></h3>
-      <div class="big-grid">
-        <div class="bignum"><span class="bn-label">Daily Loss Limit</span>
-          <span class="bn-val num" x-text="money(risk.daily_loss ? risk.daily_loss.limit : null)"></span></div>
-        <div class="bignum bn-red"><span class="bn-label">Current Loss</span>
-          <span class="bn-val num" x-text="money(risk.daily_loss ? risk.daily_loss.used : null)"></span></div>
-        <div class="bignum"><span class="bn-label">Remaining Risk</span>
-          <span class="bn-val num" x-text="money(riskRemaining())"></span></div>
-        <div class="bignum"><span class="bn-label">Risk Utilization</span>
-          <span class="bn-val num" :class="usageClass(riskUtilPct())"
-                x-text="pctText(riskUtilPct())"></span></div>
-        <div class="bignum"><span class="bn-label">Open Positions</span>
-          <span class="bn-val num" x-text="risk.open_positions ? (risk.open_positions.used + ' / ' + risk.open_positions.limit) : '—'"></span></div>
-        <div class="bignum"><span class="bn-label">Consecutive Losses</span>
-          <span class="bn-val num" x-text="risk.consecutive_losses ? (risk.consecutive_losses.used + ' / ' + risk.consecutive_losses.limit) : '—'"></span></div>
+  <h1 class="cap-h1">
+    Capital &amp; Risk
+    <span class="cap-sub">Capital, risk, exposure and limit monitoring</span>
+    <span class="cap-live">● Live</span>
+  </h1>
+
+  <!-- ═════════ ROW 1 · panels 1-4 ═════════ -->
+  <section class="cap-top">
+
+    <!-- ── 1. CAPITAL OVERVIEW ─────────────────────────────────────────────
+         ⛔ NO Pay-in / Pay-out. Four tiles, exactly the approved labels. -->
+    <div class="panel">
+      <h2 class="panel-title">1. CAPITAL OVERVIEW <span class="pt-note">(Real Cash)</span></h2>
+      <div class="ck-grid ck-2">
+        <div class="ck">
+          <span class="ck-l">Today's Opening Cash</span>
+          <span class="ck-v" x-text="money(rc('opening'))"></span>
+        </div>
+        <div class="ck">
+          <span class="ck-l">Current Real Cash</span>
+          <span class="ck-v v-blue" x-text="money(rc('total_live'))"></span>
+        </div>
+        <div class="ck">
+          <span class="ck-l">Real Cash Consumed</span>
+          <span class="ck-v v-red" x-text="money(rc('consumed'))"></span>
+        </div>
+        <div class="ck">
+          <span class="ck-l">Real Cash Available</span>
+          <span class="ck-v v-green" x-text="money(rc('available'))"></span>
+        </div>
       </div>
-    </section>
-
-    <!-- ZONE 3 · EXPOSURE SUMMARY -->
-    <section class="panel">
-      <h3 class="panel-title">3 · Exposure Summary
-        <span class="panel-sub">notional at entry price — not live MTM</span></h3>
-      <div class="big-grid">
-        <div class="bignum bn-green"><span class="bn-label">Long Exposure</span>
-          <span class="bn-val num" x-text="money(dir('long_value'))"></span></div>
-        <div class="bignum bn-red"><span class="bn-label">Short Exposure</span>
-          <span class="bn-val num" x-text="money(dir('short_value'))"></span></div>
-        <div class="bignum"><span class="bn-label">Net Exposure</span>
-          <span class="bn-val num" x-text="money(dir('net_value'))"></span></div>
-        <div class="bignum"><span class="bn-label">Gross Exposure</span>
-          <span class="bn-val num" x-text="money(grossExposure())"></span></div>
-        <div class="bignum"><span class="bn-label">Open Positions</span>
-          <span class="bn-val num" x-text="openPositions()"></span></div>
-        <div class="bignum"><span class="bn-label">Exposure %</span>
-          <span class="bn-val num" x-text="pctText(exposure.margin_vs_capital_pct)"></span></div>
+      <!-- ⭐ The basis is printed so a stale sync is visible rather than silent. -->
+      <div class="cap-note">
+        Real Cash = Opening + cash adjustments − Consumed
+        {# `last_sync` is an OBJECT ({at, balance_after, entry_type, sync_count_today}).
+           Binding it directly printed "[object Object]" — measured 24-Aug. #}
+        <template x-if="syncAt()">
+          <span> · engine belief at last broker sync <b x-text="syncAt()"></b>,
+            <span class="v-amber">not the broker's live balance</span></span>
+        </template>
       </div>
-      {# G-1 honest gap, PRESERVED: unrealized MTM is broker-authoritative and the
-         GUI cannot read it (isolation I4). Exposure above is notional at ENTRY
-         price. ⛔ Never fabricate a live MTM figure to fill this panel. #}
-      <div style="margin-top:10px">
-        {% call two_state_panel("false", reason="Live MTM / unrealized — Pending Broker Source (G4)") %}<span></span>{% endcall %}
-      </div>
-    </section>
-  </div>
+    </div>
 
-  <!-- ZONE 4 · LIMITS MONITOR (authoritative /api/capacity — no limit logic here) -->
-  <section class="panel">
-    <h3 class="panel-title">4 · Limits Monitor
-      <span class="panel-sub"><a class="panel-link" href="/capacity">all limits →</a></span></h3>
-    <div class="tbl-scroll">
-      <table class="cap-table">
-        <thead><tr><th>Limit Type</th><th>Configured</th><th>Used</th><th>Remaining</th><th>Usage %</th><th>Status</th></tr></thead>
+    <!-- ── 2. RISK SUMMARY · CUMULATED MIS + GTT ──────────────────────────
+         These are account-wide figures, which IS the combined view the design
+         asks for: one realized P&L, one portfolio position count. -->
+    <div class="panel">
+      <h2 class="panel-title">2. RISK SUMMARY <span class="pt-note">(MIS + GTT combined)</span></h2>
+      <div class="ck-grid ck-3">
+        <div class="ck">
+          <span class="ck-l" x-text="'Daily Loss Limit (' + lossPctLabel() + ')'"></span>
+          <span class="ck-v" x-text="money(risk.daily_loss && risk.daily_loss.limit)"></span>
+        </div>
+        <div class="ck">
+          <span class="ck-l">Current Loss</span>
+          <span class="ck-v" :class="(risk.daily_loss && risk.daily_loss.used) ? 'v-red' : ''"
+                x-text="money(risk.daily_loss && risk.daily_loss.used)"></span>
+        </div>
+        <div class="ck">
+          <span class="ck-l">Remaining Risk</span>
+          <span class="ck-v v-green" x-text="money(remainingRisk())"></span>
+        </div>
+        <div class="ck">
+          <span class="ck-l">Risk Utilization</span>
+          <span class="ck-v" :class="pctClass(riskUtil())" x-text="pct(riskUtil())"></span>
+        </div>
+        <div class="ck">
+          <span class="ck-l">Open Positions</span>
+          <span class="ck-v" x-text="pair(risk.open_positions)"></span>
+        </div>
+        <div class="ck">
+          <span class="ck-l">Consecutive Losses</span>
+          <span class="ck-v" x-text="pair(risk.consecutive_losses)"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── 3. EXPOSURE SUMMARY ────────────────────────────────────────────
+         ⛔ Live MTM / unrealized is NOT invented — the GUI has no live price. -->
+    <div class="panel">
+      <h2 class="panel-title">3. EXPOSURE SUMMARY</h2>
+      <div class="ck-grid ck-3">
+        <div class="ck">
+          <span class="ck-l">Long Exposure</span>
+          <span class="ck-v v-green" x-text="money(dir('long_value'))"></span>
+        </div>
+        <div class="ck">
+          <span class="ck-l">Short Exposure</span>
+          <span class="ck-v v-red" x-text="money(dir('short_value'))"></span>
+        </div>
+        <div class="ck">
+          <span class="ck-l">Net Exposure</span>
+          <span class="ck-v v-blue" x-text="money(dir('net_value'))"></span>
+        </div>
+        <div class="ck">
+          <span class="ck-l">Open Positions</span>
+          <span class="ck-v" x-text="dash(openPosCount())"></span>
+        </div>
+        <div class="ck">
+          <span class="ck-l">Gross Exposure</span>
+          <span class="ck-v" x-text="money(grossExposure())"></span>
+        </div>
+        <div class="ck">
+          <span class="ck-l">Exposure %</span>
+          <span class="ck-v" x-text="pct(exposure.margin_vs_capital_pct)"></span>
+        </div>
+      </div>
+      <div class="cap-note">
+        <span class="v-amber">Live MTM / unrealized — Pending Broker Source (G4).</span>
+        The broker is the authority; this value is not reachable read-only and is
+        <b>never inferred</b>.
+      </div>
+    </div>
+
+    <!-- ── 4. LIMITS MONITOR ──────────────────────────────────────────────
+         ROW ORDER IS FIXED BY THE APPROVED DESIGN and is written out literally
+         below, ⛔ never derived from whatever order the API happens to return:
+           1 Daily Orders · 2 Open Positions · 3 Strategy Limits
+           4 Capital (MIS) · 5 Capital (GTT)
+           6 Daily Loss Limit (MIS) · 7 Daily Loss Limit (GTT)
+         ⛔ The two daily-loss rows are NEVER collapsed into one. -->
+    <div class="panel">
+      <h2 class="panel-title">4. LIMITS MONITOR</h2>
+      <div class="tbl-wrap">
+      <table class="ct">
+        <thead>
+          <tr>
+            <th>Limit Type</th><th class="num">Configured</th><th class="num">Used</th>
+            <th class="num">Remaining</th><th class="num">Usage %</th><th>Status</th>
+          </tr>
+        </thead>
         <tbody>
-          <template x-for="row in (capacity.rows || [])" :key="row.key">
-            <tr :class="'st-' + (row.status || 'OK')">
-              <td x-text="row.label"></td>
-              <td class="cap-num" x-text="fmtCap(row.limit, row.unit)"></td>
-              <td class="cap-num" x-text="fmtCap(row.used, row.unit)"></td>
-              <td class="cap-num" x-text="row.remaining !== null ? fmtCap(row.remaining, row.unit) : '—'"></td>
-              <td class="cap-num" :class="usageClass(row.pct)" x-text="pctText(row.pct)"></td>
-              {# `ctr` marks a DATA column that carries no number — Status is data,
-                 so it centres with the rest; the Limit Type label does not. #}
-              <td class="ctr"><span class="cap-status" x-text="row.status"></span></td>
+          <template x-for="r in limitRows()" :key="r.label">
+            <tr>
+              <td x-text="r.label" :title="r.note || ''"></td>
+              <td class="num" x-text="r.configured"></td>
+              <td class="num" x-text="r.used"></td>
+              <td class="num" x-text="r.remaining"></td>
+              <td class="num" :class="r.pctClass" x-text="r.usage"></td>
+              <td :class="r.statusClass"><span class="dot"></span><span x-text="r.status"></span></td>
             </tr>
           </template>
-          <tr x-show="!(capacity.rows || []).length" x-cloak><td colspan="6" class="ev-empty">No limits reported.</td></tr>
         </tbody>
       </table>
-    </div>
-    {{ export_button("Export Limits") }}
-  </section>
-
-  <!-- ZONE 5 · CAPITAL FLOW & SEGMENT SUMMARY -->
-  <section class="panel">
-    <h3 class="panel-title">5 · Capital Flow &amp; Segment Summary
-      <span class="badge-live">LIVE / ENGINE TRUTH</span>
-      <span class="panel-sub" x-text="configSub()"></span></h3>
-
-    <div class="two-col">
-      <template x-for="k in ['intraday','delivery']" :key="k">
-        <div class="panel seg-panel">
-          <h4 class="panel-title" x-text="segTitle(k)"></h4>
-          <table class="cap-table">
-            <tbody>
-              <tr><td>Real Capital Allocation</td>
-                  <td class="cap-num" x-text="money(sv(k,'real_allocation'))"></td></tr>
-              <tr><td><span x-text="'Segment Capacity (' + levText(k) + ')'"></span></td>
-                  <td class="cap-num" x-text="money(sv(k,'segment_capacity'))"></td></tr>
-              <tr><td>Existing Order Value <span class="panel-sub">(notional)</span></td>
-                  <td class="cap-num" x-text="money(sv(k,'order_value_notional'))"></td></tr>
-              <tr><td>Real Capital Reserved / Used</td>
-                  <td class="cap-num" x-text="money(sv(k,'real_committed'))"></td></tr>
-              <tr><td>Remaining Real Capital</td>
-                  <td class="cap-num" x-text="money(sv(k,'remaining_real'))"></td></tr>
-              <tr class="seg-total"><td>Remaining Segment Capacity</td>
-                  <td class="cap-num num-pos" x-text="money(sv(k,'remaining_segment_capacity'))"></td></tr>
-            </tbody>
-          </table>
-        </div>
-      </template>
-    </div>
-
-    <table class="cap-table" style="margin-top:10px">
-      <thead><tr><th>Totals</th><th>Total Real Cash</th><th>Real Cash Consumed</th>
-                 <th>Remaining Real Cash</th><th>Total Segment Capacity</th>
-                 <th>Total Remaining Capacity</th></tr></thead>
-      <tbody>
-        <tr><td>Current (engine truth)</td>
-          <td class="cap-num" x-text="money(rc('total_live'))"></td>
-          <td class="cap-num" x-text="money(rc('consumed'))"></td>
-          <td class="cap-num num-pos" x-text="money(rc('available'))"></td>
-          <td class="cap-num" x-text="money(totalCapacity())"></td>
-          <td class="cap-num num-pos" x-text="money(totalRemainingCapacity())"></td></tr>
-      </tbody>
-    </table>
-    <p class="panel-sub" x-text="seg.source_note || ''"></p>
-  </section>
-
-  <!-- ZONE 5b · PINNED SIMULATION — approved design's before/after comparison.
-       ⛔ NOT live. Computed by a pure backend function from the scenario's OWN
-       constants; no live value reaches it and it never merges with zone 5. -->
-  <section class="panel sim-panel">
-    <h3 class="panel-title">5b · Capital Flow &amp; Segment Summary
-      <span class="badge-sim">PINNED SIMULATION</span>
-      <span class="panel-sub">⛔ hypothetical — NOT the current broker balance</span></h3>
-
-    <div class="three-col">
-      <!-- SIMULATION INPUT -->
-      <div class="panel sim-input">
-        <h4 class="panel-title">Simulation Input</h4>
-        <table class="cap-table">
-          <tbody>
-            <tr><td>Opening Real Cash</td><td class="cap-num" x-text="money(si('opening_real_cash'))"></td></tr>
-            <tr><td>Additional Pay-in (Today)</td><td class="cap-num num-pos" x-text="money(si('additional_payin'))"></td></tr>
-            <tr><td>Pay-out (Today)</td><td class="cap-num" x-text="money(si('payout'))"></td></tr>
-            <tr><td>Existing MIS Order Value</td><td class="cap-num" x-text="money(si('mis_order_notional'))"></td></tr>
-            <tr><td>Existing GTT Order Value</td><td class="cap-num" x-text="money(si('gtt_order_notional'))"></td></tr>
-            <tr><td>Allocation</td><td class="cap-num" x-text="simAlloc()"></td></tr>
-            <tr><td>Leverage</td><td class="cap-num" x-text="simLev()"></td></tr>
-          </tbody>
-        </table>
-        <p class="panel-sub">All values are real cash unless stated. Existing order
-          value is <em>notional</em>; its real-capital cost is notional ÷ leverage.</p>
       </div>
-
-      <!-- BEFORE / AFTER -->
-      <template x-for="side in ['before','after']" :key="side">
-        <div class="panel">
-          <h4 class="panel-title" x-text="side === 'before'
-              ? 'Before Additional Pay-in' : 'After Additional Pay-in'"></h4>
-          <table class="cap-table">
-            <thead><tr><th></th><th>Intraday / MIS<br><span class="panel-sub">70% | 5x</span></th>
-                       <th>Delivery / GTT<br><span class="panel-sub">30% | 1x</span></th></tr></thead>
-            <tbody>
-              <tr><td>Real Capital Allocation</td>
-                  <td class="cap-num" x-text="money(sim(side,'mis','real_allocation'))"></td>
-                  <td class="cap-num" x-text="money(sim(side,'gtt','real_allocation'))"></td></tr>
-              <tr><td>Segment Capacity</td>
-                  <td class="cap-num" x-text="money(sim(side,'mis','segment_capacity'))"></td>
-                  <td class="cap-num" x-text="money(sim(side,'gtt','segment_capacity'))"></td></tr>
-              <tr><td>Existing Order Value <span class="panel-sub">(notional)</span></td>
-                  <td class="cap-num" x-text="money(sim(side,'mis','order_notional'))"></td>
-                  <td class="cap-num" x-text="money(sim(side,'gtt','order_notional'))"></td></tr>
-              <tr><td>Real Capital Reserved</td>
-                  <td class="cap-num" x-text="reservedText(side,'mis')"></td>
-                  <td class="cap-num" x-text="reservedText(side,'gtt')"></td></tr>
-              <tr class="seg-total"><td>Remaining Segment Capacity</td>
-                  <td class="cap-num num-pos" x-text="money(sim(side,'mis','remaining_segment_capacity'))"></td>
-                  <td class="cap-num num-pos" x-text="money(sim(side,'gtt','remaining_segment_capacity'))"></td></tr>
-            </tbody>
-          </table>
-        </div>
-      </template>
-    </div>
-
-    <table class="cap-table" style="margin-top:10px">
-      <thead><tr><th>Totals</th><th>Total Real Cash</th><th>Real Cash Consumed</th>
-                 <th>Remaining Real Cash</th><th>Total Segment Capacity</th>
-                 <th>Total Remaining Capacity</th></tr></thead>
-      <tbody>
-        <template x-for="side in ['before','after']" :key="side">
-          <tr><td x-text="side === 'before' ? 'Before pay-in' : 'After pay-in'"></td>
-            <td class="cap-num" x-text="money(simT(side,'total_real_cash'))"></td>
-            <td class="cap-num" x-text="money(simT(side,'real_cash_consumed'))"></td>
-            <td class="cap-num num-pos" x-text="money(simT(side,'remaining_real_cash'))"></td>
-            <td class="cap-num" x-text="money(simT(side,'total_segment_capacity'))"></td>
-            <td class="cap-num num-pos" x-text="money(simT(side,'total_remaining_capacity'))"></td></tr>
+      {{ export_button("Export Limits") }}
+      <div class="cap-note">
+        0–60% green · 60–80% caution · 80–100% critical.
+        <template x-if="seg.config && seg.config.daily_loss_scope_note">
+          <span> · <span class="v-amber">GTT daily loss is a PRE-TRADE gate</span>;
+            the post-close breaker is global, so no per-book <i>used</i> exists.</span>
         </template>
-      </tbody>
-    </table>
-    <p class="panel-sub">⭐ <strong>Existing order value is NOT real cash consumed
-      for MIS:</strong> ₹6,000 notional at 5x costs ₹1,200 of real capital. At GTT's
-      1x the two coincide (₹2,000), which is exactly why MIS is the case that
-      discriminates. ⛔ This block is a fixed scenario and does not move with the
-      broker.</p>
+      </div>
+    </div>
   </section>
 
-  <div class="two-col">
-    <!-- ZONE 6 · STRATEGY CAPITAL ALLOCATION BY SEGMENT -->
-    <section class="panel">
-      <h3 class="panel-title">6 · Strategy Capital Allocation
-        <span class="panel-sub">real capital committed, by segment</span></h3>
-      <div class="tbl-scroll">
-        <table class="cap-table">
-          <thead><tr><th>Strategy</th><th>MIS (Real)</th><th>GTT (Real)</th><th>Total (Real)</th><th>% of Consumed</th></tr></thead>
-          <tbody>
-            <template x-for="s in (seg.strategies || [])" :key="s.strategy">
-              <tr><td x-text="s.strategy"></td>
-                <td class="cap-num" x-text="money(s.mis_real)"></td>
-                <td class="cap-num" x-text="money(s.gtt_real)"></td>
-                <td class="cap-num" x-text="money(s.total_real)"></td>
-                <td class="cap-num" x-text="pctText(sharePct(s.total_real))"></td></tr>
-            </template>
-            <tr x-show="!(seg.strategies || []).length" x-cloak><td colspan="5" class="ev-empty">No capital committed.</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
+  <!-- ═════════ ROW 2 · 5 (live) + 5b (pinned simulation) ═════════ -->
+  <section class="cap-flow">
 
-    <!-- ZONE 7 · TOP CAPITAL CONSUMERS -->
-    <section class="panel">
-      <h3 class="panel-title">7 · Top Capital Consumers
-        <span class="panel-sub">all segments, real capital</span></h3>
-      <div class="tbl-scroll">
-        <table class="cap-table">
-          <thead><tr><th>Strategy</th><th>Capital Used (Real)</th><th>% of Total</th></tr></thead>
-          <tbody>
-            <template x-for="s in topConsumers()" :key="s.strategy">
-              <tr><td x-text="s.strategy"></td>
-                <td class="cap-num" x-text="money(s.total_real)"></td>
-                <td class="cap-num" x-text="pctText(sharePct(s.total_real))"></td></tr>
-            </template>
-            <tr x-show="!topConsumers().length" x-cloak><td colspan="3" class="ev-empty">No capital committed.</td></tr>
-          </tbody>
-        </table>
+    <!-- ── 5. CAPITAL FLOW & SEGMENT SUMMARY — LIVE / ENGINE TRUTH ──────── -->
+    <div class="panel">
+      <h2 class="panel-title">
+        5. CAPITAL FLOW &amp; SEGMENT SUMMARY
+        <span class="bdg bdg-live">LIVE / ENGINE TRUTH</span>
+        <span class="pt-note" x-text="allocLine()"></span>
+      </h2>
+      <div class="seg-2">
+        <div>
+          <h4 class="seg-h seg-mis" x-text="'Intraday / MIS ' + segTag('intraday')"></h4>
+          <div class="sr"><span class="k">Real Capital Allocation</span><span class="v" x-text="money(sv('intraday','real_allocation'))"></span></div>
+          <div class="sr"><span class="k">Segment Capacity</span><span class="v" x-text="money(sv('intraday','segment_capacity'))"></span></div>
+          <div class="sr"><span class="k">Existing MIS Order Value (notional)</span><span class="v" x-text="money(sv('intraday','order_value_notional'))"></span></div>
+          <div class="sr"><span class="k">Real Capital Reserved / Used</span><span class="v" x-text="money(sv('intraday','real_committed'))"></span></div>
+          <div class="sr"><span class="k">Remaining Real Capital</span><span class="v" x-text="money(sv('intraday','remaining_real'))"></span></div>
+          <div class="sr"><span class="k">Remaining Segment Capacity</span><span class="v v-green" x-text="money(sv('intraday','remaining_segment_capacity'))"></span></div>
+        </div>
+        <div>
+          <h4 class="seg-h seg-gtt" x-text="'Delivery / GTT ' + segTag('delivery')"></h4>
+          <div class="sr"><span class="k">Real Capital Allocation</span><span class="v" x-text="money(sv('delivery','real_allocation'))"></span></div>
+          <div class="sr"><span class="k">Segment Capacity</span><span class="v" x-text="money(sv('delivery','segment_capacity'))"></span></div>
+          <div class="sr"><span class="k">Existing GTT Order Value (notional)</span><span class="v" x-text="money(sv('delivery','order_value_notional'))"></span></div>
+          <div class="sr"><span class="k">Real Capital Reserved / Used</span><span class="v" x-text="money(sv('delivery','real_committed'))"></span></div>
+          <div class="sr"><span class="k">Remaining Real Capital</span><span class="v" x-text="money(sv('delivery','remaining_real'))"></span></div>
+          <div class="sr"><span class="k">Remaining Segment Capacity</span><span class="v v-green" x-text="money(sv('delivery','remaining_segment_capacity'))"></span></div>
+        </div>
       </div>
-    </section>
-  </div>
+      <div class="tot-strip tot-5">
+        <div><div class="tl">Total Real Cash</div><div class="tv" x-text="money(rc('total_live'))"></div></div>
+        <div><div class="tl">Real Cash Consumed</div><div class="tv v-red" x-text="money(rc('consumed'))"></div></div>
+        <div><div class="tl">Remaining Real Cash</div><div class="tv v-green" x-text="money(rc('available'))"></div></div>
+        <div><div class="tl">Total Segment Capacity</div><div class="tv" x-text="money(totCapacity())"></div></div>
+        <div><div class="tl">Total Remaining Capacity</div><div class="tv v-green" x-text="money(totRemainCapacity())"></div></div>
+      </div>
+    </div>
 
-  <div class="two-col">
-    <!-- ZONE 8 · CAPITAL USAGE THROUGH DAY -->
-    <section class="panel">
-      <h3 class="panel-title">8 · Capital Usage Through Day
-        <span class="panel-sub">realized only (fm_ledger RELEASE_USED) — intraday unrealized MTM excluded (G4)</span></h3>
-      <div class="curve-wrap">
-        <svg class="curve-svg" viewBox="0 0 600 160" preserveAspectRatio="none" aria-hidden="true">
-          <polyline :points="curvePoints()" fill="none" class="curve-line"/>
-        </svg>
-        <div class="curve-meta"><span x-text="(pnl.equity_curve || []).length + ' realized points'"></span></div>
+    <!-- ── 5b. PINNED SIMULATION ───────────────────────────────────────────
+         ⛔ NO LIVE VALUE REACHES THIS PANEL. It is a pure function of pinned
+         constants, so it renders identically on any machine, any day. The dashed
+         amber border + badge exist so it can never be read as the broker balance. -->
+    <div class="panel sim-panel">
+      <h2 class="panel-title">
+        5b. CAPITAL FLOW &amp; SEGMENT SUMMARY
+        <span class="bdg bdg-sim">PINNED SIMULATION</span>
+        <span class="sim-warn">hypothetical — NOT the current broker balance</span>
+      </h2>
+      <div class="seg-3">
+        <div>
+          <h4 class="seg-h seg-neutral">Simulation Input</h4>
+          <div class="sr"><span class="k">Opening Real Cash</span><span class="v" x-text="money(si('opening_real_cash'))"></span></div>
+          <div class="sr"><span class="k">Additional Cash</span><span class="v v-amber" x-text="money(si('additional_payin'))"></span></div>
+          <div class="sr"><span class="k">Existing MIS Order Value</span><span class="v" x-text="money(si('mis_order_notional'))"></span></div>
+          <div class="sr"><span class="k">Existing GTT Order Value</span><span class="v" x-text="money(si('gtt_order_notional'))"></span></div>
+          <div class="sr"><span class="k">Allocation</span><span class="v" x-text="simAlloc()"></span></div>
+          <div class="sr"><span class="k">Leverage</span><span class="v" x-text="simLev()"></span></div>
+        </div>
+        {# BEFORE / AFTER each carry TWO values per row (MIS and GTT), exactly as
+           the artwork draws them. Rendering them as one "a / b" string made the
+           column ~90px too wide and clipped at the panel edge — measured. #}
+        <div>
+          <h4 class="seg-h seg-neutral">Before Additional Cash</h4>
+          <div class="mg">
+            <div class="mg-h"></div>
+            <div class="mg-h mg-mis" x-text="'MIS ' + simTag('mis')"></div>
+            <div class="mg-h mg-gtt" x-text="'GTT ' + simTag('gtt')"></div>
+            <div class="mg-k">Real Capital Allocation</div>
+            <div class="mg-v" x-text="money(sim('before','mis','real_allocation'))"></div>
+            <div class="mg-v" x-text="money(sim('before','gtt','real_allocation'))"></div>
+            <div class="mg-k">Segment Capacity</div>
+            <div class="mg-v" x-text="money(sim('before','mis','segment_capacity'))"></div>
+            <div class="mg-v" x-text="money(sim('before','gtt','segment_capacity'))"></div>
+            <div class="mg-k">Existing Order Value</div>
+            <div class="mg-v" x-text="money(sim('before','mis','order_notional'))"></div>
+            <div class="mg-v" x-text="money(sim('before','gtt','order_notional'))"></div>
+            <div class="mg-k">Real Capital Reserved</div>
+            <div class="mg-v" x-text="money(sim('before','mis','real_reserved'))"></div>
+            <div class="mg-v" x-text="money(sim('before','gtt','real_reserved'))"></div>
+            <div class="mg-k">Remaining Real Capital</div>
+            <div class="mg-v" x-text="money(sim('before','mis','remaining_real'))"></div>
+            <div class="mg-v" x-text="money(sim('before','gtt','remaining_real'))"></div>
+            <div class="mg-k">Remaining Segment Capacity</div>
+            <div class="mg-v v-green" x-text="money(sim('before','mis','remaining_segment_capacity'))"></div>
+            <div class="mg-v v-green" x-text="money(sim('before','gtt','remaining_segment_capacity'))"></div>
+          </div>
+        </div>
+        <div>
+          <h4 class="seg-h seg-neutral">After Additional Cash</h4>
+          <div class="mg">
+            <div class="mg-h"></div>
+            <div class="mg-h mg-mis" x-text="'MIS ' + simTag('mis')"></div>
+            <div class="mg-h mg-gtt" x-text="'GTT ' + simTag('gtt')"></div>
+            <div class="mg-k">Real Capital Allocation</div>
+            <div class="mg-v" x-text="money(sim('after','mis','real_allocation'))"></div>
+            <div class="mg-v" x-text="money(sim('after','gtt','real_allocation'))"></div>
+            <div class="mg-k">Segment Capacity</div>
+            <div class="mg-v" x-text="money(sim('after','mis','segment_capacity'))"></div>
+            <div class="mg-v" x-text="money(sim('after','gtt','segment_capacity'))"></div>
+            <div class="mg-k">Existing Order Value</div>
+            <div class="mg-v" x-text="money(sim('after','mis','order_notional'))"></div>
+            <div class="mg-v" x-text="money(sim('after','gtt','order_notional'))"></div>
+            <div class="mg-k">Real Capital Reserved</div>
+            <div class="mg-v" x-text="money(sim('after','mis','real_reserved'))"></div>
+            <div class="mg-v" x-text="money(sim('after','gtt','real_reserved'))"></div>
+            <div class="mg-k">Remaining Real Capital</div>
+            <div class="mg-v" x-text="money(sim('after','mis','remaining_real'))"></div>
+            <div class="mg-v" x-text="money(sim('after','gtt','remaining_real'))"></div>
+            <div class="mg-k">Remaining Segment Capacity</div>
+            <div class="mg-v v-green" x-text="money(sim('after','mis','remaining_segment_capacity'))"></div>
+            <div class="mg-v v-green" x-text="money(sim('after','gtt','remaining_segment_capacity'))"></div>
+          </div>
+        </div>
       </div>
-    </section>
+      {# AFTER on the value line, BEFORE beneath it — a single "a -> b" string
+         overflowed the strip. Both numbers are still shown. #}
+      <div class="tot-strip tot-5">
+        <div><div class="tl">Total Real Cash</div>
+          <div class="tv" x-text="money(simT('after','total_real_cash'))"></div>
+          <div class="tf" x-text="'was ' + money(simT('before','total_real_cash'))"></div></div>
+        <div><div class="tl">Real Cash Consumed</div>
+          <div class="tv v-red" x-text="money(simT('after','real_cash_consumed'))"></div>
+          <div class="tf" x-text="'was ' + money(simT('before','real_cash_consumed'))"></div></div>
+        <div><div class="tl">Remaining Real Cash</div>
+          <div class="tv v-green" x-text="money(simT('after','remaining_real_cash'))"></div>
+          <div class="tf" x-text="'was ' + money(simT('before','remaining_real_cash'))"></div></div>
+        <div><div class="tl">Total Segment Capacity</div>
+          <div class="tv" x-text="money(simT('after','total_segment_capacity'))"></div>
+          <div class="tf" x-text="'was ' + money(simT('before','total_segment_capacity'))"></div></div>
+        <div><div class="tl">Total Remaining Capacity</div>
+          <div class="tv v-green" x-text="money(simT('after','total_remaining_capacity'))"></div>
+          <div class="tf" x-text="'was ' + money(simT('before','total_remaining_capacity'))"></div></div>
+      </div>
+    </div>
+  </section>
 
-    <!-- ZONE 9 · CAPITAL UTILIZATION GAUGE -->
-    <section class="panel">
-      <h3 class="panel-title">9 · Capital Utilization
-        <span class="panel-sub">real cash consumed / total real cash</span></h3>
-      <div class="big-grid">
-        <div class="bignum"><span class="bn-label">Utilization</span>
-          <span class="bn-val num" :class="usageClass(utilPct())" x-text="pctText(utilPct())"></span></div>
-        <div class="bignum"><span class="bn-label">Consumed</span>
-          <span class="bn-val num" x-text="money(rc('consumed'))"></span></div>
-        <div class="bignum"><span class="bn-label">Available</span>
-          <span class="bn-val num num-pos" x-text="money(rc('available'))"></span></div>
-      </div>
-      <table class="cap-table" style="margin-top:8px">
-        <thead><tr><th>Utilization Range</th><th>Status</th></tr></thead>
+  <!-- ═════════ ROW 3 · 6 / 7 / 8 ═════════ -->
+  <section class="cap-mid">
+
+    <!-- ── 6. STRATEGY CAPITAL ALLOCATION ─────────────────────────────────
+         Capacity/Remaining/Usage% are derived from the SEGMENT allocation the
+         engine actually publishes, split per strategy by its committed share.
+         ⛔ There is no per-strategy capital cap in config, so "capacity" here is
+         the segment's own capacity — stated in the sub-title, never implied to
+         be a per-strategy limit. -->
+    <div class="panel">
+      <h2 class="panel-title">6. STRATEGY CAPITAL ALLOCATION
+        <span class="pt-note">(real capital committed, by segment)</span></h2>
+      <table class="ct">
+        <thead>
+          <tr>
+            <th>Strategy</th>
+            <th class="num">MIS Used</th><th class="num">MIS Share</th>
+            <th class="num">GTT Used</th><th class="num">GTT Share</th>
+            <th class="num">Total</th>
+          </tr>
+        </thead>
         <tbody>
-          <tr><td>0 – 60 %</td><td><span class="cap-status num-pos">Normal</span></td></tr>
-          <tr><td>60 – 80 %</td><td><span class="cap-status num-warn">Caution</span></td></tr>
-          <tr><td>80 – 100 %</td><td><span class="cap-status num-neg">Critical</span></td></tr>
+          <template x-for="s in strategyRows()" :key="s.strategy">
+            <tr>
+              <td x-text="s.strategy"></td>
+              <td class="num" x-text="money(s.mis_real)"></td>
+              <td class="num" x-text="pct(s.mis_share)"></td>
+              <td class="num" x-text="money(s.gtt_real)"></td>
+              <td class="num" x-text="pct(s.gtt_share)"></td>
+              <td class="num" x-text="money(s.total_real)"></td>
+            </tr>
+          </template>
+          <template x-if="!strategyRows().length">
+            <tr><td colspan="6" class="v-dim">No strategy has committed capital today.</td></tr>
+          </template>
+          <template x-if="strategyRows().length">
+            <tr class="tot">
+              <td>TOTAL</td>
+              <td class="num" x-text="money(stratTotal('mis_real'))"></td>
+              <td class="num">100%</td>
+              <td class="num" x-text="money(stratTotal('gtt_real'))"></td>
+              <td class="num">100%</td>
+              <td class="num" x-text="money(stratTotal('total_real'))"></td>
+            </tr>
+          </template>
         </tbody>
       </table>
-    </section>
-  </div>
+    </div>
 
-  <!-- ZONE 10 · RECENT RISK EVENTS -->
-  {{ events_alerts_panel(events_expr="events", alerts_expr="alerts", title="10 · Recent Risk Events & Alerts") }}
+    <!-- ── 7. RECENT RISK EVENTS & ALERTS ─────────────────────────────────-->
+    <div class="panel">
+      <h2 class="panel-title">7. RECENT RISK EVENTS &amp; ALERTS</h2>
+      <table class="ct">
+        <thead><tr><th>Time</th><th>Event</th><th>Category</th></tr></thead>
+        <tbody>
+          <template x-for="(a, i) in eventRows()" :key="i">
+            <tr>
+              <td x-text="a.time"></td>
+              <td :class="a.cls" x-text="a.title"></td>
+              <td x-text="a.category"></td>
+            </tr>
+          </template>
+          <template x-if="!eventRows().length">
+            <tr><td colspan="3" class="v-dim">No risk events recorded today.</td></tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- ── 8. TOP CAPITAL CONSUMERS ───────────────────────────────────────-->
+    <div class="panel">
+      <h2 class="panel-title">8. TOP CAPITAL CONSUMERS <span class="pt-note">(All Segments)</span></h2>
+      <table class="ct">
+        <thead>
+          <tr><th>Strategy</th><th class="num">Capital Used (Real)</th><th class="cap-barh"></th><th class="num">% of Total</th></tr>
+        </thead>
+        <tbody>
+          <template x-for="s in topConsumers()" :key="s.strategy">
+            <tr>
+              <td x-text="s.strategy"></td>
+              <td class="num" x-text="money(s.total_real)"></td>
+              {# The BAR is a shape: its length is relative to the LARGEST
+                 consumer so the widest bar fills the cell. The % column is the
+                 FACT and keeps carrying the share of the true total. #}
+              <td class="cap-barc"><span class="cap-bar"><i :style="'width:' + barPct(s.total_real) + '%'"></i></span></td>
+              <td class="num" x-text="pctText(sharePct(s.total_real))"></td>
+            </tr>
+          </template>
+          <template x-if="!topConsumers().length">
+            <tr><td colspan="4" class="v-dim">No capital committed today.</td></tr>
+          </template>
+          <template x-if="topConsumers().length">
+            <tr class="tot">
+              <td>TOTAL</td>
+              <td class="num" x-text="money(stratTotal('total_real'))"></td>
+              <td></td><td class="num">100%</td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ═════════ ROW 4 · 9 / 10 ═════════
+       ⚠️ The artwork labels this panel "6. CAPITAL USAGE THROUGH DAY" — an
+       artwork typo. The TXT (semantic authority) numbers it 9, and 9 is used. -->
+  <section class="cap-bot">
+
+    <!-- ── 9. CAPITAL USAGE THROUGH DAY ───────────────────────────────────
+         Built from fm_ledger balance movements (/api/capital.ledger). ⛔ Not a
+         synthetic curve: each point is a real ledger row. -->
+    <div class="panel">
+      <h2 class="panel-title">9. CAPITAL USAGE THROUGH DAY <span class="pt-note">(Real Capital)</span></h2>
+      <div class="legend">
+        <span><b class="v-blue">—</b> Used (Real Cash)</span>
+        <span><b class="v-dim">- -</b> Available (Real Cash)</span>
+      </div>
+      <div class="chart-wrap">
+        {# ⛔ NO Alpine loop-templates inside this chart. An HTML template element
+           is not a valid SVG node, so Alpine's importNode throws and the whole
+           chart dies (measured 24-Aug; the repo already guards this, and the
+           guard caught it). Grid lines are constant so they are literal; the
+           three data paths bind `:d` directly and draw nothing when `d` is
+           empty — which is exactly the no-data state.
+           ⚠️ Do not write those two tag names literally in this comment: the
+           guard regex spans from the first one to the closing tag. #}
+        <svg class="chart-svg" viewBox="0 0 420 136" preserveAspectRatio="none" role="img"
+             aria-label="Capital usage through the day">
+          <line x1="30" y1="10"  x2="415" y2="10"  stroke="rgba(139,148,158,.14)" stroke-width="1"></line>
+          <line x1="30" y1="39"  x2="415" y2="39"  stroke="rgba(139,148,158,.14)" stroke-width="1"></line>
+          <line x1="30" y1="69"  x2="415" y2="69"  stroke="rgba(139,148,158,.14)" stroke-width="1"></line>
+          <line x1="30" y1="98"  x2="415" y2="98"  stroke="rgba(139,148,158,.14)" stroke-width="1"></line>
+          <line x1="30" y1="10"  x2="30"  y2="128" stroke="rgba(139,148,158,.35)" stroke-width="1"></line>
+          <line x1="30" y1="128" x2="415" y2="128" stroke="rgba(139,148,158,.35)" stroke-width="1"></line>
+          <path :d="curve().usedFill || ''" fill="rgba(56,139,253,.18)" stroke="none"></path>
+          <path :d="curve().avail || ''" fill="none" stroke="#8b949e" stroke-width="1.5"
+                stroke-dasharray="4 3" vector-effect="non-scaling-stroke"></path>
+          <path :d="curve().used || ''" fill="none" stroke="#388bfd" stroke-width="1.8"
+                vector-effect="non-scaling-stroke"></path>
+        </svg>
+        <div class="chart-side">
+          <div class="ck">
+            <span class="ck-l">Used</span>
+            <span class="ck-v v-blue" x-text="money(rc('consumed'))"></span>
+            <span class="ck-s" x-text="pct(utilPct())"></span>
+          </div>
+          <div class="ck">
+            <span class="ck-l">Available</span>
+            <span class="ck-v v-green" x-text="money(rc('available'))"></span>
+            <span class="ck-s" x-text="pct(availPct())"></span>
+          </div>
+        </div>
+      </div>
+      <div class="cap-note" x-text="curveNote()"></div>
+    </div>
+
+    <!-- ── 10. CAPITAL UTILIZATION GAUGE ──────────────────────────────────-->
+    <div class="panel">
+      <h2 class="panel-title">10. CAPITAL UTILIZATION GAUGE</h2>
+      <div class="gauge-wrap">
+        <div class="cap-gauge-box">
+          {# Semicircle r=40. The arc, the number inside it and the range table
+             below are coloured by ONE classifier (usageClass), so the picture
+             can never disagree with the words beside it. #}
+          <svg class="cap-gauge" viewBox="0 0 100 72" aria-hidden="true">
+            <path class="cap-g-bg" d="M 10 56 A 40 40 0 0 1 90 56" fill="none"
+                  stroke-width="9" stroke-linecap="round"></path>
+            <g x-html="gaugeMarkup()"></g>
+            <text class="cap-g-tick" x="50" y="8" text-anchor="middle">50%</text>
+            <text class="cap-g-tick" x="2" y="70" text-anchor="start">0%</text>
+            <text class="cap-g-tick" x="98" y="70" text-anchor="end">100%</text>
+          </svg>
+          <div class="cap-g-centre">
+            <b class="cap-g-v num" :class="usageClass(utilPct())" x-text="pctText(utilPct())"></b>
+            <span class="cap-g-d">Utilization</span>
+          </div>
+        </div>
+        <table class="ct">
+          <thead><tr><th colspan="2">Utilization Range (Status)</th></tr></thead>
+          <tbody>
+            <tr><td>0% – 60%</td><td class="s-green"><span class="dot"></span>Normal</td></tr>
+            <tr><td>60% – 80%</td><td class="s-amber"><span class="dot"></span>Caution</td></tr>
+            <tr><td>80% – 100%</td><td class="s-red"><span class="dot"></span>Critical</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <div class="cap-foot" x-text="footLine()"></div>
 </div>
 
 <script>
 function capitalRiskPage() {
   return Object.assign(pageBase("/api/risk"), {
     risk: {}, capital: {}, exposure: {}, capacity: { rows: [] },
-    alerts: [], events: [], pnl: {}, seg: {},
+    alerts: [], pnl: {}, seg: {},
+
+    /* The PRESERVED loader — this integration was already correct and is reused
+       verbatim rather than reinvented. */
     async load() {
       const j = u => fetch(u, {credentials:"same-origin"}).then(r => r.status===401 ? (window.location="/login",{}) : r.json());
       const [rk, cap, ex, cp, al, pn, sg] = await Promise.all([
@@ -367,13 +710,167 @@ function capitalRiskPage() {
       this.capacity = cp || { rows: [] }; this.alerts = (al && al.alerts) || [];
       this.pnl = pn || {}; this.seg = sg || {};
     },
-    // ── real-cash accessors ──────────────────────────────────────────────
+
+    /* ── accessors ──────────────────────────────────────────────────────── */
     rc(k) { return (this.seg.real_cash || {})[k]; },
     sv(k, f) { return ((this.seg.segments || {})[k] || {})[f]; },
-    // ── pinned simulation (never mixed with live) ────────────────────────
+    cfg(k) { return (this.seg.config || {})[k]; },
+    dir(f) { return ((this.exposure || {}).by_direction || {})[f]; },
+    /* last_sync is an object; render its timestamp, HH:MM:SS, never the object. */
+    syncAt() {
+      const s = this.rc("last_sync");
+      if (!s || !s.at) return "";
+      const t = String(s.at);
+      return t.length >= 19 ? t.slice(11, 19) : t;
+    },
     si(f) { return ((this.seg.simulation || {}).input || {})[f]; },
-    sim(side, seg, f) { return ((((this.seg.simulation || {})[side]) || {})[seg] || {})[f]; },
+    sim(side, s, f) { return ((((this.seg.simulation || {})[side]) || {})[s] || {})[f]; },
     simT(side, f) { return (((this.seg.simulation || {})[side]) || {})[f]; },
+
+    /* ⛔ A missing value renders as an em-dash, NEVER as 0 — a fabricated zero
+       is exactly the failure this screen exists to prevent. */
+    num(v) { return (v === undefined || v === null || v === "") ? null : Number(v); },
+
+    /* 🔴 OVERRIDES pageBase.money(), WHICH IS WRONG FOR THIS SCREEN.
+       The shared helper is `Number(v || 0)`, so an ABSENT value renders as
+       "₹0.00" — indistinguishable from a real zero. On a capital screen that is
+       the exact failure mode the design forbids: "do not invent values", and a
+       zero where the source is missing IS an invented value.
+       ⛔ Not changed in components/base — that would reach all 22 screens and is
+       a separate decision. Scoped to S08 only. */
+    money(v) {
+      const n = this.num(v);
+      if (n === null || isNaN(n)) return "—";
+      return (n < 0 ? "-₹" : "₹") + Math.abs(n).toFixed(2);
+    },
+    pct(v) { const n = this.num(v); return n === null || isNaN(n) ? "—" : (Math.round(n * 100) / 100) + "%"; },
+    pair(o) {
+      if (!o) return "—";
+      const u = this.num(o.used), l = this.num(o.limit);
+      if (u === null && l === null) return "—";
+      return (u === null ? "—" : u) + " / " + (l === null ? "—" : l);
+    },
+
+    /* ── 2. RISK SUMMARY ────────────────────────────────────────────────── */
+    lossPctLabel() {
+      const p = this.num(this.cfg("daily_loss_limit_pct"));
+      return p === null ? "limit" : (Math.round(p * 1000) / 10) + "%";
+    },
+    remainingRisk() {
+      const l = this.num(this.risk.daily_loss && this.risk.daily_loss.limit);
+      const u = this.num(this.risk.daily_loss && this.risk.daily_loss.used);
+      return (l === null) ? null : Math.round((l - (u || 0)) * 100) / 100;
+    },
+    riskUtil() {
+      const l = this.num(this.risk.daily_loss && this.risk.daily_loss.limit);
+      const u = this.num(this.risk.daily_loss && this.risk.daily_loss.used);
+      return (l === null || !l) ? null : Math.round((100 * (u || 0) / l) * 100) / 100;
+    },
+    pctClass(v) { const n = this.num(v); if (n === null) return "";
+      return n >= 80 ? "v-red" : n >= 60 ? "v-amber" : "v-green"; },
+
+    /* ── 3. EXPOSURE ───────────────────────────────────────────────────── */
+    openPosCount() {
+      const a = this.num(this.dir("long_positions")), b = this.num(this.dir("short_positions"));
+      if (a === null && b === null) return null;
+      return (a || 0) + (b || 0);
+    },
+    grossExposure() {
+      const a = this.num(this.dir("long_value")), b = this.num(this.dir("short_value"));
+      if (a === null && b === null) return null;
+      return Math.round(((a || 0) + Math.abs(b || 0)) * 100) / 100;
+    },
+
+    /* ── 4. LIMITS MONITOR — literal, approved row order ─────────────────
+       Each row states where its numbers come from. A row with no source shows
+       an explicit unavailable state; ⛔ it is never filled with a plausible
+       number to make the table look complete. */
+    capRow(key) { return ((this.capacity || {}).rows || []).find(r => r && r.key === key) || {}; },
+    _mk(label, conf, used, remain, opts) {
+      opts = opts || {};
+      const c = this.num(conf), u = this.num(used);
+      let rem = this.num(remain);
+      if (rem === null && c !== null && u !== null) rem = Math.round((c - u) * 100) / 100;
+      const usage = (c !== null && c !== 0 && u !== null) ? Math.round((100 * u / c) * 100) / 100 : null;
+      const fmt = opts.money ? (v => this.money(v)) : (v => v === null ? "—" : v);
+      let status = "—", statusClass = "s-dim";
+      if (opts.status) { status = opts.status; statusClass = opts.statusClass || "s-dim"; }
+      else if (usage !== null) {
+        status = usage >= 80 ? "CRITICAL" : usage >= 60 ? "CAUTION" : "GREEN";
+        statusClass = usage >= 80 ? "s-red" : usage >= 60 ? "s-amber" : "s-green";
+      }
+      return { label: label, configured: fmt(c), used: fmt(u), remaining: fmt(rem),
+               usage: this.pct(usage), pctClass: this.pctClass(usage),
+               status: status, statusClass: statusClass, note: opts.note || "" };
+    },
+    limitRows() {
+      const orders = this.capRow("max_daily_trades");
+      const pos = this.capRow("max_open_positions");
+      const cash = this.num(this.rc("total_live"));
+      const misPct = this.num(this.cfg("daily_loss_limit_pct"));
+      const gttPct = this.num(this.cfg("delivery_daily_loss_limit_pct"));
+      const misLoss = (misPct !== null && cash !== null) ? Math.round(misPct * cash * 100) / 100 : null;
+      const gttLoss = (gttPct !== null && cash !== null) ? Math.round(gttPct * cash * 100) / 100 : null;
+      const lossUsed = this.num(this.risk.daily_loss && this.risk.daily_loss.used);
+      const active = this.strategyRows().length;
+      return [
+        this._mk("Daily Orders", orders.limit, orders.used, null, {}),
+        this._mk("Open Positions", pos.limit, pos.used, null, {}),
+        /* ⛔ NO global strategy-count cap exists in config. The count of
+           strategies actually consuming capital IS measured; the limit is not
+           invented. */
+        { label: "Strategy Limits", configured: "—",
+          used: active === null ? "—" : String(active), remaining: "—", usage: "—",
+          pctClass: "", status: "NO CAP", statusClass: "s-dim",
+          note: "no global strategy-count cap in config; per-strategy caps live in each strategy's own YAML" },
+        this._mk("Capital (MIS)", this.sv("intraday", "real_allocation"),
+                 this.sv("intraday", "real_committed"),
+                 this.sv("intraday", "remaining_real"), { money: true }),
+        this._mk("Capital (GTT)", this.sv("delivery", "real_allocation"),
+                 this.sv("delivery", "real_committed"),
+                 this.sv("delivery", "remaining_real"), { money: true }),
+        /* The global key is enforced against the account-wide realized loss, so
+           this pairing is correct. */
+        this._mk("Daily Loss Limit (MIS)", misLoss, lossUsed, null, { money: true }),
+        /* ⛔ The delivery twin gates the PRE-TRADE check only; realized P&L is
+           account-wide with no per-book attribution, so USED has no honest
+           value. The CONFIGURED limit is real and is shown. */
+        { label: "Daily Loss Limit (GTT)", configured: this.money(gttLoss),
+          used: "—", remaining: "—", usage: "—", pctClass: "",
+          status: "PRE-TRADE", statusClass: "s-dim",
+          note: "delivery daily-loss gates the pre-trade check only; the post-close breaker is global and realized P&L is account-wide" },
+      ];
+    },
+
+    /* ── 5 ─────────────────────────────────────────────────────────────── */
+    segTag(k) {
+      const p = this.num(this.cfg(k === "intraday" ? "intraday_pct" : "delivery_pct"));
+      const l = this.num(this.cfg(k === "intraday" ? "intraday_leverage" : "delivery_leverage"));
+      if (p === null && l === null) return "";
+      return "(" + (p === null ? "—" : Math.round(p * 100) + "%") + " | " + (l === null ? "—" : l + "x") + ")";
+    },
+    simTag(k) {
+      const p = this.si(k + "_pct"), l = this.si(k + "_leverage");
+      if (p === undefined || l === undefined) return "";
+      return Math.round(p * 100) + "% | " + l + "x";
+    },
+    allocLine() {
+      const a = this.num(this.cfg("intraday_pct")), b = this.num(this.cfg("delivery_pct"));
+      const x = this.num(this.cfg("intraday_leverage")), y = this.num(this.cfg("delivery_leverage"));
+      if (a === null) return "";
+      return "Allocation: MIS " + Math.round(a * 100) + "% / GTT " + Math.round(b * 100) +
+             "% · Leverage: MIS " + x + "x / GTT " + y + "x · from config";
+    },
+    totCapacity() {
+      const a = this.num(this.sv("intraday", "segment_capacity")), b = this.num(this.sv("delivery", "segment_capacity"));
+      return (a === null && b === null) ? null : Math.round(((a || 0) + (b || 0)) * 100) / 100;
+    },
+    totRemainCapacity() {
+      const a = this.num(this.sv("intraday", "remaining_segment_capacity")), b = this.num(this.sv("delivery", "remaining_segment_capacity"));
+      return (a === null && b === null) ? null : Math.round(((a || 0) + (b || 0)) * 100) / 100;
+    },
+
+    /* ── 5b ────────────────────────────────────────────────────────────── */
     simAlloc() {
       const a = this.si("mis_pct"), b = this.si("gtt_pct");
       return (a === undefined || b === undefined) ? "—"
@@ -383,111 +880,123 @@ function capitalRiskPage() {
       const a = this.si("mis_leverage"), b = this.si("gtt_leverage");
       return (a === undefined || b === undefined) ? "—" : "MIS " + a + "x | GTT " + b + "x";
     },
-    // Shows the division that turns notional into real capital, so the two are
-    // never read as the same quantity.
-    reservedText(side, seg) {
-      const r = this.sim(side, seg, "real_reserved");
-      const n = this.sim(side, seg, "order_notional");
-      const lev = this.si(seg === "mis" ? "mis_leverage" : "gtt_leverage");
-      if (r === undefined) return "—";
-      return this.money(r) + "  (" + this.money(n) + " ÷ " + lev + "x)";
+
+    /* ── 6 / 8 ─────────────────────────────────────────────────────────── */
+    strategyRows() {
+      const rows = (this.seg.strategies || []).filter(s => s && (s.total_real || 0) !== 0);
+      const mis = rows.reduce((t, s) => t + (s.mis_real || 0), 0);
+      const gtt = rows.reduce((t, s) => t + (s.gtt_real || 0), 0);
+      const tot = rows.reduce((t, s) => t + (s.total_real || 0), 0);
+      return rows.map(s => Object.assign({}, s, {
+        mis_share: mis ? Math.round((100 * (s.mis_real || 0) / mis) * 100) / 100 : null,
+        gtt_share: gtt ? Math.round((100 * (s.gtt_real || 0) / gtt) * 100) / 100 : null,
+        share: tot ? Math.round((100 * (s.total_real || 0) / tot) * 100) / 100 : null,
+      }));
     },
-    movement(k) { return (this.seg.real_cash || {})[k] || {}; },
-    movementObserved() {
-      const a = this.movement("payin_today"), b = this.movement("payout_today");
-      return !!(a.available && b.available);
+    stratTotal(f) {
+      const rows = this.strategyRows();
+      if (!rows.length) return null;
+      return Math.round(rows.reduce((t, s) => t + (s[f] || 0), 0) * 100) / 100;
     },
-    // An unobserved movement is NEVER rendered as 0 — that would be a fabricated
-    // value. It renders as "n/a" with the reason shown beneath the row.
-    movementText(k) {
-      const m = this.movement(k);
-      return m.available ? this.money(m.value) : "n/a";
+    topConsumers() {
+      return this.strategyRows().slice().sort((a, b) => (b.total_real || 0) - (a.total_real || 0)).slice(0, 6);
     },
-    movementReason() {
-      const m = this.movement("payin_today");
-      return m.reason ? ("Pay-in / pay-out: " + m.reason) : "";
-    },
-    basisNote() { return (this.seg.real_cash || {}).basis_note || ""; },
-    syncNote() {
-      const s = (this.seg.real_cash || {}).last_sync;
-      if (!s) return "";
-      const t = String(s.at || "").slice(11, 19);
-      return " Last broker sync: " + t + " (" + s.entry_type + "), "
-           + s.sync_count_today + " sync(s) today.";
-    },
-    // ── config context ───────────────────────────────────────────────────
-    cfgv(k) { return (this.seg.config || {})[k]; },
-    pctLabel(v) { return (v === null || v === undefined) ? "—" : Math.round(v * 100) + "%"; },
-    levText(k) {
-      const v = this.cfgv(k === "intraday" ? "intraday_leverage" : "delivery_leverage");
-      return (v === null || v === undefined) ? "—" : v + "x";
-    },
-    segTitle(k) {
-      const pct = this.cfgv(k === "intraday" ? "intraday_pct" : "delivery_pct");
-      return (k === "intraday" ? "Intraday / MIS" : "Delivery / GTT")
-             + " (" + this.pctLabel(pct) + " | " + this.levText(k) + ")";
-    },
-    configSub() {
-      if (!this.seg.config) return "";
-      return "allocation MIS " + this.pctLabel(this.cfgv("intraday_pct"))
-           + " / GTT " + this.pctLabel(this.cfgv("delivery_pct"))
-           + " · leverage MIS " + this.levText("intraday")
-           + " / GTT " + this.levText("delivery") + " — from config";
-    },
-    // ── totals ───────────────────────────────────────────────────────────
-    sumSeg(f) {
-      const s = this.seg.segments || {}; let t = null;
-      ["intraday", "delivery"].forEach(k => {
-        const v = (s[k] || {})[f];
-        if (v !== null && v !== undefined) t = (t || 0) + Number(v);
+
+    /* ── 7 ─────────────────────────────────────────────────────────────── */
+    eventRows() {
+      return (this.alerts || []).slice(0, 6).map(a => {
+        const sev = String(a.severity || a.level || "").toUpperCase();
+        const cls = sev.indexOf("CRIT") === 0 || sev === "ERROR" ? "v-red"
+                  : sev.indexOf("WARN") === 0 ? "v-amber" : "v-dim";
+        const ts = String(a.ts || a.timestamp || "");
+        return { time: ts.length >= 19 ? ts.slice(11, 19) : (ts || "—"),
+                 title: a.title || a.message || a.event || "—",
+                 category: sev || "INFO", cls: cls };
       });
-      return t === null ? null : Math.round(t * 100) / 100;
     },
-    totalCapacity() { return this.sumSeg("segment_capacity"); },
-    totalRemainingCapacity() { return this.sumSeg("remaining_segment_capacity"); },
-    // ── derived percentages ──────────────────────────────────────────────
+
+    /* ── 9 · curve from REAL fm_ledger rows ────────────────────────────── */
     utilPct() {
-      const t = this.rc("total_live"), c = this.rc("consumed");
-      if (t === null || t === undefined || !t) return null;
-      return Math.round(1000 * c / t) / 10;
+      const c = this.num(this.rc("consumed")), t = this.num(this.rc("total_live"));
+      return (t === null || !t || c === null) ? null : Math.round((100 * c / t) * 100) / 100;
     },
+    availPct() { const u = this.utilPct(); return u === null ? null : Math.round((100 - u) * 100) / 100; },
+    _points() {
+      /* fm_ledger arrives newest-first; margin_delta accumulates into committed
+         capital. Each point is a real ledger row — ⛔ nothing is interpolated. */
+      const rows = ((this.capital || {}).ledger || []).slice().reverse();
+      const total = this.num(this.rc("total_live"));
+      if (!rows.length || total === null) return [];
+      let used = 0; const out = [];
+      rows.forEach(r => {
+        const d = Number(r.margin_delta || 0);
+        if (d) used = Math.round((used + d) * 100) / 100;
+        out.push({ ts: r.ts, used: Math.max(0, used), avail: Math.max(0, Math.round((total - used) * 100) / 100) });
+      });
+      return out;
+    },
+    curveGrid() { return [{ y: 10 }, { y: 39 }, { y: 69 }, { y: 98 }, { y: 128 }]; },
+    curve() {
+      const p = this._points();
+      if (p.length < 2) return {};
+      const total = this.num(this.rc("total_live")) || 1;
+      const X0 = 30, X1 = 415, Y0 = 10, Y1 = 128;
+      const sx = i => X0 + (X1 - X0) * (i / (p.length - 1));
+      const sy = v => Y1 - (Y1 - Y0) * Math.min(1, Math.max(0, v / total));
+      const d = f => p.map((q, i) => (i ? "L" : "M") + sx(i).toFixed(1) + " " + sy(q[f]).toFixed(1)).join(" ");
+      const usedD = d("used");
+      return { used: usedD, avail: d("avail"),
+               usedFill: usedD + " L" + X1 + " " + Y1 + " L" + X0 + " " + Y1 + " Z" };
+    },
+    curveNote() {
+      const n = this._points().length;
+      return n < 2
+        ? "Needs >= 2 fm_ledger movements today — none plotted."
+        : n + " fm_ledger movements plotted · real capital committed vs available.";
+    },
+
+    /* ── shared formatting + ONE usage classifier ──────────────────────── */
+    pctText(v) { return (v === null || v === undefined) ? "—" : v + "%"; },
+    usageClass(p) { if (p === null || p === undefined) return "";
+      if (p >= 80) return "num-neg"; if (p >= 60) return "num-warn"; return "num-pos"; },
+    /* share of the TRUE total consumed — the number stays the fact. */
     sharePct(v) {
       const c = this.rc("consumed");
       if (!c || v === null || v === undefined) return null;
       return Math.round(1000 * v / c) / 10;
     },
-    riskRemaining() { const d = this.risk.daily_loss; return (d && d.limit != null) ? Math.max(0, d.limit - (d.used || 0)) : null; },
-    riskUtilPct() {
-      const d = this.risk.daily_loss;
-      if (!d || d.limit == null || !d.limit) return null;
-      return Math.round(1000 * (d.used || 0) / d.limit) / 10;
+
+    /* ── 10 · gauge. Semicircle r=40 => arc length = PI*40. ──────────────
+       ⛔ NO ARC when utilisation is unknown: a dial drawn at 0% would read as
+       "nothing used", which is a fabricated fact. */
+    GAUGE_LEN: 125.664,
+    gaugeMarkup() {
+      const p = this.utilPct();
+      if (p === null || p === undefined) return "";
+      const on = Math.max(0, Math.min(100, Number(p))) / 100 * this.GAUGE_LEN;
+      return '<path class="cap-g-fg ' + this.usageClass(p) + '"'
+           + ' d="M 10 56 A 40 40 0 0 1 90 56" fill="none" stroke-width="9"'
+           + ' stroke-linecap="round" stroke-dasharray="'
+           + on.toFixed(2) + ' ' + this.GAUGE_LEN + '"></path>';
     },
-    lossLimitSub() {
-      const p = this.risk.daily_loss ? this.risk.daily_loss.limit_pct : null;
-      return (p === null || p === undefined) ? "" : ("limit = " + (p * 100) + "% of total real capital");
+    /* Bar length is relative to the LARGEST consumer so the widest bar fills
+       the cell; the % column keeps carrying the share of the true total. */
+    barPct(v) {
+      const rows = this.topConsumers();
+      if (!rows.length || v === null || v === undefined) return 0;
+      const max = Math.max(...rows.map(s => Number(s.total_real) || 0));
+      if (!max) return 0;
+      return Math.max(0, Math.min(100, 100 * Number(v) / max));
     },
-    // ── exposure ─────────────────────────────────────────────────────────
-    dir(f) { return (this.exposure.by_direction || {})[f]; },
-    grossExposure() {
-      const l = this.dir("long_value"), s = this.dir("short_value");
-      if (l === null || l === undefined || s === null || s === undefined) return null;
-      return Math.round((Math.abs(l) + Math.abs(s)) * 100) / 100;
-    },
-    openPositions() {
-      const d = this.exposure.by_direction;
-      return d ? ((d.long_positions || 0) + (d.short_positions || 0)) : 0;
-    },
-    topConsumers() { return (this.seg.strategies || []).filter(s => s.total_real > 0).slice(0, 8); },
-    // ── shared formatting (house conventions) ────────────────────────────
-    pctText(v) { return (v === null || v === undefined) ? "—" : v + "%"; },
-    usageClass(p) { if (p === null || p === undefined) return ""; if (p >= 80) return "num-neg"; if (p >= 60) return "num-warn"; return "num-pos"; },
-    fmtCap(v, unit) { if (v === null || v === undefined) return "—"; if (unit === "rs") return (Number(v) < 0 ? "-₹" : "₹") + Math.abs(Number(v)).toFixed(2); return String(v); },
-    curvePoints() {
-      const pts = (this.pnl.equity_curve || []).map(p => p.cum_pnl);
-      if (pts.length < 2) return "";
-      let min = Math.min(0, ...pts), max = Math.max(0, ...pts); if (min === max) { min -= 1; max += 1; }
-      const step = 600 / (pts.length - 1);
-      return pts.map((v, i) => (i * step).toFixed(1) + "," + (150 - 140 * (v - min) / (max - min) + 5).toFixed(1)).join(" ");
+
+    footLine() {
+      const a = this.num(this.cfg("intraday_pct"));
+      const base = "Values are engine truth from fm_ledger and trades · Data source: Zerodha Kite Connect";
+      if (a === null) return base;
+      return base + " · Allocation: MIS " + Math.round(a * 100) + "% / GTT " +
+             Math.round(this.num(this.cfg("delivery_pct")) * 100) + "% · Leverage: MIS " +
+             this.num(this.cfg("intraday_leverage")) + "x / GTT " +
+             this.num(this.cfg("delivery_leverage")) + "x";
     },
   });
 }

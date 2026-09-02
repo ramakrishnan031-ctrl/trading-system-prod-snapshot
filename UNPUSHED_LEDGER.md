@@ -1722,3 +1722,1731 @@ All 8 commits ride Sunday's push together, as one unit, in the order above.
 ⛔ **Never resolve `origin/main` from this entry at push time** — measure it
 fresh with `git push --dry-run origin be79490:refs/heads/main` at the moment of
 push, per the standing rule (M8 / gate-time measurement, never a card's SHA).
+
+---
+
+> 🔀 **MERGE SEAM — 02-Sep-2026.** `main` (`39292d3`) and the GUI campaign branch
+> (`0bbe127`) each appended a window after **Entry 20**, numbering independently from
+> the same base `6fa8a1c`. **BOTH BLOCKS ARE KEPT VERBATIM — nothing was dropped and
+> nothing was renumbered.** ⇒ ⚠️ **TWO entries are numbered 21:** main's 29-Aug
+> MIS/alert-move window (immediately above) and the GUI campaign's 14-Aug→02-Sep
+> window (immediately below, **Entries 21–35**). ⚠️ A **THIRD** independent Entry
+> 21/22 exists on the still-unpushed branch **`feat/f2-core-30aug` (`587b306`)** and
+> is ⛔ **NOT** part of this merge — that branch is intact, unpushed, and ⛔ must not
+> be squashed or deleted. Renumber deliberately in a later pass; ⛔ never inside a
+> conflict resolution.
+
+## WINDOW: 14→28-Aug-2026 — THE GUI BUILD-OUT AND THE VISUAL-APPROVAL CAMPAIGN
+
+**Branch:** `feat/screen10-slippage-analytics` (continues `feat/screen06-positions`)
+**Base at window open:** merge-base `6fa8a1c` (14-Aug).
+**Pushed: NO · Deployed: NO** — 🔬 re-measured 30-Aug: `git ls-remote origin
+feat/screen10-slippage-analytics` returns **0 refs**. Nothing of this window has
+ever left the PC.
+
+### Entry 21 — ALL 22 SCREENS BUILT · 8 VISUALLY APPROVED · ⛔ NOT PUSHED
+
+**Date/time:** 14-Aug → 28-Aug-2026 · **HEAD `d0a4054`**
+**Commits since Entry 20 (`8bebcd8`): 90** — 🔬 measured, not counted by hand.
+**Pushed: NO · Deployed: NO**
+
+#### What the 90 commits contain
+
+| dates | work |
+|---|---|
+| 14–15 Aug | **S09** P&L Analytics · **S10** Slippage Analytics · **S11** Execution Analytics · **S12** System Health (UNKNOWN as a first-class state) · **S13** Audit · **S14** Trade Logs · **S15** System Logs |
+| 16–17 Aug | **S18** Live Activity · **S19** Strategy Ranking · **S20** Strategy Health · **S21** Scanner Attribution · **S22** Holdings · **S17** Controls |
+| 18–20 Aug | The **visual-approval campaign** — 32 commits on 19-Aug alone. S01–S05 approved; S06 approved on its pre-correction render; the 13px-floor decision re-opened all 22 |
+| 24 Aug | **S08** Capital & Risk — a **FULL REBUILD**, ⛔ not a patch (`c479b40`), then approved |
+| 27 Aug | **S09** heatmaps rebuilt as the artwork's two-row matrix (`292a750`); approved |
+| 28 Aug | **S10** Export panel + genuinely column-driven table (`c37e718`); approved (`d0a4054`) |
+
+⭐ Also in this window, and it is the one structural change rather than a screen:
+**`efeb0b7` — the column reorder became ONE implementation, not fifteen.**
+`colDragMixin()` in `static/components.js:95`. `Object.assign` places page members
+LAST, so the existing screens keep their own overrides and are unchanged.
+🔬 **Measured 30-Aug: 16 of 30 screen templates use the mixin, and ALL 16 iterate
+`cols` inside `<tbody>` ⇒ 16/16 genuinely move the DATA, 0 header-only.**
+⚠️ That matters because wiring alone is not the feature: a table with POSITIONAL
+`<td>`s moves the LABEL and leaves the DATA behind.
+
+#### 🔴 APPROVAL STANDING — 🔬 from `VISUAL_APPROVAL_LEDGER_19-Aug-2026.md` at HEAD
+
+| state | n | screens |
+|---|---|---|
+| 🟢 **VISUALLY APPROVED** | **8** | S01 · S02 · S03 · S04 · S05 · S08 · S09 · S10 |
+| ⏳ **QUALIFIED** | **2** | **S06** — approved on the **PRE-correction** render; the correction (`b47e148`) is verified and re-rendered but ⛔ never seen. **S07** — approved 14-Aug under the PREVIOUS ledger; `66fc82e` landed after it, unseen; the 13px-floor decision makes this a **RE-approval** |
+| ⏳ **NEVER SHOWN** | **12** | S11 – S22 |
+
+⛔ **The recorded figure "9 approved / 13 awaiting a first approval" was WRONG in
+both halves** and is corrected here: it is **8 / 12**, with 2 in a qualified state.
+
+#### ⚠️ WHAT THE GREEN ONES DO **NOT** MEAN
+
+- ⛔ **Neither S09 nor S10 is `VERIFIED LIVE`.**
+- **S09** was approved on **SEEDED DEMO data** — 🔬 the local DB holds **0 closed
+  trades** (last written 03-Aug), so the render used **75 demo trades**.
+  ⭐ Composition/colour/alignment are confirmed; ⛔ the populated PRODUCTION
+  appearance is not.
+- **S10** was approved on a **read-only extract of real VM data** (2.5 MB).
+  ⚠️ Its amber/red slippage status path is **LIVE BUT NEVER EXERCISED** —
+  🔬 real slippage is ~₹0.00–0.02, **100% within limit**, 0 near, 0 exceeded.
+- **S04** owes Q1·Q2 · **S05** owes Q3·Q4 · **S08** carries **2 post-approval
+  restorations** (gauge geometry, gated export button) that ⛔ have not been seen.
+- ✅ **DEMO-DB HYGIENE HELD:** the `gui_config.local.yaml` pointer was reverted
+  **byte-identically** (that file forbids leaving one), the demo DB lives OUTSIDE
+  the repo, and 🔬 the real DB's mtime is unchanged at **03-Aug 16:08** ⇒ it was
+  never opened for writing.
+
+#### ✅ THE REFIT IS STILL ESSENTIALLY FREE — 🔬 RE-MEASURED 30-Aug
+
+- **89 ahead / 39 behind `effff24`.** ⚠️ The previously recorded *"37 behind"* was
+  measured against `52ccb4f`, ⛔ not `effff24` — a different comparand, ⛔ not drift.
+- 🔬 **ZERO COLLISIONS, whole tree:** 135 gui09 files vs 68 main files since the
+  merge-base, **0 overlap**.
+- 🔬 main has touched `ops_dashboard/` in **0** files since `6fa8a1c`; gui09 in **87**.
+- ⇒ ⭐ A **rebase**, ⛔ not a merge fight. ⚠️ But it only grows more behind with
+  every main push — after the 30-Aug push it becomes **48 behind** `39292d3`.
+
+#### ⛔ WHAT IS NOT DONE
+
+- ⛔ **NOT PUSHED, NOT DEPLOYED.** 0 remote refs.
+- ⛔ **S11–S22 have never been shown for approval.** ⭐ S11 Execution Analytics is
+  BUILT (`3979b1b`, 15-Aug) — ⛔ what it needs is its FIRST visual approval, ⛔ not
+  a build.
+- ⛔ **S06 and S07 need Rama's eyes on renders that already exist** — ⭐ the
+  cheapest two wins on the board, because the work is done and only the sight is
+  missing.
+- ⛔ No rebase attempted. ⛔ `origin/main` must be re-measured at refit time, ⛔ never
+  taken from this document.
+
+### Entry 22 — S11 EXECUTION ANALYTICS APPROVED. ⛔ NOT PUSHED
+
+**Date/time:** 30-Aug-2026, approved ~15:5x IST · **Branch:** `feat/screen10-slippage-analytics`
+**Pushed: NO · Deployed: NO**
+
+⭐ S11 was already BUILT (`3979b1b`, 15-Aug) and Scanner was already removed
+(15-Aug, ruling 1). This window is the **visual-approval pass** and the three
+corrections it produced. ⛔ The screen was NOT rebuilt.
+
+#### The three changes
+
+1. **INTRADAY & DELIVERY EXECUTION ANALYSIS** now occupies the footprint the
+   reference gives Scanner Execution Ranking — **between Strategy and Symbol**,
+   exactly where the artwork places it. ⭐ ⛔ NOT a new aggregation: the SAME
+   generic `_rank` the two rankings beside it use, keyed on a pipeline label
+   derived from the ENTRY product by the SAME rule the capital path uses
+   (`pipeline_for_product`: not-CNC ⇒ intraday). ⛔ **UNKNOWN is its own row** —
+   a trade with no ENTRY order has no product, and folding it into Intraday
+   would put a fabricated dimension into the one analysis whose job is to
+   separate the books.
+   🔬 On the REAL-VM snapshot: Intraday 187 · Delivery 84 · UNKNOWN 36 =
+   **307 = execution_count exactly**, a true partition.
+
+2. **Symbol became a LEFT label column** (`lbl:true`) — heading AND every data
+   cell move together. ⛔ The column SET is unchanged, so `COLS_KEY` stays v1 and
+   no operator's saved column order is discarded.
+
+3. **A TRADE STATE filter**, new this window. ⚠️ The screen rendered TWO
+   status-like columns and only one was filterable:
+     · `status`      = the DELAY BAND (fast/moderate/slow/unmeasured)
+     · `trade_state` = the LIFECYCLE position (closed/open/pending/rejected)
+   ⇒ *"show me only the CLOSED ones"* was impossible on a screen that displays
+   the column. It runs through the SAME single filter gate every panel reads, so
+   the KPI deck, table, rankings, distribution, throughput, warnings AND the XLSX
+   export narrow together — ⛔ no panel can describe a different population.
+   ⭐ The dropdown offers the FULL vocabulary, ⛔ not just the states present this
+   period: the option to isolate REJECTED must not vanish on a clean day, which
+   is exactly when it is looked for. ⭐ `resetFilters()` hard-codes its set and
+   was corrected, or Reset would have left the new filter stuck on.
+   🔬 Verified: no filter 260 → CLOSED 173 → OPEN 54 → REJECTED 16, each set
+   containing only its own state.
+
+⭐ Also added: **the bottom EXPORT BAR** the artwork carries and S11 lacked
+entirely (the four in-panel buttons were the only export affordance). Note left,
+`Export Current View` + `Export XLSX` right — the S09 `pnl-exportbar` shape,
+scoped to `.exec-page`. ⛔ Live handlers, ⛔ NOT the gated `export_button` macro:
+S11 owns a real `/api/export/execution` route.
+
+⭐ And **the last user-facing Scanner wording is gone** — the *"Scanner ranking
+omitted"* note was REMOVED outright, not reworded: it existed to explain an EMPTY
+footprint, which is now filled. 🔬 Rendered Scanner mentions: **0**.
+
+#### ⛔ WHAT THE APPROVAL DOES NOT MEAN
+
+🔴 **S11 IS NOT `VERIFIED LIVE`.** It was approved on **DEMO data** (260
+synthetic trades), because the real-VM snapshot was too sparse to judge density —
+🔬 202 of its 307 rows never filled, so most timing cells read as dashes. ⭐ The
+demo DB lives OUTSIDE the repo and the pointer was reverted byte-identically
+(md5 `6a6d93df…`, 0 pointer lines); 🔬 the real DB's mtime is unchanged at
+**03-Aug 16:08** ⇒ never opened for writing.
+
+⚠️ **THE 25-COLUMN ARTWORK STILL CANNOT BE BUILT**, and that is unchanged and
+correct. 🔬 Re-verified this window: `order_execution_log.exchange_timestamp` is
+a real column that is **NEVER WRITTEN** — the sole caller of
+`insert_order_execution_log` (`orders/slippage_recorder.py:149`) builds its row
+with `order_timestamp` and `fill_timestamp` and **no `exchange_timestamp` key**.
+Risk and capital record no timestamp at all; `orders` has ONE instant, not a
+create/submit pair. ⇒ 10 of the artwork's columns have no source. They remain
+**NOT INSTRUMENTED**, ⛔ never `0.00`. ⛔ `Signal Score` stays retired (L8, the
+Screen-04 exception only).
+
+⚠️ **Two differences from the PNG were REPORTED, ⛔ not changed** — they need
+👤 Rama's ruling, not a build decision:
+  · **KPI cards carry no icons or sub-labels.** The icon needs the SHARED
+    `kpi_card` macro, which every screen uses; the `MINTRADAY_001`-style
+    sub-labels need a backend field naming WHICH execution was fastest/slowest.
+  · **The page title** renders in the house `panel-title` style, ⛔ not the PNG's
+    large uppercase. 🔬 S09 and S10 — both approved — use the identical pattern
+    (`pnl-h1` / `slp-h1` / `exec-h1`); changing S11 alone would make it the odd
+    one out among approved screens.
+
+**Gate:** 🔬 **142 S11 tests pass** (+8 this window). Six pre-existing tests
+pinned the OLD design and were updated to the new one — ⭐ the Scanner assertion
+got STRICTER, from *"exactly 1 mention"* to **0**. Full dashboard suite:
+🔬 **2081 passed, 1 failed** — `test_c_venv_has_no_kiteconnect`, an environment
+artifact (the GUI venv does not exist on this worktree); ⭐ it fails identically
+on a pristine checkout, so it is ⛔ not an S11 failure.
+
+
+### Entry 23 — S12 SYSTEM HEALTH APPROVED. ⛔ NOT PUSHED
+
+**Date/time:** 30-Aug-2026, approved ~17:3x IST · **Branch:** `feat/screen10-slippage-analytics`
+**Build:** `bb1e0a9` · **Pushed: NO · Deployed: NO**
+
+⭐ A real pass against the original artwork, ⛔ not a cosmetic patch. Six changes,
+all inside Screen 12, plus one pre-existing defect found by measurement.
+
+#### The six
+
+1. **THE BAND IS FIVE CARDS** — Overall · Healthy · Warning · Failed · Uptime.
+   The **UNKNOWN card is removed**: it was a sixth KPI the artwork does not
+   carry. ⚠️ ⛔ **Dropping the CARD must not drop the STATE** — UNKNOWN is a real
+   service status, and on a host without `systemctl` it is the *majority* state.
+   ⇒ its survival in the **table, the status filter, the legend AND the colour
+   map** is pinned by test, so a later edit cannot quietly delete the concept.
+
+2. **Icons and per-status shares restored** — shield · ♥ · ⚠ · ✖.
+   ⭐ `pctOf` returns an **em dash, ⛔ never `0.00%`**, when the fleet size is
+   unknown: a confident zero would be a fabricated denominator.
+
+3. **VM METRICS NESTED INTO THE UPTIME CARD**, as the artwork draws them; the
+   separate rail panel is deleted and the service table takes the full row.
+   ⭐ RAM-available has no row in the artwork but IS genuinely measured, so it is
+   **kept rather than dropped** — ⛔ losing a real number to a layout change is a
+   silent regression. 🔬 All six still route through `gapCell`, so a moved metric
+   cannot become a bare number.
+
+4. **DEPENDENCIES BECOME FIVE HORIZONTAL ICON CARDS** in a band of their own —
+   five cards do not fit legibly in a third of the page. ⛔ Same binding, same
+   five names, same statuses, same probe text on hover; presentation only.
+
+5. ⭐ **THE THROUGHPUT PANEL — present in the PNG, ABSENT from the design TXT.**
+   Bound to the **EXISTING `activity_pulse` reader**: ⛔ no new query, ⛔ no new
+   table, ⛔ nothing derived from a capped row list (which would make a busy hour
+   look calm on exactly the day it mattered).
+     · Signals Received ← `signals.received_at`
+     · Orders Created   ← ENTRY `orders.placed_at`
+     · Orders Filled    ← **`trades.entry_time`**
+   ⚠️ **THE THIRD SERIES IS THE FILL, ⛔ NOT AN ORDER STATUS.** A trade row exists
+   once its ENTRY actually filled; reading `orders.status` instead would count a
+   broker **acknowledgement** as a fill.
+   ⛔ **AN EMPTY CHART HERE IS A REAL ZERO, ⛔ NOT AN INSTRUMENTATION GAP.** All
+   three tables are read live, so `instrumented` stays **True** and the panel says
+   **NO ACTIVITY**. Saying NOT INSTRUMENTED would assert the system cannot count
+   its own orders, and ⭐ that assertion would be false. 🔬 Pinned by a test that
+   went RED under mutation.
+   ⚠️ **ONE DELIBERATE LABEL DEVIATION:** the artwork says **PER MINUTE**. A
+   session is ~375 minutes and will not fit that panel, so the per-minute counts
+   are **summed into hourly buckets and the panel says `(per hour)`**. ⭐ The
+   label follows the AGGREGATION, ⛔ it is not inherited from the drawing.
+
+6. **THE BOTTOM EXPORT BAR**, wired to the **existing** `/api/export/system-health`
+   with the page's own filter params — ⛔ not a gated placeholder. A **Throughput
+   sheet** was added so the workbook cannot omit a panel the screen shows.
+
+#### ⭐ A PRE-EXISTING DEFECT, FOUND BY MEASUREMENT
+
+**The 13px typography floor was acting as a CAP.** `.sysh-page .num-neg` (and its
+siblings) sit at the **same specificity** as `.sysh-page .sysh-ov-v` and appear
+**later in the file** — so the moment Alpine put the semantic colour class on the
+status word, the artwork's largest text silently collapsed.
+🔬 **MEASURED: computed `font-size: 13px` where `1.7rem` was written.** Now 27.2px.
+⭐ Fixed by restating the rule one level deeper — ⛔ the floor itself is untouched,
+because every other screen depends on it, and `test_b1_typography_floor` still
+passes. The same latent bug on `.sysh-up-v` was closed at the same time.
+
+#### ⛔ WHAT THE APPROVAL DOES NOT MEAN
+
+🔴 **S12 IS NOT `VERIFIED LIVE`. It was approved on DEMO DATA.**
+
+⚠️ 👤 **30-Aug-2026 IS A SUNDAY — and on weekends and NSE holidays the VM and the
+trading system DO NOT RUN; the system sits in SOFT_KILL.** ⇒ `Trading Engine
+FAILED`, `Uptime NOT AVAILABLE`, `NOT READY` and every empty series are the
+**CORRECT off-market state**, ⛔ not a fault. ⛔ Never open an incident on an
+off-market reading. ⚠️ ⛔ Do not confuse that with the **dev-host gap** — every
+systemd unit `UNKNOWN` because Windows has no `systemctl` — which ⛔ never resolves
+on any day.
+
+⇒ 👤 Rama's standing instruction: *"always show me every screen using vm db's
+input data or your own demo data for clean review."* ⭐ An empty screen ⛔ cannot be
+reviewed. ⚠️ This **supersedes the Web-Claude S12 ruling**, which said not to build
+a demo payload for the Windows gap — ⛔ a card is not Rama.
+
+⭐ **THE FILL CAME FROM AN OUT-OF-REPO REVIEW HARNESS** that patches the **READER
+LAYER in-process** and serves the real app on **:8501**, with the honest screen
+left up on :8500 for comparison. ⛔ NO repo edit · ⛔ no demo DB · ⛔ no config
+pointer · ⛔ **nothing to revert** — kill the process and the demo is gone.
+🔬 Verified after the render: exactly the 4 modified files, **0** new untracked.
+⭐ Patching at the **reader boundary** was deliberate: every status rollup, the
+worst-wins logic, the readiness gates, the semantic colouring and the export all
+ran **FOR REAL** on demo inputs — ⛔ a hand-written payload would have proved
+nothing about the screen. ⛔ MODE was left at PAPER: a demo server must never
+paint the word LIVE on a trading header.
+
+⭐ **WHAT THE FILLED RENDER EXPOSED THAT THE EMPTY ONE COULD NOT:**
+  · **Trading Readiness NOT READY** with the live-vs-historical gate working —
+    *"preflight judged the system READY at 08:30:41, but that verdict is older
+    than this failure"* + a **SUPERSEDED** banner. ⭐ That is the 15-Aug defect's
+    fix, and it is **invisible on an empty screen**.
+  · An alert reading severity **WARNING** but rendering **GREEN** (*"Tailscale
+    connection restored"*) — the semantic-colour rule holding.
+  · **TRIGGERED rendering amber**, ⛔ not counted as a recovery.
+  · Four different dependency states across the five cards.
+  · Both charts drawing: trends (0–27.5, 08:00→15:50) and throughput
+    (0–64, 09:00→15:00).
+
+#### Gate
+
+🔬 **117 S12 tests pass (+13 this window).** One pre-existing test pinned the OLD
+workbook sheet list and was updated. ⭐ RED-capability proven by **mutation**:
+forcing `instrumented=False` turned the throughput honesty tests red; reverted.
+Full dashboard suite: 🔬 **2100 passed, 1 failed** — `test_c_venv_has_no_kiteconnect`,
+an environment artifact (this worktree has no `ops_dashboard/.venv`, so pytest
+runs under the system Python); ⭐ it fails identically on a pristine checkout, so
+it is ⛔ not an S12 failure.
+🔬 **37 of 37 added CSS selectors are `.sysh-page`-scoped**; `components.html` is
+untouched ⇒ ⛔ no other screen's `kpi_card` render moves.
+
+#### ⏸ Reported, ⛔ not changed
+
+· **No uptime percentage** (the PNG shows 99.82%) — ⛔ no such measurement exists.
+· **`Last Successful Order` renders the full ISO stamp**, where the PNG shows only
+  the time. Pre-existing; ⛔ left alone under the freeze.
+· **The PNG's "View All" links** are absent — this build uses real filters and
+  pagination instead. Pre-existing, ⛔ not part of this pass.
+
+
+### Entry 24 — S13 AUDIT APPROVED. ⛔ NOT PUSHED
+
+**Date/time:** 30-Aug-2026, approved ~20:1x IST · **Branch:** `feat/screen10-slippage-analytics`
+**Build:** `3fa2e78` · **Pushed: NO · Deployed: NO**
+
+⭐ **S13 WAS ALREADY FULLY BUILT.** Every panel the PNG draws existed and was
+bound to real audit readers ⇒ this was a **visual pass**, ⛔ not a rebuild.
+⛔ No backend, ⛔ no readers, ⛔ no bindings, ⛔ no export route touched.
+
+#### The three corrections
+
+1. **CRITICAL CHANGES moved out of the table-row rail** to sit beside the lower
+   analytics — the relationship the design TXT names verbatim (*"the original PNG
+   places this as a right-side panel aligned with the lower analytics area.
+   Preserve that relationship."*).
+   ⚠️ ⭐ **It is ALSO a measured defect fix.** With a record selected the rail
+   stood 🔬 **1474px against a 528px table — 946px of dead space** beside it,
+   page height 2457px. After: 🔬 **448px**, page **2074px**.
+   🔴 **The void appeared ONLY AFTER a row was clicked** — ⛔ which is exactly why
+   an unselected screenshot never showed it, and why the brief's "no unintended
+   vertical dead space" check has to be run on a SELECTED record.
+   ⭐ The new `.aud-lower` band deliberately **mirrors `.aud-main`**
+   (`minmax(0,1fr) 330px`) so the panel lands directly beneath AUDIT DETAILS.
+   ⭐ A test pins BOTH rules to the same columns: if they drift the panel stops
+   lining up and the whole point of the move is lost.
+
+2. **The bottom export bar** — note-left / buttons-right with the shared
+   `.btn-export`, matching S09/S11/S12. ⚠️ The rule was **ALREADY
+   `space-between`**; `flex-wrap: wrap` plus the long honesty note wrapped the
+   buttons onto a second line at the LEFT, so the bar read nothing like the
+   artwork. ⭐ `nowrap` is the load-bearing part, ⛔ not the alignment.
+
+3. **One width for every filter select.** Action rendered ~2× its siblings purely
+   because its option strings are longer — ⛔ a control's width must not encode
+   its data. 🔬 All five now exactly 168px.
+
+⏸ **REPORTED, ⛔ NOT CHANGED — 👤 Rama's ruling owed:** the artwork puts OLD/NEW in
+a right sub-COLUMN of Audit Details. 🔬 Its rail is ~412 CSS px against our 330.
+The design TXT specifies the **stack itself** — *OLD VALUE ↓ NEW VALUE* — which is
+exactly what renders; only beside-vs-below differs, and widening the rail would
+squeeze a nine-column table.
+
+#### ⚠️ SIX REAL INSTRUMENTATION GAPS THIS SCREEN SURFACES
+
+⛔ The demo does **not** paper over any of them.
+
+- 🔴 **WHO changed a setting is NOT CAPTURED ANYWHERE IN THE SCHEMA.** ⇒ the PNG's
+  `ramakrishnan` User column ⛔ cannot be built. The column shows the recorded
+  **PROCESS** or an explicit gap, and Top Users states *"all recorded actors are
+  PROCESSES, not people"* and **EXCLUDES** the unattributed records rather than
+  assigning them to anyone.
+- **TIMELINE — only ONE instant per record exists.** Applied is real; Requested,
+  Validated and Confirmed render NOT INSTRUMENTED. ⛔ Never manufactured.
+- **SOURCE** — only an inbound webhook proves its own origin (API).
+  Dashboard/Scheduler/Recovery Engine are not recorded.
+- **RETENTION PERIOD** — no audit retention policy exists. The real oldest→newest
+  span is shown and labelled a **MEASUREMENT**, ⛔ never a policy.
+- **CONTROL HISTORY** — `kill_switch_state` is a single row ⇒ current state only.
+- **AUTHENTICATION** — no source at all.
+
+⭐ **THE OLD→NEW VALUES ARE GENUINE.** They are produced by the real
+`_config_changes` diff of **consecutive config snapshots** — the SAME code path
+production uses — ⛔ not written by hand.
+
+#### ⛔ WHAT THE APPROVAL DOES NOT MEAN
+
+🔴 **S13 IS NOT `VERIFIED LIVE`. It was approved on DEMO DATA.**
+🔬 The real VM snapshot holds **3** audit records across the whole of July–August,
+and 30-Aug is a Sunday (system correctly in SOFT_KILL). ⛔ Three rows cannot show
+whether a 10-row table, an 8-slice donut, a 7-day chart or a paginator reads
+correctly.
+
+⭐ The fill ran through the **out-of-repo review harness on :8501**, feeding **RAW
+TABLE ROWS** to the real readers so `build_audit` performed its own diffing,
+filtering and aggregation on top — ⛔ no repo edit, ⛔ no demo DB, ⛔ no config
+pointer, ⛔ nothing to revert.
+
+#### Gate
+
+🔬 **77 S13 tests pass (+4 this window).** ⭐ RED-capability proven by **mutation**:
+restoring `flex-wrap: wrap` and changing the select width turned both new tests
+red; reverted. Full dashboard suite: 🔬 **2100 passed, 1 failed** —
+`test_c_venv_has_no_kiteconnect`, the environment artifact that fails identically
+on a pristine checkout. 🔬 Every added CSS selector is `.aud-page`-scoped, pinned
+by a test that walks the added block. ⛔ No console messages; ⛔ no horizontal
+overflow.
+
+
+### Entry 25 — S14 TRADE LOGS APPROVED. ⛔ NOT PUSHED
+
+**Date/time:** 30-Aug-2026, approved ~22:4x IST · **Branch:** `feat/screen10-slippage-analytics`
+**Build:** `3885208` · **Pushed: NO · Deployed: NO**
+
+⭐ **S14 WAS ALREADY FULLY BUILT** — 12 panels, all bindings, 83 tests — and ⭐
+**Scanner was ALREADY REMOVED, and DEFENDED AT THREE LAYERS**: the rendered page
+AND the JSON payload · the export header · **the SQL itself** (`signals.scanner`
+exists in the schema and is ⛔ deliberately UNREAD). ⭐ The link to the SEPARATE
+**Scanner Attribution** screen is correctly untouched — a different thing, ⛔ not
+a leak. ⇒ this was a **visual pass**, ⛔ not a rebuild.
+
+#### 1. ⭐ THE TRADE REPLAY PANEL — built into a MEASURED hole
+
+🔬 **The defect was measured before anything was built:** `.tlg-rail` runs
+**543px past** the bottom of `.tlg-row3`, leaving a blank region of
+**1222 × 559 px** INSIDE `.tlg-left`, between TRADE TIMELINE / EVENT DETAILS and
+the AUTO-RECOVERY / RECENT ERRORS / EXPORT row.
+
+⚠️ ⭐ **That measurement drove the PLACEMENT, and the placement was the whole
+correction.** A full-page-width band appended below both columns would have left
+the hole **exactly where it was** and ⛔ merely made the page taller. The panel
+therefore sits INSIDE `.tlg-left`. 🔬 Dead band **559px → 16px** (the normal grid
+gap); panel **1222 × 345**.
+
+⛔ **NO NEW BACKEND.** The eight stages ARE `detail.timeline` — the same ones the
+TRADE TIMELINE above renders, from the same detail response. ⭐ The service's own
+docstring already anticipated it: *"Replay reconstructs the REAL lifecycle: each
+stage is filled only from a real stored timestamp."*
+
+⭐⭐ **THE ANIMATION STEPS ONLY THROUGH `measured` STAGES.** That ONE rule makes a
+fabricated transition **structurally impossible** rather than merely
+discouraged — an unmeasured stage is never a step — and it delivers all three
+required behaviours with ⛔ no special-casing:
+🔬 **VERIFIED LIVE ON TWO TRADES:**
+  · **completed** — stepped `Signal Received → Validation → Order → Fill →
+    Position → Exit`, ⭐ **SKIPPING Risk and Capital** because neither has a
+    timestamp.
+  · **zero-fill `TRD-2026-000807`** — **Order 10:58:34 marked TERMINAL**;
+    Fill and Position **not reached**; Exit **pending / position still open**.
+    ⭐ RECENT ERRORS corroborates at the same instant: *"Cancelled with zero fill
+    on timeout"*.
+
+⭐ **Four states drawn distinctly, because they MEAN different things:**
+recorded · **NOT INSTRUMENTED** (carrying the system's own reason) · not
+reached · currently replaying.
+
+#### 2. The lower row rebalanced — ⚠️ and my first attempt was worse
+
+AUTO-RECOVERY HISTORY and RECENT ERRORS were **both clipped** ("RECOVERE…",
+"RESOLU… STATUS", "NOT INSTR…") while the EXPORT panel held `.8fr` it does not
+use.
+⚠️ ⭐ **RECORDED HONESTLY: the first fix was worse than the defect.** Wrapping the
+cells cleared the clip but turned every RECENT ERRORS row into **three lines**.
+🔬 Measured, reverted, kept the **width change only** — each panel retains its own
+`overflow-x: auto`, the house pattern for wide content. ⛔ The honest wording was
+never shortened and ⛔ the 13px floor was never breached.
+
+#### 3. An S13 test of mine, fixed at root
+
+S13's *touched-no-other-screen* check scanned to **END-OF-FILE**, so the very
+next screen to append a correctly-scoped block failed it — 🔬 S14's
+`.tlg-page .tlg-row4` did exactly that. ⭐ **The WINDOW was wrong, ⛔ not the
+assertion**; it is now bounded to its own block and ⭐ re-proved RED-capable.
+
+#### ⭐ THE EVIDENCE SOURCE — the brief's *VM > review*
+
+🔬 Inspected `/home/ubuntu/systems/trading-system/reports/log_review/eod_review_2026-08-28.md`
+(the latest available) and **reproduced** it. ⭐ The payload's counts land on the
+file **exactly**: **Signal Received 4,686 · Signal Accepted 16 · Capital Rejected
+58 · Order Created 16 · Position Closed 5 (TGT 1 / SL 3)** — plus the real
+symbols, the real rejection reasons, both slippage-guard figures verbatim, and
+both kill-switch instants. ⭐ **The REAL 28-Aug date is kept** — it falls inside
+S14's own default 7-day window, so ⛔ no re-dating was needed.
+
+⚠️ ⭐ One demo-data defect I caused and fixed: my first generator placed
+*Signal Received* AFTER its own *Order*. ⛔ A forensic console showing that is not
+reviewable. Signals are now derived BACKWARDS from the order they produced.
+
+#### ⚠️ SEVEN GAPS THE SCREEN SURFACES — ⛔ the demo does NOT paper over them
+
+- 🔴 **NO error-code scheme exists in this system** — a repo-wide search for an
+  `XXX-0000` code returns **ZERO** ⇒ the artwork's `EXCH-1016` / `RISK-2001` /
+  `CAP-3002` ⛔ **CANNOT be built**. Renders NOT INSTRUMENTED.
+- 🔴 **A PASSING risk or capital gate writes NO ROW** ⇒ *Risk Passed* and
+  *Capital Passed* show **NOT INSTRUMENTED, ⛔ never 0** — ⭐ a 0 would wrongly
+  read as *nothing ever passed*.
+- **Risk and Capital have no timestamp of their own** ⇒ the timeline reads
+  *"n of 8 stages recorded"* and names the two gaps.
+- ⛔ **No resolution state** ⇒ the artwork's *Resolved* column has no source.
+- ⛔ **No *Recovered In*** ⇒ the artwork's *18 sec* cannot be built.
+- ⛔ **No retention policy** on signals/trades/orders ⇒ the artwork's *67 Days* is
+  NOT INSTRUMENTED. ⚠️ The log file's own *"90 days"* governs OTHER tables — ⭐ the
+  service is right to refuse it.
+- ⛔ **No human attribution anywhere** ⇒ User is NOT INSTRUMENTED.
+
+#### ⛔ WHAT THE APPROVAL DOES NOT MEAN
+
+🔴 **S14 IS NOT `VERIFIED LIVE`.** It was approved on data **reproduced from the
+28-Aug log review** through the out-of-repo harness on **:8501** — ⛔ no repo
+edit, ⛔ no demo DB, ⛔ no config pointer, ⛔ nothing to revert.
+
+#### Gate
+
+🔬 **89 S14 tests pass (+6 this window)**, pinning the replay's honesty rules —
+placement inside `.tlg-left`, reuse of `detail.timeline` with ⛔ no fetch of its
+own, measured-only stepping, ⛔ no timestamp it does not have, the honest empty
+state, and ⛔ no Scanner / ⛔ no unscoped CSS. ⭐ RED-capability proven by
+**mutation**: letting the replay step through EVERY stage turned the guard red;
+reverted. Full dashboard suite: 🔬 **2104 passed, 1 failed** —
+`test_c_venv_has_no_kiteconnect`, the environment artifact.
+
+⚠️ **A nuisance, ⛔ not a page defect:** screenshot capture timed out three times
+on this screen. It carries **9,428** client-side rows, which strains the renderer
+during capture; ⭐ the page itself stayed responsive and every measurement came
+back clean.
+
+
+---
+
+### Entry 26 — S15 SYSTEM LOGS APPROVED. ⛔ NOT PUSHED
+
+**Date/time:** 01-Sep-2026, approved ~11:2x IST · **Branch:** `feat/screen10-slippage-analytics`
+**Build:** `7ec180a` · **Pushed: NO · Deployed: NO**
+
+⭐ S15 was already built and had been given the wide-page fix in `0ca38e2`. 👤 Rama
+returned it with three corrections. ⭐ **The first turned out not to be a missing
+feature at all, but a live defect that no test could see** — and finding that is
+the substance of this entry.
+
+#### 1. 🔴 EVENT TYPE / STATUS WERE BLANK — a REAL DEFECT, ⛔ not an unbuilt feature
+
+The `NOT INSTRUMENTED` markup **was already in the template**. Each
+`<template x-if>` held **TWO sibling spans** — the value span and the gap span.
+🔬 **Alpine 3.14.1 builds an `x-if` branch with
+`content.cloneNode(true).firstElementChild`** — it renders **ONLY the first root
+and DISCARDS every later sibling**. So the gap span was **never created**, and
+the survivor carried `x-show="r.status"`, which is `display:none` **exactly when
+the value is missing**.
+
+⭐⭐ **The one thing this screen must never do — show a blank where a gap belongs —
+is what it did, and it did it SILENTLY:** ⛔ no error, ⛔ no console warning, ⛔ no
+failing test. ⚠️ The markup read correctly to a reviewer; only the render was wrong.
+
+🔬 **MEASURED A/B on TWO live instances against the same VM extract** (`:8501` at
+pristine `0ca38e2`, `:8500` with the correction):
+**BEFORE 20 of 20 Event Type / Status cells BLANK → AFTER 0 of 20.**
+
+⭐ **SWEPT THE CLASS, ⛔ not the instance:** all **33 templates** scanned for
+multi-root `x-if` blocks. 🔬 **Exactly two exist and both are these** ⇒ ⛔ no other
+screen is affected. A new test pins the rule so it cannot return.
+
+⭐ **Real values are untouched:** a Scheduler row still shows its real
+`Status = Success`, and `RECOV-7903` shows a real `Event Type = Recovery
+Completed`. ⇒ the screen distinguishes *"recorded"* from *"not instrumented"*,
+which is the whole point.
+
+#### 2. ⭐ COMPONENT TIMELINE — the PNG's HORIZONTAL diagram, restored
+
+It was a vertical `<ol>`. ⛔ That is precisely what the binding TXT forbids:
+*"Do not replace diagrams/pictorial elements with plain text when the original
+design shows a visual component."* ⭐ The TXT's `Event Detected ↓ Logged ↓ Action
+Taken ↓ Resolved` is its ASCII rendering of the SAME four stages; **SOURCE
+AUTHORITY 1 (the PNG) is binding for composition.**
+
+Now four circular pictorial nodes on one connecting rail, stage label under each
+node, timestamp under the label, footer strip. ⛔ **NO new backend, ⛔ no new
+data** — same `detail.timeline`, same `measured` flag, same gap reasons (now on
+the node's `title`). ⭐ The rail is a `::before` on every stage after the first,
+drawn from the previous node's centre, so it is positioned **BY** the nodes and
+⛔ cannot drift out of step with them.
+
+⛔ **THE PNG's "Duration: 2 sec" HAS NO SOURCE HERE and says NOT INSTRUMENTED.**
+🔬 The stages that ARE measured share the single log timestamp, so subtracting
+them would have produced a **manufactured `0 sec` dressed as a measurement**.
+
+⚠️ **Two layout defects found by MEASURING, ⛔ not by eye:**
+- 🔬 the shared `.slg-ni` `white-space: nowrap` made all four labels overrun a
+  **102px** column (the label needs **123px** on one line) and collide into one
+  run-on block ⇒ the nowrap is lifted **only inside the timeline**, where the
+  longest word needs **94px** and fits.
+- 🔬 then row 3 moved to **the artwork's own proportions** — COMPONENT TIMELINE is
+  the widest panel in the PNG, **~1 : 1.34 : 1 : 1** — taking the stage column to
+  **123px**. ⛔ No word shortened to a dash, ⛔ nothing below the 13px floor.
+
+#### 3. ⭐ SEARCH + EVENT TYPES — INTEGRATED into FILTERS, ⛔ not deleted
+
+⭐ **Compared against BOTH sources first, as the correction required.** 🔬 The
+**PNG places NEITHER panel**: its search is one box in the table toolbar (kept),
+and Event Type is a **filter dropdown**. 🔬 The **TXT** lists a SEARCH section and
+asks to *"preserve the investigation/search **capability**"* — a capability,
+⛔ not a full-width block — and lists **no EVENT TYPES section at all**.
+
+⇒ all five approved fields move into the control block the artwork **does** draw,
+unchanged: Service Name · Module · Error Code · Message · Reference ID, still
+CONTAINS matches, still separate from the exact-match dropdowns. ⛔ **ERROR CODE
+stays SHOWN and DISABLED** — no error-code scheme exists in this system.
+
+⭐ The eleven event-type counts survive too, compacted from an 11-row table to a
+chip strip under their own dropdown, **keeping the distinction that matters**:
+🔬 `Service Restarted 0` is **instrumented and genuinely zero**, while
+`Connection Lost NOT INSTRUMENTED` is **unmeasurable**. ⛔ A 0 is never shown for
+the latter.
+
+⛔ `.slg-rowx` and both panel classes are **REMOVED, ⛔ not emptied** — no dead
+selectors linger. 🔬 **Page height 2158px → 1941px (−217px)**; the removed row was
+**438px**, the FILTERS panel grew **125px → 346px**.
+
+#### 4. ⚠️ A REGRESSION FOUND ON ARRIVAL — the suite was ALREADY RED
+
+🔴 Before any of this work, the S15 suite stood at **8 failed / 72 passed**.
+🔬 `0ca38e2` changed the page root to `class="dash-page slg-page"`, and the test
+helper hard-coded the literal `'<div class="slg-page"'`. ⭐ It matched nothing,
+returned **-1**, and took **EIGHT tests** down with it — every one reporting
+*"the system-logs page root is missing"* rather than the real change.
+⇒ the matcher is now **class-aware**, so adding a class alongside cannot blind it
+again. ⭐ **The width fix itself is untouched**, per 👤 Rama's instruction.
+
+#### 5. ⭐ THE EVIDENCE — the LATEST real VM data, per the brief's HARD RULE
+
+🔬 Today's dated `system_`/`reconciler_`/`trades_` logs (**28-Aug…01-Sep**) plus
+`system_events` / `cron_heartbeat` / `reconciliation_log` extracted **READ-ONLY**
+from the live **428 MB** VM DB (⛔ the DB itself was never copied; ⛔ nothing was
+written on the VM outside `/tmp`).
+🔬 **11,656 events · Info 11,565 (99.22%) · Warning 83 (0.71%) · Error 8 (0.07%) ·
+Critical 0 · last event 10:49:24 TODAY.**
+⭐ **Severity is genuinely Info-dominated and is ⛔ NOT reshaped toward the PNG's
+55%.** ⛔ No Scanner added anywhere.
+
+#### ⛔ WHAT THE APPROVAL DOES NOT MEAN
+
+🔴 **S15 IS NOT `VERIFIED LIVE`.** It was approved on a **READ-ONLY VM EXTRACT**
+rendered locally through the git-ignored `gui_config.local.yaml` pointer —
+⛔ no repo edit, ⛔ no demo DB, ⛔ nothing to revert.
+
+⚠️ These remain genuinely **NOT INSTRUMENTED** and the screen says so rather than
+inventing values: **Trading Impact** (nothing classifies it) · **Error Code** (no
+scheme exists repo-wide) · **Resolution Time / Resolved At / Recovery Duration**
+(not stored) · **Event Detected** (a log line is the first record of itself) ·
+per-engine health (the engines are THREADS inside one systemd service —
+Screen 12's ruling).
+
+#### Gate
+
+🔬 **S15 82 passed, 0 failed** (from **8F / 72P**), including **two new guards** —
+one pinning the Alpine single-root rule, one pinning the horizontal diagram.
+🔬 Full dashboard suite **2112 passed, 1 failed** = `test_c_venv_has_no_kiteconnect`,
+⭐ **proven environmental by running it against a PRISTINE checkout of HEAD, where
+it fails identically** — it shells out to `pip show` and ⛔ cannot see HTML or CSS.
+⭐ RED-capability proven for the blank-cell audit **by injecting a blank cell**,
+which the probe caught, and for the console check **by emitting a probe warning**,
+which it captured; ⇒ ⛔ neither zero was vacuous.
+
+
+---
+
+### Entry 27 — S18 LIVE ACTIVITY APPROVED. ⛔ NOT PUSHED
+
+**Date/time:** 01-Sep-2026, approved ~13:0x IST · **Branch:** `feat/screen10-slippage-analytics`
+**Build:** `f9d5fe3` + `f860f82` · **Pushed: NO · Deployed: NO**
+
+⭐ S18 was already substantially built, with its decisions recorded: informational
+only, MTM/LTP gaps declared, Scanner absent. 👤 Rama's correction asked for the
+artwork's row spans and the removal of a 🔬 measured dead band. It took **TWO
+passes**, and the second one **overturned my own explanation** — which is the
+part worth keeping.
+
+#### 1. ⭐ THE ARTWORK'S THREE BANDS (`f9d5fe3`)
+
+🔬 The work area was two independent strips carrying four panels each. The PNG
+draws **three bands**: band A is two strips (feed ǀ pipeline · strategy); bands
+B and C then run **ACROSS BOTH**, x205→1240 —
+
+    A  feed                    ǀ pipeline · strategy
+    B  winners ǀ system events ǀ feed filters
+    C  active positions        ǀ capital utilization
+
+⇒ **FEED FILTERS** moved into band B and **CAPITAL UTILIZATION** into band C,
+both bands given `grid-column: 1 / -1` at the artwork's own ratios (B 1.4:1:1
+from 415:290:300; C 2:1 from 680:340).
+
+⚠️⚠️ **AN EARLIER SESSION HAD BUILT FULL-WIDTH ROWS AND RECORDED THEM REJECTED**,
+for a real mechanism: a grid row is as tall as its tallest cell, so a short feed
+left a band beneath it. ⭐ **That mechanism is ADDRESSED, ⛔ not ignored** — only
+`.lav-main` stretches, and the feed's own scroll WINDOW takes the slack, so band
+A closes on **REAL ROWS becoming visible** (430px → 560px against 540 stored
+events). 🔬 feed 694, pipeline+strategy 694, **difference 0**.
+
+#### 2. 🔴 THE RESIDUAL BAND — AND MY OWN WRONG EXPLANATION (`f860f82`)
+
+After pass 1 a **150px** band remained under RECENT WINNERS / LOSERS. ⛔ I had
+explained it as unavoidable: *"stretching would only relocate the emptiness
+inside the cards."* 🔴 **THAT WAS WRONG, and only MEASURING THE ARTWORK showed
+it.**
+
+🔬 **PIXEL-SCANNED THE PNG, ⛔ did not estimate it.** Three blank columns, one
+inside each band-B panel — **x612** (winners), **x918** (system events),
+**x1235** (feed filters) — ⭐ **ALL THREE return the SAME border rows: top
+y=586, bottom y=785.** ⇒ the artwork's three band-B panels are **EXACTLY equal
+height, 199px**. Band C is the same shape, 797→969.
+⇒ ⭐ **The artwork STRETCHES its bands, and refusing to is what left the gap.**
+
+⭐ **The scale also proved the tall panel was never the problem.** The PNG's left
+content band is x202–1247 = **1045px** against our **1961px** ⇒ **×1.877**. The
+artwork's 199px band scales to **373.4** — and SYSTEM EVENTS measures **375**
+here. ⇒ SYSTEM EVENTS was correctly sized all along.
+⚠️ The `align-items: start` this replaced came from a **BAND-A** lesson that had
+been **over-generalised** to the bands.
+
+**Three changes, every figure read off the artwork:**
+- `align-items: stretch` on `.lav-rowb` / `.lav-rowc`.
+- 🔬 **WINNERS card footprint 174 → 218px** — the artwork's card band runs
+  y634→750, so 116px × 1.877. ⚠️ The first pass used 174 from a 1.66 scale that
+  was **inferred**, ⛔ not measured.
+- 🔬 **FEED FILTERS tile footprint 149 → 240px** — the artwork's two tile rows
+  run y629→686 and y701→757, so 128px × 1.877. ⭐ Our tiles were genuinely
+  **undersized**, and that is what put the slack there once the band stretched.
+
+⭐⭐ **IT FIXED THE GEOMETRY RATHER THAN HIDING IT** — the test 👤 Rama set. 🔬 The
+space BELOW the winners cards measures **157** against the artwork's **155.8**,
+and the card-to-panel ratio is **58% in both**. Band B 375 vs 373.4 · card 218
+vs 217.7 · tile block 240 vs 240.2 · filters slack 135 vs 133.2 — ⭐ all within
+~2px.
+
+🔬 **RESIDUAL DEAD BAND 206px → 150px → 0px.** Band B tops all **1006**, bottoms
+all **1381**; band C **1397→1690**; ⛔ no horizontal overflow, ⛔ no clipping.
+
+#### ⚠️ WHAT IS NOT CLOSED, and is REPORTED rather than padded
+
+🔬 Band C measures **293** against the artwork's **322.8**. ⭐ Both its panels are
+equal and full so there is **no gap**; forcing the difference would need
+arbitrary padding, which the brief forbids.
+
+#### ⛔ WHAT THE APPROVAL DOES NOT MEAN
+
+🔴 **S18 IS NOT `VERIFIED LIVE`.** 👤 At Rama's instruction the approval render
+fills **ALERTS BANNER** (1 CRITICAL + 2 WARNING) and **ACTIVE POSITIONS** (4
+rows, one PARTIAL) with **DEMO** data, held **ENTIRELY in the out-of-repo review
+extract** — ⛔ no repo edit, ⛔ no demo DB in the tree, ⛔ nothing to revert.
+🔬 A `grep` over `*.py`/`*.html`/`*.css` finds none of it in the repo.
+⚠️ 🔬 **I caught one incoherence in my OWN demo before showing it:** the first
+sizing drove capital to **90.33%** utilised, because the figures resolve against
+the day's **REAL** opening capital — one INIT row, **₹10,469.40 at 08:15:11** —
+⛔ not the ₹18,469 I had assumed. Resized to the artwork's own split,
+**₹4,414.80 (42.17%) / ₹6,054.60 (57.83%)**.
+
+⭐ **THE REAL DATA IS REAL:** `signals` / `orders` / `trades` / `fm_ledger` /
+`telegram_alerts` / `kill_switch_state` pulled **READ-ONLY** from the live VM DB
+at **11:41:02 today** — 🔬 787 signals, 533 feed events, 2 closed trades, 88
+ledger rows. ⛔ The 428 MB DB itself was never copied.
+
+⚠️ Still genuinely **NOT INSTRUMENTED** and saying so: **CURRENT MTM** and
+**LTP / MTM (₹) / MTM (%)** (Pending Broker Source G4 — no live price), the
+**open-positions delta** (no stored history), and **Broker Reconnected /
+Database Warning** (nothing writes them).
+
+#### Gate
+
+🔬 **S18 116 passed** — unchanged from the pre-change baseline. Full dashboard
+suite 🔬 **2112 passed, 1 failed** = `test_c_venv_has_no_kiteconnect`, ⭐ proven
+environmental against a pristine checkout of HEAD.
+⭐ **FOUR guards updated, and they stay guards:** the two-strips test became a
+three-bands test pinning band membership, the `1 / -1` spans and the artwork's
+ratios; the collapsed-order test now expects `feed/pipe/strat/rowb/rowc`; the
+artificial-height guard now reads each rule's **SUBJECT** rather than any
+ancestor (a height applies to the element a rule SELECTS, so a card footprint is
+no longer forbidden for the accident of its selector path); and it now asserts
+the bands **DO** stretch, carrying the artwork measurement that justifies it,
+while still asserting band A is ⛔ not a full-width row.
+
+⛔ **Scanner absent** — 0 occurrences in rendered text, class names and
+attributes. ⛔ **S16 and S17 untouched** — 👤 held by Rama's 01-Sep decision to
+build them LAST.
+
+⚠️ **A NUISANCE, ⛔ not a page defect:** screenshot capture timed out repeatedly
+mid-session. 🔬 The feed renders **all 540 records** into the DOM (`feed_page: 15`
+comes back in the payload but the template does not use it), and that DOM size
+defeats the capture injector — the same strain Entry 25 recorded for S14.
+⭐ JS evaluation stayed responsive throughout and every measurement came back
+clean. 🏷️ **OPEN for 👤 Rama:** whether the feed should page client-side.
+
+
+---
+
+### Entry 28 — S19 STRATEGY RANKING APPROVED. ⛔ NOT PUSHED
+
+**Date/time:** 01-Sep-2026, approved ~13:4x IST · **Branch:** `feat/screen10-slippage-analytics`
+**Build:** `f1e97a9` · **Pushed: NO · Deployed: NO**
+
+⭐ 👤 The brief invoked the **PRE-BUILD REVIEW GATE** — S19 is business/signal-path
+adjacent — so the investigation came first and ⛔ no code was touched until it
+had cleared. ⭐ **It cleared as UI-ONLY**, and that verdict is the entry's point.
+
+#### 1. ⭐ WHAT ALREADY EXISTED — verified at `d5130bb` with file:line
+
+⭐ **The ranking engine is complete and correct, and it is NOT a parallel engine.**
+`services/strategy_ranking.py` owns the composite score (`_score` :93) in the
+artwork's own **35/25/20/20** weights (`SCORE_WEIGHTS` :56), the trend
+(`_classify_trend` :142) against a **real previous equal-length window**, the six
+KPIs (`_kpi` :324) and the five modes (`MODES` :48). 🔬 It reads
+`db_reader.closed_trades_range` :172 and aggregates through
+`analytics_period._aggregate` :174 ⇒ ⭐ **it REUSES the existing engine**; ⛔ no
+duplicate, ⛔ no shadow calculation. Export = `/api/export/strategy-ranking`
+(`analytics2.py:550`).
+⭐ Column drag already worked (`colDragMixin()` `strategy_ranking.html:313`,
+`draggable="true"` :136) and horizontal scroll was already contained to the wrap.
+
+⚖️ **A DATED RULING FOUND AND RESPECTED:** the table carries **16** headers against
+the spec's 15. The extra **TRADE TYPE** column is a **recorded prior instruction**
+(template header: *"inserted immediately after Strategy exactly as instructed"*),
+sourced from the strategy's own YAML `intent` through `strategy_meta.py`, and
+⛔ explicitly NOT the order product. ⇒ ⛔ left alone, ⛔ not reported as a deviation.
+
+#### 2. 🔴 THE ONLY GAP — THE TABLE-BEHAVIOUR CONTRACT
+
+🔬 `.sr-tbl-wrap` carried `overflow-x` **alone** (`style.css:4486`) with **no height
+bound**, so the wrap grew to fit every row and the **WHOLE PAGE** scrolled —
+**1353px against a 1264px viewport** — just to reach rows 13-16. 🔬 The header
+computed `position: static` ⇒ ⛔ nothing was frozen. ⭐ Real data returns **SIXTEEN**
+strategies, so this genuinely bit.
+
+⭐ **REUSED THE ESTABLISHED PATTERN, ⛔ did not write a second one:** S11's
+`.exec-rank-scroll thead th` (`:2850`) and S18's `.lav-feed thead th` (`:4081`)
+already do sticky-header-over-bounded-scroll.
+
+🔬🔬 **491px IS MEASURED AT SUB-PIXEL, AND THE ROUNDING MATTERED.** thead
+**30.92px**, each row **38.33px** ⇒ row 12's bottom edge sits at **490.92**.
+⚠️ Rounding to 31 and 38 gives **487**, and 487 shows only **ELEVEN** rows —
+⭐ on this table a 4px arithmetic error costs a whole row. ⇒ the figure is taken
+from the rendered box, ⛔ never from integer arithmetic.
+⛔ `max-height`, ⛔ never `height`: a day with fewer than twelve strategies must
+⛔ not open an empty region under the last row (S11's own choice). ⛔ No
+pagination substituted, ⛔ no row truncated — all sixteen stay reachable.
+
+#### 3. ⭐ VERIFIED IN THE BROWSER, ⛔ not from the source
+
+🔬 **12 rows fully visible** · wrap **491 client vs 645 scroll** ⇒ the body scrolls ·
+**the header's top does not move** across a full scroll to the bottom, which
+reveals **ranks 13-16** · **column drag still works with the sticky header** (the
+real HTML5 handlers were driven: TRADES moved 3→5, sort still fired, order
+restored) · page **1353 → 1199** · ⛔ no page-wide horizontal overflow.
+
+#### ⛔ WHAT THE APPROVAL DOES NOT MEAN
+
+🔴 **S19 IS NOT `VERIFIED LIVE`.** ⚠️ The default *Today* window holds only **2**
+completed trades and reads as dashes. ⭐ The approval render therefore used **the
+screen's OWN Date Range filter** — *This Month*, **117 REAL completed trades
+across 13 of 16 strategies** (2026-08-03→09-01). ⛔ No demo rows, ⛔ no config
+pointer, ⛔ nothing fabricated, and ⛔ the default period is unchanged in code.
+
+#### Gate
+
+🔬 **S19 75 passed** (74 baseline + the one new guard). ⭐ **RED-CAPABILITY PROVEN BY
+MUTATION:** turning `max-height` into `height` turned the guard red, and dropping
+`position: sticky` turned it red; both reverted, green restored.
+🔬 Full dashboard suite **2113 passed, 1 failed** = `test_c_venv_has_no_kiteconnect`,
+the environment artifact — ⭐ the passed count rose **2112 → 2113** by exactly the
+guard added, ⇒ ⛔ zero regressions.
+⛔ Scanner absent (0 in text, classes, attributes). ⛔ S16/S17 untouched — 👤 held to
+be built LAST. ⛔ Paper/live parity untouched — no mode-specific path added.
+🔬 `git diff --name-only` returned **nothing** under `backend/`, `services/`,
+`readers/` or `api/` ⇒ ⭐ the UI-only verdict is measured, ⛔ not asserted.
+
+
+---
+
+### Entry 29 — S20 STRATEGY HEALTH APPROVED. ⛔ NOT PUSHED
+
+**Date/time:** 01-Sep-2026, approved ~14:2x IST · **Branch:** `feat/screen10-slippage-analytics`
+**Build:** `a2fe2e4` · **Pushed: NO · Deployed: NO**
+
+⭐ 👤 Two changes were asked for — a serial column and S19's table interaction —
+and the investigation ran first. ⭐ **Both proved UI-ONLY.** 🔬 `git diff
+--name-only` returned **nothing** under `backend/`, `services/`, `readers/` or
+`api/`, and every CSS selector added is scoped to `.sh-page` ⇒ the verdict is
+**measured**, ⛔ not asserted.
+
+#### 1. ⭐ WHAT ALREADY EXISTED — verified at `file:line` first
+
+⭐ The backend already satisfies the spec, so ⛔ nothing was rebuilt:
+· the health score is the **real weighted composite** at exactly **Activity 30 /
+Signal Quality 25 / Acceptance Rate 20 / Trade Activity 15 / Errors 10**
+(`strategy_health.py:57-61`) — ⛔ not a status lookup;
+· **silent detection reads `gui_config.silence.yellow_max_min` = 120 min =
+2 Hours** and is **READ-TIME ONLY, ⛔ nothing written** (`:186-203`) ⇒ ⭐ the
+read-only dashboard boundary holds;
+· **"Scanner Offline" keeps the artwork's exact label** under a recorded 16-Aug
+ruling (`:64`, `:550`) and is **derived**, ⛔ not invented;
+· export is `/api/export/strategy-health` (`analytics2.py:594`);
+· column drag already worked.
+
+#### 2. ⭐⭐ THE SERIAL COLUMN IS NOT DATA — that is the whole point
+
+It renders the row's **INDEX IN THE CURRENTLY SORTED, FILTERED SET** through
+`x-for="(r, i)"` ⇒ ⛔ never read from the row, ⛔ never stored, so re-sorting or
+filtering **renumbers 1..n on the spot**.
+🔬 **VERIFIED IN THE BROWSER:** sorting by health score kept the serials
+**1,2,3,4** while the STRATEGIES beneath them changed; filtering to Disabled
+gave **`1`**, to Silent **`1..15`**, unfiltered **`1..16`**.
+⛔ It carries `nosort` — sorting BY a row number would sort by the very display
+order the sort produces. ⭐ It stays **draggable**, so column-order interaction
+is unchanged.
+
+⚠️⚠️ **THE `COLS_KEY` BUMP TO v3 IS NOT COSMETIC.** A stored **v2** order lists the
+old ELEVEN keys and `initCols` **appends anything missing**, so a returning
+operator would have found the new **`#` column at the FAR RIGHT** instead of
+first. ⭐ That is precisely the **Screen-14 lesson the template's own v2 note
+already records** — the same trap, one screen later.
+
+#### 3. ⭐ THE FREEZE-PANE, ON THIS SCREEN'S OWN FOOTPRINT
+
+Reuses S11/S18/S19 rather than a **fourth** scrolling implementation.
+⭐ **FOURTEEN rows, ⛔ not S19's twelve** — this artwork draws 14 and says
+*"Showing 1 to 14 of 14"*. 🔬 **546px MEASURED AT SUB-PIXEL**: thead **32.00** +
+14 × **36.67** ⇒ row 14's bottom at **545.33**. ⭐ S19's rounding lesson
+**applied rather than repeated** (there, rounding showed 11 rows instead of 12).
+⛔ `min-height: 350px` is **KEPT** — the empty-day footprint, a different job.
+⛔ **S20 ONLY** — 👤 the global table rule stays deferred until every screen is built.
+
+🔬 **VERIFIED IN THE BROWSER, ⛔ not from source:** 14 rows visible · wrap **546
+client vs 619 scroll** · **the header's top does not move** across a full scroll,
+which reaches **row 16** · column drag works with the sticky header · the serial
+header **refuses to sort** · page **1485 → 1412**.
+
+⚠️ **A WIDTH I DID NOT CLAIM.** The 1440px check ⛔ could not be done as a resize —
+the browser sits at **75% page zoom**, so the CSS viewport never changed.
+⇒ ⭐ rather than report a width that was not really rendered, the **MECHANISM**
+was tested: squeezing the panel to **1400 / 1100 / 900px**, the table clamps to
+its **1258px** min-width and the **WRAP** scrolls horizontally while the **PAGE
+never overflows**, header sticky at every width.
+
+#### 4. ⚠️ TWO EXISTING TESTS NEEDED REPAIR — and both are left SHARPER
+
+· `APPROVED_COLUMNS` now leads with **`#`**.
+· 🔴 the heading-fits-on-one-line test matched `.sh-page .sh-tbl th` **BY PREFIX**,
+which silently grabbed the new `thead th` rule and asserted `nowrap` against it.
+⭐ The match is now **exact**; ⛔ the property is unchanged.
+
+#### ⛔ WHAT THE APPROVAL DOES NOT MEAN
+
+🔴 **S20 IS NOT `VERIFIED LIVE`.** ⚠️ It was approved on a genuinely **QUIET** real
+day — 🔬 15 Silent / 1 Disabled, 787 signals, 6 trades — and ⭐ that is exactly
+what the screen shows. ⛔ No demo rows, ⛔ no config pointer, ⛔ nothing fabricated.
+
+⚠️ Still **NOT INSTRUMENTED** and saying so: **HEALTH TIMELINE** (*"no state
+history is stored"*) and **RECENT HEALTH EVENTS** (*"state transitions are not
+recorded"*). ⛔ The artwork's *"(Example)"* timeline was **NOT** turned into
+production history.
+⛔ **Scanner is not duplicated** — 🔬 exactly ONE occurrence, the approved
+**"Scanner Offline"** label; ⛔ no Scanner column, ⛔ no Scanner filter.
+
+#### Gate
+
+🔬 **S20 102 passed** (100 baseline + 2 guards). ⭐ **RED-CAPABILITY PROVEN BY THREE
+MUTATIONS:** moving the serial out of first position, reading it from the row
+instead of the loop index, and dropping the 14-row bound each turned a guard
+red; all reverted.
+🔬 Full dashboard suite **2115 passed, 1 failed** = `test_c_venv_has_no_kiteconnect`,
+the environment artifact — ⭐ the passed count rose **2113 → 2115** by exactly the
+two guards added ⇒ ⛔ zero regressions.
+⛔ S16 and S17 untouched — 👤 held to be built LAST. ⛔ No global/shared CSS rule
+touched.
+
+
+---
+
+### Entry 30 — S21 SCANNER ATTRIBUTION APPROVED. ⛔ NOT PUSHED
+
+**Date/time:** 01-Sep-2026, approved ~16:0x IST · **Branch:** `feat/screen10-slippage-analytics`
+**Build:** `921969c` · **Pushed: NO · Deployed: NO**
+
+⚖️⚖️ **THIS ENTRY EXISTS FOR ONE REASON: A DATED RULING OF RAMA'S WAS REVERSED**,
+and a reversal must be recorded where the next reader will meet it, ⛔ never
+silently applied.
+
+#### 1. ⚖️ THE 16-Aug RULING, AND ITS 01-Sep SUPERSESSION
+
+📄 The template AND the service both carried: *"⛔⛔ NO SCANNER COLUMN IN THE MAIN
+TABLE (Rama, 16-Aug). Scanner and Strategy are 1:1 — 🔬 measured: 16 scanners onto
+16 distinct strategies, each named after its strategy — so the artwork's
+`Scanner` column is dropped"*, with the identity surviving in SCANNER MAPPING.
+
+👤 **The 01-Sep contract reverses it and answers that reasoning head-on:** *"Keep
+the word Scanner wherever it is meaningful in this screen; do not rename or
+remove the Scanner concept merely because it maps 1:1 to Strategy."*
+
+⚠️⚠️ **THE 1:1 MEASUREMENT ITSELF STILL HOLDS — it was never wrong, only its
+CONCLUSION was overturned.** ⇒ the Scanner cell reads the **SAME row's own
+`scanners` list**, which the payload has carried all along: ⭐ one identity shown
+twice by request, ⛔ NOT a second dataset.
+🔬 **VERIFIED ON THE RENDERED SCREEN: 16 of 16 rows satisfy `scanners ==
+[strategy]`, zero divergence.**
+⭐ And what the old rule was REALLY protecting — that Scanner must never become a
+second independent dataset — is now guarded by **its own test** rather than by
+the column's absence. ⭐ That is the durable part; the column was only ever the
+means.
+
+#### 2. ⭐ THE TWO COLUMNS
+
+⭐ **`#` IS A SERIAL, ⛔ NOT THE PAYLOAD'S `rank`.** It is the row's index in the
+CURRENT sort, so re-sorting renumbers 1..n on the spot — 🔬 confirmed in the
+browser: sorting by Signals kept the serials **1,2,3,4** while the SCANNERS
+beneath them changed. ⛔ It carries `nosort` (sorting BY a row number sorts by the
+order the sort itself produced); ⭐ it stays draggable; ⭐ medals follow the top
+three POSITIONS as the artwork draws. ⛔ `rank` is untouched and still drives
+SCANNER RANKING.
+
+⭐ **TRADE TYPE NEEDED NO NEW CALCULATION** — it was already in the payload, the
+strategy's own YAML `intent` through the ONE shared `strategy_meta` path Screens
+19 and 20 use. ⛔ Never inferred from the scanner's NAME, which the contract
+forbids in as many words. 🔬 Rendered values are only ever `Intraday`/`Delivery`.
+
+⚠️ **`COLS_KEY` → v2, ⛔ NOT COSMETIC.** A stored **v1** order lists the OLD
+thirteen keys and `initCols` **appends anything missing**, so a returning
+operator would have got Scanner and Trade Type at the **FAR RIGHT and no `#` at
+all**. ⭐ Screens 14 and 20 both paid for this; ⭐ **this is the third occurrence
+and the FIRST caught before shipping rather than after.**
+
+#### 3. ⚠️ ONE BACKEND FILE, AND ONLY BECAUSE THE CHANGE FORCED IT
+
+`EXPORT_HEADER` is bound to the table's labels **by an existing test**, so adding
+columns required the export to follow — which the guidance permits explicitly
+(*"unless the requested S21 change requires a correction"*). 🔬 Verified against a
+**real downloaded workbook**: header matches, rows carry serial / scanner /
+strategy / trade type, all three sheets survive.
+
+#### 4. ⚠️ THREE STALE RECORDS CORRECTED
+
+⛔ Leaving them would have had the codebase assert two contradictory things:
+· the **footer note** still told readers *"Strategy is the identity shown; the
+  scanner name is in SCANNER MAPPING"*;
+· the **service docstring's heading** still read *"NO SCANNER COLUMN IN THE MAIN
+  TABLE"* above a body describing its own supersession;
+· the **payload still published a `scanner_column` GAP** for a column that now
+  exists.
+⭐ **A stale explanation is worse than none — it teaches the reader the wrong
+model.**
+
+#### 5. ⛔ THE DEFERRED GLOBAL TABLE RULE WAS NOT APPLIED
+
+👤 Rama: the freeze-pane / body-scroll / header-drag rule is a GLOBAL pass after
+all 22 screens are built, and ⛔ *"do not treat its absence as an S21 defect."*
+⭐ **Its absence was MEASURED, ⛔ not merely skipped:** 🔬 `thead` computes
+`position: static`, the wrap has `max-height: none`, it does ⛔ not scroll
+vertically, and all 16 rows sit in the viewport. ⛔ No global or shared selector
+touched, ⛔ no compensating visual change made.
+
+#### ⛔ WHAT THE APPROVAL DOES NOT MEAN
+
+🔴 **S21 IS NOT `VERIFIED LIVE`** — approved on ONE real trading day.
+⭐ **THE DATA IS THE 15:54 VM RE-PULL, ⛔ not the 11:41 extract.** 👤 The instruction
+forbids stale logs where newer exist, and 🔬 the difference was large: **787 →
+4,083 signals**, 2 → 3 closed trades. ⛔ No demo rows, ⛔ nothing fabricated.
+
+#### Gate
+
+🔬 **S21 142 passed** (+1 test, collected twice across the parametrised `v41`/`v42`
+fixture). ⭐ Two superseded tests **rewritten, ⛔ not deleted**: the
+no-Scanner-column test became the **not-a-second-dataset** guard, and the
+workbook test's leftover *"Scanner not in header"* assertion became its opposite.
+🔬 Full dashboard suite **2117 passed, 1 failed** = `test_c_venv_has_no_kiteconnect`,
+the environment artifact ⇒ ⛔ zero regressions.
+⛔ No page-wide horizontal overflow. ⛔ S16/S17 untouched — 👤 held to be built LAST.
+
+---
+
+### Entry 31 — S22 HOLDINGS APPROVED. ⛔ NOT PUSHED
+
+**Date/time:** 01-Sep-2026, approved ~19:5x IST · **Branch:** `feat/screen10-slippage-analytics`
+**Build:** `4b08372` · **Pushed: NO · Deployed: NO**
+
+⭐⭐ **THE SCREEN WAS ALREADY BUILT TO THE CONTRACT.** The fifteen columns in the
+required order, pagination on the existing `tableMixin` (⛔ no parallel model),
+⛔ no Scanner column, ⛔ no serial, Sync Now present but **disabled with its
+reason**, and every price-derived figure declared a GAP rather than filled with a
+substituted entry price. ⛔ **None of that was touched.** Two defects were found,
+and ⛔ **neither was the KPI.**
+
+#### 1. ⭐ A FILTER RETURNS TO PAGE ONE
+
+🔬 Filtering 28 rows down to 21 while `tPage` was **3** rendered *"Showing 21 to
+21 of 21 holdings"* and **ONE row** — which a reader takes to mean *the filter
+matched almost nothing*, ⛔ not *the page is stale*.
+⭐ The rows-per-page select already reset the page and `resetFilters()` already
+set `tPage = 1`; ⛔ the five filter controls did not.
+⛔⛔ **THE RESET CANNOT LIVE INSIDE `load()`** — the shared refresh binding
+`@ops-refresh.window="load()"` fires on **every poll**, so putting it there would
+yank a reader back to page 1 mid-read. ⭐ **Both directions are pinned by tests**,
+and both were proven red-capable by mutation.
+
+#### 2. ⭐ A STALE STAMP NOW SAYS WHICH DAY — AND THIS IS THE WHOLE STORY
+
+🔬 `hhmmss()` did `slice(11, 19)` and **discarded the date**, so the **18-Aug**
+reconciliation drew as a bare `15:45:02` — beside a **green ● CRON dot** — on
+01-Sep. ⚠️ A reader necessarily takes that for *today at 15:45*.
+⭐ Today keeps the bare time ⇒ ⛔ panel density unchanged in the normal case; the
+date appears **ONLY when it carries information**.
+
+#### 3. ⚖️ THE KPI WAS NEVER WRONG — 👤 AND NO NUMBER WAS CHANGED TO MAKE IT AGREE
+
+👤 Rama asked whether `System Holdings = 0` beside a row reading `System Qty = 1`
+was a defect. ⛔ **It is not.** Two TIME BASES and two GRAINS, each publishing its
+own base in the payload:
+
+| value | source | base | means |
+|---|---|---|---|
+| System Holdings **0** | rows with `origin in (system, both)` | open system positions | **now** |
+| table System Qty **1** | `position_reconciliation.system_qty` | the 18-Aug record | **18-Aug** |
+| System Only **1** · Orphan **1** | `MISSING_AT_BROKER` | reconciled symbols | 18-Aug |
+| Unknown Position **1** | rows with no `strategy` | holdings rows | row-grain |
+
+🔬 **The 0 is MEASURED, ⛔ not assumed: `0` trades sit in `OPEN_STATES`** — all 821
+are FAILED/CLOSED/REJECTED/CLOSED_MANUAL/CANCELLED. The `UTTAMSUGAR` row carries
+`origin: "recon"` and is correctly excluded. ⭐ `_recon_only_row` had already named
+this exact case in its own docstring. ⭐ **Once the date is visible the difference
+explains itself** — which is why the fix was the timestamp, ⛔ not the KPI.
+
+#### 4. 🔬 VM EVIDENCE — PRIMARY SOURCES, BECAUSE THE REVIEW LOG HAD FAILED
+
+⛔ The latest `reports/log_review/eod_review_2026-09-01.md` **is itself a failure
+notice** (*"REVIEW FAILED — all Gemini cascade models exhausted"*) and carries no
+reconciliation content, so it could ⛔ not serve as evidence.
+· 🔬 `/var/log/syslog` — **`CRON[967509]` fired `reconcile_positions` TODAY at
+  15:45:01** ⇒ ⭐ **the cron is HEALTHY**, ⛔ not dead as the log mtime suggests;
+· 🔬 `scripts/reconcile_positions.py` writes **one row per symbol in the
+  broker∪system union** ⇒ ⭐ **a flat book writes NOTHING**, which is why
+  `cron-reconcile-positions.log` has not grown since 18-Aug;
+· ⚠️ ⇒ **"Last Reconciliation" is the last run that PRODUCED A ROW, ⛔ not the
+  last run.** ⛔ Left as-is: a run-level record does not exist to correct it with.
+
+#### 5. ⛔ WHAT WAS DELIBERATELY NOT DONE
+
+⛔ **Symbol stays `78px`.** 🔬 At a TRUE 1920 `UTTAMSUGAR` needs **101px** and
+truncates — 👤 Rama holds this as a **SEPARATE visual decision**. ⚠️ It reads fine
+in the screenshots only because the browser sits at 75% zoom.
+⛔ **The deferred global table rule was NOT applied** — 🔬 `style.css` has **ZERO**
+modifications and no sticky/frozen `thead` was added.
+⛔ S16/S17 untouched — 👤 held to be built LAST. ⛔ No other screen, ⛔ no unrelated
+production issue touched.
+
+#### ⚠️ TWO METHOD ERRORS OF MINE, RECORDED BECAUSE THEY GENERALISE
+
+⚠️ **A "1920" MEASUREMENT THAT WAS NOT 1920.** 🔬 The browser reports
+`devicePixelRatio 0.75`, so a maximised 1920 window is a **2549px CSS viewport**.
+⛔ The first overflow/clipping pass measured the wrong width and did not count;
+⭐ redone in **same-origin iframes at exact dimensions**, since a maximised window
+ignores resize.
+⚠️ **A VACUOUS ZERO.** 🔬 The panel-overlap detector returned `0 overlaps` — but a
+900px nudge ALSO returned 0, because the nudged panel simply left the viewport.
+⭐ Recalibrated until a **60px sideways nudge produced a detected 48×96 overlap**;
+⛔ only then was the zero worth reporting. ⭐ **A green is evidence only if it
+could have been red.**
+
+#### ⛔ WHAT THE APPROVAL DOES NOT MEAN
+
+🔴 **S22 IS NOT `VERIFIED LIVE`** — approved on a review render over a read-only
+extract, ⛔ never on the VM.
+⭐ **The 28-row render is DEMO data for density judgement only** — 👤 the artwork's
+own population — and is ⛔ **never** presented as trading evidence. ⭐ The REAL
+render carries **one** row, and that is the honest production state.
+
+#### Gate
+
+🔬 **Focused S22: 139 passed, 0 failed** (76 → 80 test functions; 4 added, all
+proven red-capable by mutation).
+🔬 **Full dashboard suite: 2122 passed, 1 failed** = `test_c_venv_has_no_kiteconnect`
+— 📄 the environment artifact (⛔ `ops_dashboard/.venv` does not exist on this PC,
+so the suite runs under the system python, which carries `kiteconnect` for live
+trading). ⭐ **Proven pre-existing by differential: stashed, it fails identically.**
+⇒ ⛔ **ZERO new failures.**
+⚠️ **One S15 failure appeared in a single ABNORMAL run** (`KeyError: 'timeline'`,
+2:14:33 wall time under 3 dashboards + Chrome) and ⛔ **did not reproduce**: runs
+1 and 3 are 554.17s / 552.96s with the SAME single failure. ⛔ Its mechanism was
+NOT proven — 3 hypotheses were wrong — so ⛔ no cause is asserted.
+🔬 Export parseable, 3 sheets, genuinely filtered (28 / 21 / 3 / 3, matching the
+UI). 🔬 @1920 **and** @1440: ⛔ no page overflow, ⛔ no clipped headers, 15 columns,
+6 KPIs, **0 overlaps across 19 panels**. 🔬 Console clean — the only messages all
+session were the canaries that PROVE the capture works.
+
+---
+
+### Entry 32 — S17 CONTROLS APPROVED. ⛔ NOT PUSHED
+
+**Date/time:** 01-Sep-2026, approved ~22:0x IST · **Branch:** `feat/screen10-slippage-analytics`
+**Build:** `c8e1238` · **Pushed: NO · Deployed: NO**
+
+🔴🔴 **THE HEADLINE IS ARCHITECTURAL, ⛔ NOT COSMETIC: THE CONTROL PLANE WAS
+DESIGNED ON 17-Aug AND NEVER BUILT ON THE TRADING SIDE.**
+
+🔬 Verified exhaustively on the VM: ⛔ nothing listens on `:8600`; ⛔ `CONTROL_SECRET`
+is absent from `.env`; ⛔ nothing outside `ops_dashboard` references a control
+plane anywhere in the deployed tree; ⛔ **the trading process serves NO HTTP AT
+ALL** (⛔ no route, ⛔ no `HTTPServer`). `control_client.py` is a well-built client
+for a server that does not exist — ⛔ and is not even deployed, living only on
+this unpushed branch.
+
+⇒ ⭐ **S17 IS TRUTHFULLY 100% VIEW, ⛔ NOT THE SPEC'S 95/5.** ⛔ **NO WRITE PATH WAS
+CREATED.** Every control renders **disabled WITH its reason**, Readiness reports
+**Broker UNKNOWN · Services NOT READY** rather than a comforting green, and
+⭐ **UNREACHABLE stays distinct from REFUSED** — *"confirmation required"* and
+*"trader unreachable"* are different operational statements.
+⏸ Whether to BUILD the trading-side plane is a separate decision, ⛔ out of scope.
+
+#### 1. ⭐ FIVE TRUTH DEFECTS — ⛔ none of them the control semantics
+
+⭐ **THE LABEL WAS A TITLE-CASED KEY** over an authoritative `display_name`.
+🔬 3 of 16 differ. Two are casing the artwork itself spells **VWAP**; ⛔ the third
+is not cosmetic — `pb01_breakout_retest` title-cases to *"Pb01 Breakout Retest"*
+and **SILENTLY DROPS the `(shadow)` marker**.
+
+⭐ **A SHADOW IS NOT A PAUSED STRATEGY.** Disabled BY DESIGN behind a promotion
+gate — 📄 *"FAIL-CLOSED: never trades until the spec-13 promotion gate"*, 🔬 **0
+trades and 0 signals in its whole life** — so it is badged and its toggle carries
+**its own guard**, independent of the plane being down. ⛔ It must never read as
+something an operator switched off and could switch back on.
+
+⭐ **THE `#` COLUMN** the contract names three times was missing.
+
+⛔⛔ **THE ARTWORK DRAWS ALL SEVEN LIMIT PARAMETERS TWICE**, under an Intraday
+table and a Delivery table. 🔬 **The config splits only THREE.** Printing one
+global number under two headings claims the modes are independently configured
+when they are not — ⛔ **a duplicated value is a fabricated distinction**, on the
+screen whose whole purpose is to say what the system will actually do.
+⇒ 👤 Rama chose the **honest mixed layout**: the 3 shown split, the globals saying
+they govern both, and ⭐ **Max Qty (Lots) `NOT INSTRUMENTED`, ⛔ never 0** — a 0
+would claim a configured limit of **zero lots**.
+
+⭐ **RAW ISO STAMPS**, and this caused the worst visual defect on the page: 🔬 a
+32-character stamp took **244px of a 265px** history row, left **14px** for the
+action text and wrapped it **ONE CHARACTER PER LINE** ⇒ a **4393px-tall** panel,
+now **458px**. Made date-aware (control history spans DAYS): today `10:07:17`,
+earlier days `31-Aug 17:35:04`.
+
+#### 2. 👤 THE VISUAL-FIT REJECTION — ⭐ THE MOST IMPORTANT LESSON HERE
+
+👤 **Rama rejected the first S17 render**, and the ruling is worth quoting:
+*"The previous review incorrectly treated functional correctness, panel
+non-overlap, and regression results as evidence that the screen was visually
+matched. That is not sufficient."* · *"A layout can have zero overlap and still be
+badly designed."*
+⛔⛔ **HE WAS RIGHT.** I had reported *no overflow · no overlap · tests green* as
+though that were visual acceptance. ⭐ **IT IS A SEPARATE GATE.**
+
+🔬 **MEASURED against the PNG (edge-detected, 1536×1024) at a TRUE 1920:**
+
+| | artwork | before | after |
+|---|---|---|---|
+| page height | ~1280 implied | **2366px = 2.19×** | **1540px = 1.43×** |
+| main rows | 4 clean bands | **9 scattered tops** | **4 bands** 326/349/225/255 |
+| row-2 widths | 11 : 34 : 24 | 360/495/495 | **198/747/405** |
+| rail left | 1582 | 1584 | 1584 ⭐ already matched |
+
+⭐ The horizontal composition was ALREADY close; ⛔ **the failure was vertical.**
+🔬 Three UNBOUNDED panels dragged their rows down — `12. HISTORY` **814px**, the
+rail history **525px**, `RUNTIME LIMITS` **564px**.
+⇒ rows stretch to equal heights · row 2 re-proportioned to the artwork's own
+**11:34:24** · long lists scroll **INSIDE their footprint** (⭐ the same pattern
+the approved Strategy Controls table already uses — ⛔ **nothing deleted, nothing
+hidden**) · the two limit groups **side by side** as the artwork draws them.
+
+⚠️ `table-layout: fixed` → **auto**: 🔬 fixed gave four EQUAL ~55px columns, so
+every label wrapped onto three lines and the header collided into
+**"PARAMETERINTRADAY"**. ⭐ Caught by ZOOMING IN, ⛔ by no metric.
+
+#### 3. 👤 ORDERING IS RAMA'S
+
+⭐ **12 Intraday → 3 Delivery → the shadow LAST**, ⛔ not alphabetical-by-key,
+which interleaved the delivery book into the middle of the intraday one on the
+operational control list. 🔬 Verified 1–16 on the rendered screen.
+
+#### ⚠️ THREE METHOD ERRORS OF MINE
+
+⚠️ **A VACUOUS TEST THAT PASSED AGAINST A REVERTED IMPLEMENTATION.** It asserted
+`"display_name" in inspect.getsource(...)` — and **my own COMMENT contains that
+word**. ⭐ Exactly the *"scan what renders, not what is written about it"* trap
+📄 this very test file documents at `_markup()`. 🔬 Caught by mutation; rewritten
+to assert BEHAVIOUR.
+⚠️ **I FIXED TWO OF THREE TIMESTAMP SITES** and missed section 12 — found only by
+SCROLLING the rendered page. ⭐ The test now sweeps every site.
+⚠️ **MY FIRST CSS BROKE THE PROJECT'S OWN GUARDS** — 11/12px text under the 13px
+floor and a raw `#e0a458` — ⭐ and its own tests caught both. ⚠️ It also DUPLICATED
+two existing rules; consolidated to the ONE that is genuinely new.
+
+#### ⛔ WHAT THE APPROVAL DOES NOT MEAN
+
+🔴 **S17 IS NOT `VERIFIED LIVE`** — approved on a review render over a read-only
+extract, ⛔ never on the VM, and ⛔ **no control was ever operated** because none
+can be.
+⛔ **THE COMPOSITION IS CLOSER, ⛔ NOT MATCHED.** ⚠️ Remaining, and reported BEFORE
+approval: **1.43× vs the artwork's implied ~1.19×**; the final row is
+`BROKER COSTS · CONFIGURATION COMPARISON · HISTORY` where the artwork draws
+`CONFIGURATION SNAPSHOT · INFORMATION` (⛔ panels NOT deleted — a content decision
+Rama owns); the rail history is still cramped at 300px; and 1440 runs 2.32× tall
+via the **pre-existing** `≤1500` rail reflow.
+
+#### Gate
+
+🔬 **Focused S17: 46 passed, 0 failed** (39 baseline + 7). ⭐ All 6 new tests
+proven **red-capable by mutation**, one of them only after being caught vacuous.
+🔬 **Full dashboard suite: 2129 passed, 1 failed** = `test_c_venv_has_no_kiteconnect`,
+📄 the environment artifact ⇒ ⛔ **ZERO new failures** — ⭐ and the count is
+**IDENTICAL to the pre-layout run**, so the composition work broke nothing.
+🔬 @1920: ⛔ no page overflow, ⛔ no clipped headers, **0 overlaps** (⭐ detector
+calibrated until three separate nudges each fired — a first zero was VACUOUS).
+🔬 @1440: 2090px, 6 bands, 0 overlaps, ⛔ no overflow.
+⛔ Shared `.tbl-scroll` untouched · ⭐ every new selector `.ctl-page`-scoped ·
+⛔ deferred global table rule NOT implemented · ⛔ no other screen touched.
+⏸ **S16 Configuration is now the ONLY screen left.**
+
+### Entry 33 — S16 CONFIGURATION APPROVED. ⛔ NOT PUSHED · 🏁 **THE 22nd AND LAST SCREEN**
+
+**Date/time:** 02-Sep-2026, approved ~14:0x IST · **Branch:** `feat/screen10-slippage-analytics`
+**Build:** `b776cc8` · **Pushed: NO · Deployed: NO**
+
+🏁 **THE GUI CAMPAIGN'S 22 SCREENS ARE ALL BUILT AND ALL SHOWN.** ⛔ That is ⛔ NOT
+"the campaign is finished" — ⏸ S06 still owes a re-render sighting, ⏸ S07 a
+re-approval, and ⏸ the global table rule is still DEFERRED. 📄 See the carry list.
+
+#### 1. 🔴 THE HEADLINE — 🔬 THE CONFIG SPLITS **NINE** PARAMETERS, ⛔ NOT THREE
+
+🔬 **MEASURED FROM THE ENFORCERS at the deployed SHA `39292d3`, ⛔ not from key
+names** — this is the whole finding, and it corrects a number this project has
+been carrying since 01-Sep:
+
+| where | what it resolves per book |
+|---|---|
+| `capital/position_sizer.py:375-384` | `risk_per_trade_pct` · `max_concentration_pct` · `max_position_value_pct` |
+| `capital/risk_engine.py:326-343` | `daily_loss_limit_pct` · `max_sector_exposure_pct` · the two COUNT caps |
+| `capital/risk_engine.py:557-560` · `:655-660` | ⭐ OPEN_POSITIONS and DAILY_TRADES **BRANCH on `bucket == "positional"`** |
+
+⇒ ⭐ **A DELIVERY ENTRY NEVER CONSULTS `max_open_positions` OR `max_daily_trades`
+AT ALL.** Add the capital bucket split and the leverage map ⇒ **NINE**.
+
+🔬 At the deployed config that is **5 vs 3** open positions and **10 vs 5** daily
+trades — ⚠️ **a LIVE difference, ⛔ not a cosmetic one.**
+🔬 **COMPLETENESS, from the config rather than from a list I wrote:** the deployed
+YAML holds **EXACTLY SEVEN** delivery-scoped keys and the panel names **all seven**.
+⭐ Now pinned by a test that SWEEPS the configuration, so a NEW delivery key added
+upstream cannot silently go unshown.
+
+⛔ **AN UNSET DELIVERY KEY RAISES AT BOOT — it never inherits.** The screen renders
+the unavailable marker on that side and marks the row `partial`; ⛔ it never
+borrows the intraday number. ⭐ Proven by dropping each of the eight keys in turn.
+
+#### 2. ⛔ AND THE CONVERSE — FOUR ARE GENUINELY GLOBAL
+
+⭐ **Minimum Eligible Score · Max Qty (Per Order) · Max Consecutive Losses · Price
+Drift Threshold** have ⛔ NO delivery twin. Shown **ONCE**, under `GLOBAL LIMITS`,
+🔑 **each with the reason it is shared** — 📄 `max_consecutive_losses` is
+deliberately shared (*"the streak breaker is a portfolio-wide circuit"*,
+`risk_engine.py:642-644`); a signal is scored before its product is chosen.
+⛔ **A duplicated value is a FABRICATED DISTINCTION** — the same rule S17 follows.
+👤 Rama confirmed this explicitly: *"Do NOT force Intraday/Delivery columns for"*
+those four.
+
+⚠️ 🔬 **TWO OF THE FOUR PARAMETERS THE SPEC NAMED AS MODE-SPECIFIC ARE NOT.**
+`min_pass_score` (60) is global; `max_single_order_qty` (10,000 **shares**) is
+global. ⛔ No delivery column was manufactured for either.
+
+#### 3. 🔴 TWO TRUTH DEFECTS IN **APPROVED S17**, ⏸ REPORTED AND ⛔ NOT TOUCHED
+
+👤 The S16 spec says *"Do not modify S17"*, so ⛔ nothing was changed. ⏸ Both stand:
+
+⛔ S17's **GLOBAL** table states *"one value governs BOTH modes — the config has no
+delivery variant"* over **Max Trades 10** and **Max Positions 5**. 🔬 **FALSE at
+the deployed config**: `max_open_delivery_positions: 3` and
+`max_daily_delivery_trades: 5` exist and gate every delivery entry. ⚠️ S17's
+`_limits` looked for a `delivery_*` PREFIX and these two use an **INFIX**.
+⛔ S17's *"Minimum Eligible Score"* reads `v3_chain.min_pass_score` — 📄 a value the
+config file itself labels a **non-gating SEED** (*"10a records the score, does NOT
+gate on it"*). ⭐ Same number (60), ⛔ wrong source. The live gate is
+`scoring_weights.yaml min_pass_score`, which is what S16 now reads.
+
+#### 4. ⭐ THE PANELS THAT REPLACED THE ARTWORK'S BOTTOM ROW
+
+⛔ **STRATEGY CONFIGURATION IS GONE** — the panel, the `strategies` payload key, the
+category tab AND the export sheet. ⭐ S17 owns strategy enable/disable; a read-only
+copy here is still a second strategy-control surface, and ⚠️ two screens showing
+the same switch is how they drift apart. ⛔ The **Scanners** tab went with it: it
+existed only to state a 1:1 relationship between two things this screen no longer
+shows. ⇒ 🔬 the category list is now **exactly the ten** the revised design names.
+
+⭐ **THE ROW IS REPLACED, ⛔ NOT EMPTIED:** `MODE-SPECIFIC CONFIGURATION` |
+`GLOBAL LIMITS`, at the artwork's own two-panel proportion. ⭐ Nine parameters left
+the SYSTEM CONFIGURATION quad and **each card states how many of its own moved**,
+so a shorter card explains itself rather than reading as one that quietly lost
+rows. 🔬 **Nothing is shown twice** — a test intersects the quad's labels with the
+mode panel's and requires the intersection EMPTY.
+
+#### 5. 🔬 MEASURED FIXES THE ARTWORK ALONE WOULD NOT HAVE FOUND
+
+⚠️ **THE RAIL WAS 96px TOO NARROW, AND THE COST WAS NOT COSMETIC.** 🔬 Edge-detected
+off `16. Configuration.png`: the content column spans x 192→1522 and the rail
+starts at 1146 ⇒ **28.3%**, i.e. **476px** at 1920. The build carried **380px** ⇒
+`CONFIGURATION COMPARISON` rendered a **horizontal scrollbar that showed the
+Parameter column and hid BOTH value columns** — a comparison panel with no values.
+
+⚠️ **`CONFIGURATION HISTORY` GAVE THE WIDTH TO THE WRONG COLUMNS.** 🔬 Auto layout
+returned **81px** to `Changed By` — a column that is ALWAYS the unavailable marker
+— and **55/61px** to `Old`/`New`, so an email broke into **five four-character
+fragments**. ⭐ The two value columns now carry a `min-width` floor.
+⚠️ ⛔ **`table-layout: fixed` was NOT the answer** — 📄 it is what collapsed S17's
+header into *"PARAMETERINTRADAY"*. ⭐ `min-width` on the CELL raises the column
+minimum without it.
+⚠️ 🔬 **A `width` ON AN `auto` TABLE IS ONLY A SUGGESTION** — the percentages alone
+came back **47/70/98/66/68/79**, overridden by the header words' own min-content.
+
+⭐ **PAGE HEIGHT 1760 → 1558px** at a true 1920 (**1.44×**), 4 clean main bands,
+main ends **1499** and the rail **1529** — ⭐ so the SECONDARY column is ⛔ not the
+taller one. ⚠️ 🔬 At the first attempt it WAS: 1582 vs 1499, fixed by defaulting
+the history to 6 rows (*"6 of 14"* + *View all*), ⛔ not by deleting anything.
+
+#### 6. 👤 THE RAIL POLISH — RAMA'S OWN INSTRUCTION, AND ITS ONE TRAP
+
+📜 *"Prefer sensible truncation/ellipsis with a clear tooltip/detail affordance."*
+⭐ Every rail cell is **ONE LINE** (uniform 26px rows, columns aligned down the
+panel). ⛔ **NOTHING IS HIDDEN, and there are THREE routes to every value, ⛔ not
+one:** the `title` (🔬 28 of 57 cells truncate; **all 28** carry the exact full
+value), a **FULL VALUES toggle** that unwraps every row in place (🔬 28 → 0
+truncated, page 1558 → 1673, no overflow) — ⭐ so a value is reachable **without a
+mouse** — and the XLSX export, which truncates nothing.
+⚠️ **A TOOLTIP ALONE WOULD HAVE BEEN THE WEAKER GUARANTEE this project has been
+caught by before.** ⭐ The toggle is what makes truncation a PRESENTATION choice.
+
+⚠️ **END-ELLIPSIS CUT OFF THE PART THAT IDENTIFIES A PATH.** 🔬 Found by LOOKING at
+the render: **four consecutive comparison rows became the identical string**
+*"trading_hours.mis_squar…"* — the panel showed four changes and **named none of
+them**. ⇒ ⭐ configuration paths **MIDDLE**-truncate. 🔬 7 of 7 unique again.
+⭐ The 24/11-character budgets are **MEASURED** (7.62px per mono glyph at 197px and
+97px), ⛔ not picked — a first draft at 26/14 put **TWO ellipses** on every path.
+
+#### 7. 👤 THE SEVEN CENTRED DATA-COLUMN HEADINGS (02-Sep)
+
+🔬 **WHAT WAS ACTUALLY WRONG, measured before it was described:** the **DATA** was
+ALREADY centred by 👤 Rama's own 14-Aug global rule
+`table td.dt-num { text-align: center !important }` (`style.css:1974`); only the
+**HEADERS** were still right-aligned from `.dt-num { text-align: right }` (`:437`),
+so each heading sat **off the edge of its own centred column**.
+⇒ ⭐ **This is S16 catching up with the SAME 14-Aug column-role spec S08 already
+follows** — 📄 *"data column HEADINGS …. CENTER (over their own data)"* (`:1978`).
+
+⭐ An opt-in `cfg16-hc` class names **each of the seven cells**, ⛔ rather than
+centring every `.dt-num` header on the page — ⭐ that is the difference between
+APPLYING a correction and GENERALISING one. 🔬 Computed `text-align` over EVERY
+`thead th`: **exactly 7 centred, 0 others**, 0 headers wrapped.
+🔬 **0 body cells on this page are right-aligned, before or after**, and the shared
+14-Aug rule is untouched (⭐ a test pins it).
+⚠️ 👤 The card said *"the eight highlighted header cells"* but enumerated **SEVEN**.
+⭐ Exactly the seven named were centred; ⛔ an eighth was NOT invented. ⏸ Reported
+before approval.
+
+#### ⚠️ THREE OF MY OWN GUARDS FIRED, AND ONE WAS VACUOUS
+
+⚠️ **THE VIEW-STATE BUTTON ALLOW-LIST WENT RED** on the new toggle — ⭐ working
+exactly as intended; the class was added to it deliberately.
+⛔ **A COMPLETENESS TEST PASSED A MUTATION IT SHOULD HAVE KILLED.** 🔬 The shared
+`conftest` fixture carries only **2 of the 7** delivery keys, so "no delivery key
+is left off the panel" was checking two of them. ⭐ It now sweeps
+`_DEPLOYED_SYSTEM` as well, and the mutation goes red.
+⛔⛔ **MY CSS RULE EXTRACTOR WAS SILENTLY CHECKING HALF THE STYLESHEET.**
+🔬 `(?:^|[{}])` **CONSUMES** the brace and `re.findall` does ⛔ not overlap — so each
+rule's closing brace was eaten by its own match and could not anchor the next.
+It returned **54 of 108** rules. ⚠️ **My non-vacuity FLOOR was too weak to notice**
+(the halved count still cleared it). ⭐ Fixed with a **lookbehind**, and the floor
+replaced by an **EXACT identity** (`rules == count("{") − count("@media")`), which
+⭐ DOES go red when the regex is reverted. 🔬 Re-swept: **0 unscoped rules**.
+⭐ **GENERALISE: ⛔ a FLOOR is not a non-vacuity check — an IDENTITY is.**
+
+#### Gate
+
+🔬 **Focused S16: 103 passed, 0 failed** (73 baseline + 30). ⭐ **35 of 35 mutations
+behaved as designed** — 34 RED, 1 deliberately GREEN (⭐ a CSS *comment* that merely
+mentions a banned declaration must **not** fail the guard that reads the
+stylesheet).
+🔬 **Full dashboard suite: 2159 passed, 1 failed** = `test_c_venv_has_no_kiteconnect`,
+📄 the environment artifact ⇒ ⛔ **ZERO new failures**. ⭐ The baseline **2129/1** was
+MEASURED, ⛔ not recalled — by stashing this work and re-running.
+⚠️ 🔬 **Three S17 failures in the first full run were 100% ENVIRONMENTAL** — a stale
+`PYTHONPATH` pointing at `D:\Projects\trading-system`, which has no `controls.py`.
+⛔ Not a regression; all 36 pass with the correct path.
+🔬 **@1920:** 1558px · 4 bands · ⛔ 0 page overflow · ⛔ 0 inner h-scroll · **0
+overlaps** (⭐ detector calibrated until four nudges each fired — ⚠️ a first zero
+counted parent-child containment and was thrown out) · ⛔ 0 clipped headings · ⛔ 0
+vertical clips · ⛔ 0 stray ellipsis outside the opt-in class · ⛔ 0 console messages
+(⭐ reader proven live with a probe).
+🔬 **@1440:** 2666px · 0 overlaps · 0 clips · ⛔ no overflow. ⭐ The rail drops under
+the main column below 1500 so ⛔ nothing is cramped; ⚠️ it is TALLER than a
+two-column 1440 would be — ⏸ reported BEFORE approval.
+⛔ Every CSS change falls inside the **SCREEN 16 block** (`style.css:6066-6433`) —
+🔬 verified by diff-hunk line ranges · ⛔ no shared rule edited · ⛔ no other screen
+touched · ⛔ `config_view.build_config_view` (`/api/config`) byte-unchanged.
+
+#### 🔬 THE RENDER THE APPROVAL WAS GIVEN ON
+
+⭐ **The DEPLOYED configuration**, extracted **read-only** with
+`git show 39292d3:config/system_config.yaml` — ⚠️ `gui09` forked 14-Aug, **BEFORE**
+the delivery keys landed on 22-Aug, so its own config would have rendered five of
+the nine mode rows unavailable and the review would have been of a config **nobody
+runs**. 🔬 All nine rows diffed against that YAML: **9 of 9 match**.
+⭐ Comparison and History were built from **THREE REAL historical versions** of the
+same file (`39292d3` · `52ccb4f` · `0197923`) ⇒ ⛔ the diffs are the diffs that
+genuinely happened. ⛔ **Nothing fabricated.**
+⭐ Harness lived **OUTSIDE the repo** (session scratchpad); ⛔ the production DB was
+never opened and ⛔ the VM was never touched.
+
+#### ⛔ WHAT THE APPROVAL DOES NOT MEAN
+
+🔴 **S16 IS NOT `VERIFIED LIVE`** — 🟢 VISUALLY APPROVED on a local review render
+over a read-only config extract, ⛔ never on the VM.
+⛔ **THE COMPOSITION IS CLOSER, ⛔ NOT MATCHED.** ⏸ Reported BEFORE approval:
+**1.44× vs the artwork's implied ~1.19×**; 1440 runs **2666px**; and the rail's
+6-column History is the tightest panel on the page — ⏸ moving it to the main
+column would fix it and cost ~180px of height, 👤 Rama's call.
+
+### Entry 34 — S06 POSITIONS: THE CORRECTED RENDER WAS SIGHTED AND APPROVED. ⛔ NOT PUSHED
+
+**Date/time:** 02-Sep-2026, approved ~14:4x IST · **Branch:** `feat/screen10-slippage-analytics`
+**Build:** `92b927c` (the render) · the correction is `b47e148` (20-Aug) · **Code changed THIS TASK: NO** · **Pushed: NO · Deployed: NO**
+
+⭐ **THIS ENTRY CLOSES A DEBT, ⛔ IT DOES NOT RECORD A CHANGE.** 👤 Rama's card:
+*"This is a VISUAL RE-APPROVAL task only … If the existing corrected screenshot is
+still available, show it rather than changing code."*
+🔬 `git status --porcelain` = **0** before and after. ⛔ No commit of code, ⛔ no new
+test, ⛔ no CSS. ⭐ The only artefact is this record.
+
+#### ⚠️ CORRECTION TO THIS ENTRY'S OWN FIRST DRAFT — ⛔ "UNCHANGED" WAS FALSE
+
+⛔ I first wrote **"Build: `b47e148` — UNCHANGED"**. 🔬 **THAT IS WRONG, and the
+diff says so:** `positions.html` is **22 lines different** between `b47e148` and
+HEAD. ⭐ `efeb0b7` — *"the column reorder becomes ONE implementation, not
+fifteen"* — landed AFTER the correction and **replaced S06's own inline
+`onDragStart`/`onDrop`/`onDragEnd` with the shared `colDragMixin()`**.
+
+⚠️ ⭐ **THAT IS NOT AN IDLE DETAIL: the drag is exactly what the correction depends
+on.** 📄 `b47e148` states the separator is computed from the **CURRENT column
+order** (`groups()` / `isSep()` keyed by `c.key`), ⛔ **never `nth-child`**, so a
+drag carries the separator with its band — and `efeb0b7` re-implemented that drag.
+
+🔬 **SO IT WAS MEASURED ON THE LIVE RENDER, ⛔ not assumed:**
+
+| column order | separators per row |
+|---|---|
+| default | **5** |
+| `symbol` moved INTO the `ENTRY ₹` band | **7** — ⭐ the separators FOLLOWED the columns |
+| after the screen's own `resetCols()` | **5** |
+
+⇒ ⭐ **THE CORRECTION SURVIVES THE REFACTOR.** A foreign column dropped inside a
+band creates new boundaries and the rules move to them — ⛔ they are not
+positional. 🔬 `onDragStart` / `onDrop` / `onDragEnd` are present, now from the
+shared mixin.
+
+⛔ **WHAT RAMA APPROVED THEREFORE INCLUDES `efeb0b7`**, ⛔ not `b47e148` alone.
+⭐ Both were already committed and in the tree that was rendered; ⛔ nothing was
+changed for this task. ⭐ **GENERALISE: "the correction is unchanged" and "the
+FILE is unchanged" are different claims — 🔬 check the file, ⛔ never infer it
+from the commit that made the correction.**
+
+#### ⭐ WHAT WAS OWED, AND WHY
+
+📄 Entry 21 (19-Aug) recorded S06 as ⏳ **QUALIFIED**: *"approved on the
+PRE-correction render; the correction (`b47e148`) is verified and re-rendered but
+⛔ never seen."* ⇒ ⭐ the debt was a **SIGHTING**, ⛔ never a rebuild.
+⭐ **Entry 21's STATE table is left EXACTLY as written** — 📄 it was true on 19-Aug.
+⛔ **This entry SUPERSEDES it; it does not rewrite it.**
+
+#### 🔬 THE CORRECTION, RE-MEASURED ON THE LIVE RENDER
+
+📄 `b47e148`, quoting 👤 Rama in its own message: *"one minor change … some very
+minor correction to improve viewability of Grouped colums"*.
+
+🔬 **THE DEFECT (measured 20-Aug):** the four grouped bands were **exactly
+adjacent, zero gap** — `QTY` ended at **x=1159** where `ENTRY` began at **1159**;
+`ENTRY` **1272** = `SL` **1272**; `SL` **1392** = `TGT` **1392**. ⇒ ⚠️ eight
+`SYSTEM|BROKER` sub-headings read as **one undifferentiated run** and an operator
+could not see where a band ended.
+
+⭐ **THE FIX:** a **1px rule at every band BOUNDARY**, on **all three levels** — the
+group row, the sub-heading row AND the body — so a band stays traceable down the
+rows. ⭐ Reuses the group underline's own `--card-bd` token ⇒ ⛔ no new colour, ⛔ no
+new visual concept, ⛔ no extra width.
+⭐ `sep` is computed from the **CURRENT column order** (`groups()` / `isSep()` keyed
+by `c.key`), ⛔ **never `nth-child`** — 🔴 these columns are REORDERABLE, so a drag
+carries the separator with its band.
+
+🔬 **VERIFIED LIVE 02-Sep, at both viewports: 5 separators on EACH of 10 rows**
+(group + sub-heading + 8 body) — ⭐ uniform, ⛔ no row missing one.
+
+#### Gate
+
+🔬 **@1920×1080 (TRUE, via an iframe — ⚠️ the host window is dpr 0.75 ⇒ 2549 CSS px):**
+page **1377px (1.275×)** · ⛔ **0 page horizontal overflow** · ⛔ **0 clipped header
+or data cells** · ⭐ 5×10 separators.
+🔬 **@1440×900:** **1624px (1.804×)** · ⛔ 0 page overflow · ⛔ 0 clipped cells ·
+⭐ 5×10 separators. ⭐ KPI strip reflows 6-across → **3+3**, filters to two rows, and
+the wide table scrolls **INSIDE its own panel** — ⭐ **PRE-EXISTING** S06 behaviour,
+⛔ not introduced here.
+🔬 **Focused S06: 81 passed, 0 failed** — ⭐ including
+`test_grouped_bands_are_separated_by_a_rule_at_every_boundary`, 📄 the guard
+`b47e148` added for exactly this correction (⭐ proven non-vacuous then by **5**
+plants, all red).
+⛔ **NO environment-only failure in this run** — 📄 the `kiteconnect` isolation
+artifact lives in `test_isolation.py`, ⛔ which is not in the S06 set.
+
+⭐ **FILLED FOR REVIEW, ⛔ not a screen of dashes:** **8** position rows across
+**all seven** statuses (Open 4 · SL Hit 1 · TGT Hit 1 · Manual Exit 1 · Expired 1),
+so density, alignment and badge contrast were all judgeable.
+
+#### ⚠️ REPORTED BEFORE APPROVAL, ⛔ NOT A DEFECT OF THE CORRECTION
+
+⭐ The **MTM PERFORMANCE** panel states *"MTM is not available to this screen"* and
+explains that an intraday MTM curve needs a **live price** while the dashboard
+reads only the local DB. ⇒ ⭐ that is the screen being **HONEST about an
+instrumentation gap**, ⛔ not a rendering fault, and ⛔ it is untouched by `b47e148`.
+
+#### ⛔ WHAT THE APPROVAL DOES NOT MEAN
+
+🔴 **S06 IS NOT `VERIFIED LIVE`** — 🟢 VISUALLY APPROVED on a local review render
+over the fixture DB, ⛔ never on the VM.
+
+#### ⏸ THE STANDING NOW
+
+🟢 **21 of 22 fully approved.** ⏸ **S07 Trade Explorer is the LAST qualified screen**
+— 📄 approved 14-Aug under the PREVIOUS ledger; `66fc82e` landed after it, unseen;
+⭐ the 13px-floor decision makes it a **RE-approval**. ⇒ ⭐ same render-only path.
+⏸ **The global table rule is DUE** — it was deferred *until all 22 are done*.
+
+### Entry 35 — S07 TRADE EXPLORER RE-APPROVED. ⛔ NOT PUSHED · 🏁 **22 of 22 — THE LAST QUALIFIED SCREEN CLOSES**
+
+**Date/time:** 02-Sep-2026, approved ~15:0x IST · **Branch:** `feat/screen10-slippage-analytics`
+**Rendered build:** `18d992a` · **Code changed THIS TASK: NO** · **Pushed: NO · Deployed: NO**
+
+🏁 **EVERY GUI SCREEN IS NOW FULLY APPROVED — 🟢 22 / 22, ⛔ 0 QUALIFIED, ⛔ 0
+PENDING.** ⛔ **THAT IS NOT "THE CAMPAIGN IS FINISHED"** — see the standing below.
+
+⭐ **RENDER-ONLY, like S06.** 🔬 `git status --porcelain` = **0** before and after;
+🔬 `git diff HEAD` over `trade_explorer.html` + `style.css` + the S07 test file =
+**0 lines**. ⛔ No defect required a correction, so ⛔ nothing was touched.
+
+#### ⭐ THE TWO THINGS THAT RE-OPENED S07 — BOTH VERIFIED ON THE LIVE RENDER
+
+**① `66fc82e` (21-Aug) — 👤 Rama's ruling:** *"Broker = Filled for this screen's
+SL/TGT representation"*.
+🔬 **VERIFIED:** `sl_initial:System` · `sl_filled:Filled` · `tgt_initial:System` ·
+`tgt_filled:Filled` — ⭐ **exactly TWO sub-columns each**, ⛔ no Broker.
+🔬 Group row: `QTY×2 · ENTRY ₹×2 · SL ₹×2 · TGT ₹×2 · P&L ₹×3`. 🔬 `COLS_KEY` is at
+**`screen07.trades.colOrder.v3`** — ⭐ bumped, as the commit's own rule requires.
+
+**② THE GUTTER, and the collision measurement re-run:** 🔬 cell padding is
+**`6px 3px`** · **ZERO** adjacent column pairs at ≤1px clearance · 🔬 minimum text
+gap **6px** across 12 rows, at BOTH viewports. 📄 The 1px version had **9** such
+pairs at 1920.
+
+**③ THE 13px FLOOR — 🔬 measured by COMPUTED font-size, so INHERITED rules are
+caught, ⛔ not just S07's own block** (📄 whose declared sizes are all 13px):
+
+| screen | grip `⠿` 10px | arrow `↕` 9px | ⭐ **READABLE text < 13px** |
+|---|---|---|---|
+| S05 Orders (approved) | 18 | 18 | **0** |
+| S06 Positions (approved) | 23 | 23 | **0** |
+| **S07 Trade Explorer** | 25 | 25 | **0** |
+
+⇒ ⭐ **NO readable content anywhere on S07 is under 13px.** The 50 sub-13px nodes
+are **two ICON glyphs**, one pair per sortable column, from the **approved
+`.ord-page` rule S05 and S06 already carry**. ⇒ ⛔ **NOT an S07 defect** — and
+changing it would touch **shared CSS and three screens**, 👤 explicitly out of scope.
+
+#### Gate
+
+🔬 **@1920×1080 (TRUE, via an iframe):** **1504px (1.393×)** · ⛔ 0 page horizontal
+overflow · ⛔ 0 clipped cells · ⭐ **the table fits FLUSH — 0px hidden inside
+`.ord-scroll`**.
+⭐ **THAT IS BETTER THAN `66fc82e` PREDICTED.** 📄 It recorded *"at 1920 the table
+now scrolls 17px inside `.ord-scroll` where it previously fit flush"* and stated
+that cost openly. 🔬 It is **0** today. ⛔ Cause NOT chased — ⛔ do not claim one.
+🔬 **@1440×900:** **1716px (1.907×)** · ⛔ 0 page overflow · ⛔ 0 clipped cells ·
+⚠️ **393px hidden inside `.ord-scroll`** — ⭐ the fallback S05 and S06 already use.
+🔬 **25 columns · 12 body rows** at both.
+🔬 **S07 focused: 76 passed, 0 failed.** 🔬 **S05 + S06 + components (the shared
+table machinery): 120 passed, 0 failed.** ⛔ No environment-only failure in either
+— 📄 the `kiteconnect` artifact lives in `test_isolation.py`, ⛔ outside both sets.
+
+⭐ **FILLED FOR REVIEW:** 11 trades — TGT Hit 3 · SL Hit 2 · Manual Exit 1 ·
+Expired 1 · Open 4 — plus the four-panel deck.
+🔬 **AGAINST THE SPEC:** Filters · the common column standard · the ENTRY/SL/TGT
+groups · SLIPPAGE · ROI/P&L/Charges/Net · RR analysis · Export XLSX · and the
+**TRADE LIFECYCLE** drawer (`OVERVIEW · LIFECYCLE · SL/TGT · PERFORMANCE`) are all
+present.
+
+#### ⚠️ INSTRUMENTATION LIMITS — ⭐ STATED BY THE SCREEN, ⛔ NOT HIDDEN BY IT
+
+⭐ **THE LIFECYCLE IS INCOMPLETE BY DATA, ⛔ NOT BY BUILD.** 📄 The spec asks for a
+timestamp at **every** stage; 🔬 three of its nine — *Validated · Risk Passed ·
+Capital Passed* — are **NOT PERSISTED**. The drawer prints *"Validation / Risk /
+Capital — not captured (G-2)"* and explains it is ⛔ **not back-filled from the
+trade's own timestamps**. ⭐ Exactly the right behaviour.
+🔬 Coverage line under the table: *"slippage: 1 recorded, 10 reproduced from entry
+prices · ROI: 7 valued · planned R:R: 3 recorded."*
+
+#### ⚠️ A RECORD DISCREPANCY IN `66fc82e`'s OWN MESSAGE — ⛔ NOT TOUCHED
+
+📄 It states *"Columns 28 -> 26"*. 🔬 **The real counts are 27 → 25**
+(`154abf2`=27 · `66fc82e`=25 · HEAD=25). ⭐ **The DELTA of 2 is right** and the
+screen is right; ⛔ only the two ABSOLUTE figures are off by one.
+⛔ **NOT corrected** — it is committed history, and 👤 the call is Rama's.
+
+#### ⚠️ WHAT WAS APPROVED INCLUDES `efeb0b7`, ⛔ NOT `66fc82e` ALONE
+
+🔬 `trade_explorer.html` is **22 lines different** from `66fc82e` — ⭐ the SAME
+`colDragMixin()` refactor that caught me on S06 (📄 Entry 34's rider). ⭐ Checked
+FIRST this time, ⛔ not assumed. ⭐ Both commits were already in the rendered tree.
+
+#### ⛔ WHAT THE APPROVAL DOES NOT MEAN
+
+🔴 **S07 IS NOT `VERIFIED LIVE`** — 🟢 VISUALLY APPROVED on a local review render
+over the fixture DB, ⛔ never on the VM. ⭐ **This is true of ALL 22.**
+
+#### ⏸ THE STANDING — 🏁 22/22 APPROVED, AND WHAT REMAINS
+
+⏸ **THE GLOBAL TABLE RULE IS NOW DUE** and ⛔ has no blocker left — 📄 it was
+deferred *until all 22 are done*, and they are.
+🔴 ⛔ **NO screen is `VERIFIED LIVE`** — every approval was a LOCAL render.
+🔴 ⛔ **NOTHING IS PUSHED** — 119 commits against `origin/main` `39292d3`, and ⛔ no
+push authorisation has ever been given for this branch.
+⏸ **S17's control plane** stays DESIGNED-BUT-NEVER-BUILT, and ⏸ **S17's two truth
+defects** (📄 Entry 33 §3) stay reported and untouched.

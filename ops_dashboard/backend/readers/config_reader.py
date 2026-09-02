@@ -69,7 +69,13 @@ def get_strategies(cfg: dict) -> dict:
             "display_name": s.get("display_name", name),
             "enabled": bool(s.get("enabled", True)),
             "direction": s.get("direction"),
-            "intent": s.get("intent"),          # INTRADAY | POSITIONAL (→ Trade Type)
+            # ⚠️ CORRECTED 16-Aug-2026: the comment here read "INTRADAY |
+            # POSITIONAL". ⛔ POSITIONAL is NOT the enum — the production
+            # validator `strategies/schema.py::_val_intent` permits exactly
+            # INTRADAY or DELIVERY, and a scan of all 16 strategy YAMLs finds
+            # only those two (13 / 3). This is the Trade Type source for Screens
+            # 19/20; it is normalised in ONE place, services/strategy_meta.py.
+            "intent": s.get("intent"),          # INTRADAY | DELIVERY (→ Trade Type)
             "order_protocol": s.get("order_protocol"),
             "max_concurrent_positions": int(s.get("max_concurrent_positions", 2)),
             "entry_start_time": s.get("entry_start_time"),
@@ -234,3 +240,97 @@ def config_meta(cfg: dict, today: str) -> dict:
             "config_hash": (snap.get("config_hash") or "")[:12],
         }
     return {"source": "yaml_fallback", "snapshot_date": None, "snapshot_ts": None}
+
+
+# ── SCREEN 21 — SCANNER MAPPING (16-Aug-2026) ────────────────────────────────
+# ADDITIVE: `get_scan_webhook_map` above is byte-unchanged and keeps its callers.
+# It returns {scanner: strategy} and DISCARDS `chartink_url`, which is exactly
+# the field the approved SCANNER MAPPING panel needs.
+def get_scanner_registry(cfg: dict) -> list:
+    """The scanner registry, verbatim: [{scanner, strategy, chartink_url}].
+
+    ⭐ THE URL IS REAL AND READ FROM `config/scan_webhook_map.yaml`. The approved
+    artwork draws a Scanner URL column with `https://chartink.com/screener/123`
+    placeholders; the production file carries the actual screener URLs (measured
+    16-Aug: 16 scanners, every one with a `chartink_url`). ⛔ No URL is ever
+    constructed, guessed or templated from a scanner name — an entry without one
+    comes back None and the panel prints the unavailable marker.
+
+    ⭐ SCANNER AND STRATEGY ARE 1:1 IN THIS SYSTEM (measured 16-Aug: 16 scanners
+    → 16 DISTINCT strategies, and every scanner name IS its strategy name). That
+    measurement is why Screen 21's main table carries STRATEGY ONLY — a Scanner
+    column beside it would print the same identity twice. This panel is the ONE
+    place the scanner name legitimately appears, because naming the mapping is
+    the panel's whole purpose. The loader permits N:1, so nothing here assumes
+    the 1:1 holds; `strategy` is read per entry.
+    """
+    path = os.path.join(cfg["paths"]["config_dir"], "scan_webhook_map.yaml")
+    if not os.path.isfile(path):
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            raw = yaml.safe_load(fh) or {}
+    except (OSError, yaml.YAMLError):
+        return []
+    scanners = raw.get("scanners") or {}
+    if not isinstance(scanners, dict):
+        return []
+    out = []
+    for scanner, entry in sorted(scanners.items()):
+        if isinstance(entry, dict):
+            strategy, url = entry.get("strategy"), entry.get("chartink_url")
+        else:
+            strategy, url = entry, None
+        out.append({"scanner": str(scanner),
+                    "strategy": str(strategy) if strategy else None,
+                    "chartink_url": str(url) if url else None})
+    return out
+
+
+# ── SCREEN 16 — CONFIGURATION (18-Aug-2026) ──────────────────────────────────
+# ADDITIVE. Two approved panels — SCORING ENGINE (WEIGHTS) and BROKER COSTS —
+# read files that no reader exposed yet. ⛔ Neither is inside `config_json`:
+# scoring lives in `config/scoring_weights.yaml` and broker costs in
+# `config/broker_costs.yaml`, so a snapshot-only screen could not have shown
+# either. Both return {} when the file is missing, and the screen then renders
+# its unavailable state — ⛔ no default weight and no default cost is ever
+# invented, because a fabricated cost reads exactly like a measured one.
+def get_scoring_weights(cfg: dict) -> dict:
+    """`config/scoring_weights.yaml` verbatim, read-only. {} if unreadable."""
+    path = os.path.join(cfg["paths"]["config_dir"], "scoring_weights.yaml")
+    if not os.path.isfile(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            raw = yaml.safe_load(fh) or {}
+    except (OSError, yaml.YAMLError):
+        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def get_broker_costs(cfg: dict, broker: Optional[str] = None) -> dict:
+    """`config/broker_costs.yaml` for ONE broker, read-only. {} if unreadable.
+
+    The file is keyed by broker name (measured 18-Aug: a single `zerodha` key).
+    `broker` selects the block; when it is absent or unknown the SOLE key is used
+    if there is exactly one, otherwise {} — ⛔ never an arbitrary first key,
+    which would silently show another broker's costs as this broker's.
+    """
+    path = os.path.join(cfg["paths"]["config_dir"], "broker_costs.yaml")
+    if not os.path.isfile(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            raw = yaml.safe_load(fh) or {}
+    except (OSError, yaml.YAMLError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    if broker:
+        block = raw.get(str(broker).strip().lower())
+        if isinstance(block, dict):
+            return block
+    if len(raw) == 1:
+        only = next(iter(raw.values()))
+        return only if isinstance(only, dict) else {}
+    return {}

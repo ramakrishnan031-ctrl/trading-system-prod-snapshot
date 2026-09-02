@@ -193,6 +193,9 @@ def get_capital_segments():
     cfg, today = _ctx()
     sc = config_reader.get_system_config(cfg, today)
     cap_cfg = (sc.get("capital") or {}) if isinstance(sc, dict) else {}
+    # S08 Limits Monitor needs the two daily-loss pcts; same read pattern as
+    # cap_cfg, same snapshot, no extra query.
+    risk_cfg = (sc.get("risk") or {}) if isinstance(sc, dict) else {}
     lev_map = (cap_cfg.get("leverage_map") or {}) if isinstance(cap_cfg, dict) else {}
 
     opening = db_reader.opening_capital(cfg, today)          # day's FIRST INIT
@@ -263,6 +266,27 @@ def get_capital_segments():
             "intraday_leverage": levs["intraday"],
             "delivery_leverage": levs["delivery"],
             "slm_margin_buffer_pct": cap_cfg.get("slm_margin_buffer_pct"),
+            # ── S08 Limits Monitor (24-Aug-2026) — ADDITIVE, READ-ONLY ──────
+            # The approved design requires Daily Loss Limit (MIS) and (GTT) as
+            # SEPARATE rows. Both keys exist in config, but only the global one
+            # was reachable by the GUI (via /api/capacity's daily_loss_limit
+            # row); the delivery twin was exposed nowhere, so the GTT row could
+            # not show its CONFIGURED value at all. These two are a straight
+            # config passthrough — no new query, no computation, no behaviour.
+            "daily_loss_limit_pct": risk_cfg.get("daily_loss_limit_pct"),
+            "delivery_daily_loss_limit_pct": risk_cfg.get(
+                "delivery_daily_loss_limit_pct"),
+            # ⛔ SCOPE, carried from system_config.yaml so the screen cannot
+            # over-read it: the delivery key gates the PRE-TRADE check only. The
+            # post-close portfolio circuit breaker is GLOBAL — one account-wide
+            # realized P&L exists and there is no per-book attribution to split
+            # it with. The screen therefore shows both CONFIGURED limits but
+            # must NOT invent a per-book USED figure.
+            "daily_loss_scope_note": (
+                "delivery_daily_loss_limit_pct gates the PRE-TRADE check only; "
+                "the post-close circuit breaker is GLOBAL and realized P&L is "
+                "account-wide with no per-book attribution"
+            ),
         },
         "segments": segments,
         # ⛔ SEPARATE KEY, SEPARATE ARITHMETIC, NO LIVE INPUT. The screen renders

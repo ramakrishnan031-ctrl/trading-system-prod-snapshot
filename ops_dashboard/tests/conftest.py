@@ -78,7 +78,12 @@ DDL = [
         -- column a reader touches. `tgt_risk_reward_applied` is the PLANNED R:R
         -- "frozen at placement" (schema.sql:230) — which is why the Explorer
         -- reads it rather than today's strategy YAML.
-        tgt_risk_reward_applied REAL, binding_constraint TEXT, mode TEXT)""",
+        tgt_risk_reward_applied REAL, binding_constraint TEXT, mode TEXT,
+        -- Screen-10: both exist in core/schema.sql:207-208 and were simply
+        -- absent here. They are the fraction the ORDER PATH actually resolved
+        -- for this trade (symbol > strategy > band > global) and which rule
+        -- won. Screen 10 reads them, so the fixture's contract requires them.
+        tolerance_fraction_used REAL, tolerance_source TEXT)""",
     """CREATE TABLE fm_ledger (ledger_id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL,
         entry_type TEXT NOT NULL, amount REAL, bucket TEXT, balance_before REAL, balance_after REAL,
         signal_id TEXT, reservation_id TEXT, reason TEXT, session_id TEXT, direction TEXT,
@@ -106,6 +111,15 @@ DDL = [
     """CREATE TABLE reconciliation_log (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT,
         check_name TEXT, tier TEXT, symbol TEXT, trade_id TEXT, description TEXT,
         action_taken TEXT, success INTEGER)""",
+    # Screen-22: the PER-SYMBOL broker-vs-system comparison. Exists in
+    # core/schema.sql:1509 (TABLE 23, v20) and was simply absent here — a reader
+    # against a fixture without it raises "no such table" while the same reader
+    # works in production, so the fixture's own contract requires it. Columns and
+    # the status vocabulary are schema.sql's, verbatim.
+    """CREATE TABLE position_reconciliation (id INTEGER PRIMARY KEY AUTOINCREMENT,
+        date TEXT NOT NULL, symbol TEXT NOT NULL, broker_qty INTEGER,
+        system_qty INTEGER, status TEXT NOT NULL, resolved_at TEXT,
+        created_at TEXT NOT NULL)""",
     """CREATE TABLE eod_verification (date TEXT PRIMARY KEY, open_trades INTEGER DEFAULT 0,
         pending_orders INTEGER DEFAULT 0, pnl_variance REAL DEFAULT 0.0,
         status TEXT DEFAULT 'VERIFIED', verified_at TEXT)""",
@@ -117,6 +131,12 @@ DDL = [
     """CREATE TABLE preflight_check_results (run_id TEXT, run_date TEXT, check_name TEXT,
         check_group TEXT, criticality TEXT, status TEXT, duration_ms INTEGER,
         details_json TEXT, fix_attempted INTEGER DEFAULT 0, fix_result TEXT)""",
+    # Screen-12: the auto-recovery audit trail. Exists in core/schema.sql:1201
+    # and was simply absent here; `result` is SUCCESS | FAILED, and a row with
+    # NEITHER is an attempt that has not resolved.
+    """CREATE TABLE preflight_autofix_log (log_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id TEXT, check_name TEXT, attempted_at TEXT, fix_action TEXT,
+        before_state TEXT, after_state TEXT, result TEXT, error_msg TEXT)""",
     """CREATE TABLE control_tower_findings (id INTEGER PRIMARY KEY AUTOINCREMENT,
         scan_time TEXT, category TEXT, severity TEXT, resource_type TEXT, resource_name TEXT,
         location TEXT, reason TEXT, recommended_action TEXT, status TEXT DEFAULT 'OPEN',
@@ -147,8 +167,16 @@ DDL = [
     # core/schema.sql; it was absent here, which is what made the pre-13-Aug
     # mapping test vacuous. The fixture's contract is to match schema.sql for
     # every column a reader touches, and signal_scores() touches this one.
+    # Screen-11: `ts` and `latencies` are the REAL column names in
+    # core/schema.sql:705-708 (`created_at` below is a fixture-ism that predates
+    # this and is kept so the existing seed insert is unchanged). `latencies` is
+    # the ONLY per-stage timing this system records — screening/step_executor.py
+    # writes it as {step_name: elapsed_ms} over the ten screening steps — so the
+    # fixture must carry it for the Execution-Analytics reader to be testable.
     """CREATE TABLE screener_results (id INTEGER PRIMARY KEY AUTOINCREMENT,
-        signal_id TEXT, score INTEGER, eligible_score INTEGER, created_at TEXT)""",
+        signal_id TEXT, score INTEGER, eligible_score INTEGER, created_at TEXT,
+        tier TEXT, status TEXT, step_results TEXT, latencies TEXT,
+        market_data_snapshot TEXT, ts TEXT)""",
 ]
 
 DDL_V42_EXTRA = [
@@ -361,31 +389,76 @@ def _seed(conn: sqlite3.Connection, schema_version: int) -> None:
     # numbers on purpose: with one value for both, a reader that returned the
     # threshold under the "System Score" label — which is exactly the defect
     # corrected on 13-Aug — would pass every assertion.
+    # Screen-11: `latencies` carries the per-step screening times. The two rows
+    # are seeded with DIFFERENT step sets and DIFFERENT totals on purpose (sum
+    # 41.5 ms vs 12.0 ms), so a reader that returned a constant, or summed the
+    # wrong signal's blob, would fail rather than coincidentally pass.
+    _lat = {
+        "sig_trd_c1": {"volume_surge": 12.5, "vwap_position": 8.0, "atr_filter": 6.0,
+                       "rsi_range": 5.0, "price_action": 10.0},          # = 41.5 ms
+        "sig_trd_c4": {"volume_surge": 7.0, "vwap_position": 5.0},        # = 12.0 ms
+    }
     for sid in ("sig_trd_c1", "sig_trd_c4"):
-        c.execute("INSERT INTO screener_results(signal_id,score,eligible_score,created_at) "
-                  "VALUES(?,?,?,?)", (sid, 72, 65, _ts("10:30:00")))
+        c.execute("INSERT INTO screener_results(signal_id,score,eligible_score,created_at,"
+                  "tier,status,step_results,latencies,market_data_snapshot,ts) "
+                  "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                  (sid, 72, 65, _ts("10:30:00"), "A", "PASS", "{}",
+                   json.dumps(_lat[sid]), "{}", _ts("10:30:00")))
 
     # G5c multi-day trades for the period layer — gap_fade_long closed on YDAY
     # (within trailing-7) + TENDAYS (trailing-30 only). created_at+exit_time dated
     # that day ⇒ invisible to today-scoped counts; ALL older than today's 14:50 win
     # ⇒ loss-streak assertions (global + per-strategy) are unmoved.
-    def _mkclosed(tid, day, reason, net, hh="14:00:00"):
+    def _mkclosed(tid, day, reason, net, hh="14:00:00", sym="AAA", lat=(120, 850, 970),
+                  exit_hh=None):
+        # `lat` = (signal_to_order_ms, order_to_fill_ms, total_latency_ms). The
+        # default reproduces the original seed EXACTLY, so every pre-existing
+        # caller and latency assertion is byte-unchanged; Screen-11 passes varied
+        # values so the FAST/MODERATE/SLOW bands and the warning thresholds are
+        # each exercised by a real row rather than assumed reachable.
         ts = f"{day}T{hh}+05:30"
+        # Screen-11: exit_time defaults to ts (byte-identical to the original
+        # seed) but can be moved LATER so Trade Duration is a real span. ⭐ With
+        # entry == exit the duration is 0, and 0 is exactly the value a broken
+        # duration would produce — the fixture could not tell the two apart.
+        # ⚠️ Any override must stay on the SAME DAY: Screen 09 buckets by
+        # exit_time, so moving it across midnight would silently re-bucket it.
+        ex = f"{day}T{exit_hh}+05:30" if exit_hh else ts
         c.execute(
             "INSERT INTO trades(trade_id,signal_id,symbol,direction,strategy,sector,qty_planned,"
             "qty_filled,entry_target_price,entry_actual_price,sl_initial,tgt_initial,margin_reserved,"
             "risk_amount,created_at,entry_time,exit_time,exit_reason,exit_price,charges,gross_pnl,"
             "net_pnl,status,actual_position_value_rs,signal_to_order_ms,order_to_fill_ms,total_latency_ms) "
             "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (tid, f"sig_{tid}", "AAA", "LONG", "gap_fade_long", "IT", 10, 10, 1000.0, 1001.0,
-             990.0, 1015.0, 5000.0, 100.0, ts, ts, ts, reason, 1001.0 + net / 10.0, 5.0,
-             net + 5, net, "CLOSED", 10000.0, 120, 850, 970))
+            (tid, f"sig_{tid}", sym, "LONG", "gap_fade_long", "IT", 10, 10, 1000.0, 1001.0,
+             990.0, 1015.0, 5000.0, 100.0, ts, ts, ex, reason, 1001.0 + net / 10.0, 5.0,
+             net + 5, net, "CLOSED", 10000.0, *lat))
         c.execute("INSERT INTO signals(signal_id,symbol,scanner,strategy,received_at,status) "
                   "VALUES(?,?,?,?,?,?)",
-                  (f"sig_{tid}", "AAA", "gap_fade_long", "gap_fade_long", ts, "TRADED"))
-    _mkclosed("trd_w1", YDAY, "SL_HIT", -30.0)
-    _mkclosed("trd_w2", YDAY, "TGT_HIT", 80.0)
-    _mkclosed("trd_m1", TENDAYS, "TGT_HIT", 50.0)
+                  (f"sig_{tid}", sym, "gap_fade_long", "gap_fade_long", ts, "TRADED"))
+    # Screen-10 needs several SYMBOLS to rank and several PRICE BUCKETS to fill,
+    # so these three carry distinct symbols. `sym` defaults to "AAA", so every
+    # pre-existing caller and assertion is byte-unchanged.
+    # Screen-11 latency spread, and every value is chosen to land in a DIFFERENT
+    # band so no band is merely assumed reachable:
+    #   trd_w1  6.20 s total → SLOW      · fill 3.40 s → BOTH warnings fire
+    #   trd_w2  3.50 s total → MODERATE  · fill 2.60 s → ⛔ under the 3 s fill
+    #                                       threshold, so ONLY the total warning
+    #                                       is eligible — and 3.50 s is under the
+    #                                       5 s total threshold too, so NEITHER
+    #                                       fires. That is the control: it proves
+    #                                       the warning list is not just "every
+    #                                       non-fast row".
+    #   trd_m1  latency NULL → UNMEASURED (a closed trade whose timing was never
+    #                                       recorded; ⛔ must not read as fast)
+    #   Exits are moved LATER THE SAME DAY so Trade Duration is a real span
+    #   (1h05m / 0h35m / 1h30m) rather than 0 — see the note in _mkclosed.
+    _mkclosed("trd_w1", YDAY, "SL_HIT", -30.0, sym="BBB", lat=(2800, 3400, 6200),
+              exit_hh="15:05:00")
+    _mkclosed("trd_w2", YDAY, "TGT_HIT", 80.0, sym="CCC", lat=(900, 2600, 3500),
+              exit_hh="14:35:00")
+    _mkclosed("trd_m1", TENDAYS, "TGT_HIT", 50.0, sym="DDD", lat=(None, None, None),
+              exit_hh="15:30:00")
 
     # ── fm_ledger: INIT total=100000; realized losses 450 + one win 200 ──
     # 25-Jul-2026: this used to seed TWO INIT rows split by bucket (intraday
@@ -445,12 +518,68 @@ def _seed(conn: sqlite3.Connection, schema_version: int) -> None:
     c.execute("INSERT INTO eod_verification(date,open_trades,pending_orders,pnl_variance,"
               "status,verified_at) VALUES(?,?,?,?,?,?)",
               (TODAY, 0, 0, 0.0, "VERIFIED", _ts("15:55:30")))
+
+    # ── SCREEN 22 (16-Aug-2026): the 15:45 broker-vs-system reconciliation ────
+    # ⭐ ONE ROW OF EVERY STATUS THE WRITER CAN PRODUCE, because a fixture where
+    # every symbol reconciles OK cannot tell a working three-way classifier from
+    # one that returns "Matched" unconditionally:
+    #     AAA  OK                 — the four open trades' symbol, both sides agree
+    #     BBB  QTY_MISMATCH       — both sides hold it, the sizes differ
+    #     ZZZ  ORPHAN_AT_BROKER   — at the broker, NO system record  (Broker Only)
+    #     CCC  MISSING_AT_BROKER  — a system record, nothing at the broker
+    # ⚠️ TWO RUNS ARE SEEDED, an OLDER one and the CURRENT one, and the older run
+    # disagrees (AAA QTY_MISMATCH). `reconcile_positions` INSERTs rather than
+    # upserts, so a reader that keyed on MAX(date) instead of the run stamp would
+    # return BOTH verdicts for AAA and this fixture makes that visible.
+    # ⭐ ZZZ carries a `resolved_at`, so the "Last Correction" stamp has a real
+    # value AND the null case is still exercised by the other three.
+    _older_run, _last_run = _ts("15:45:02"), _ts("15:45:07")
+    for _sym, _b, _s, _st in (("AAA", 40, 30, "QTY_MISMATCH"),):
+        c.execute("INSERT INTO position_reconciliation(date,symbol,broker_qty,"
+                  "system_qty,status,resolved_at,created_at) VALUES(?,?,?,?,?,?,?)",
+                  (YDAY, _sym, _b, _s, _st, None, _older_run))
+    for _sym, _b, _s, _st, _res in (("AAA", 40, 40, "OK", None),
+                                    ("BBB", 25, 20, "QTY_MISMATCH", None),
+                                    ("ZZZ", 10, 0, "ORPHAN_AT_BROKER", _ts("16:02:11")),
+                                    ("CCC", 0, 15, "MISSING_AT_BROKER", None)):
+        c.execute("INSERT INTO position_reconciliation(date,symbol,broker_qty,"
+                  "system_qty,status,resolved_at,created_at) VALUES(?,?,?,?,?,?,?)",
+                  (TODAY, _sym, _b, _s, _st, _res, _last_run))
     c.execute("INSERT INTO preflight_runs(run_id,run_date,phase,started_at,completed_at,"
               "total_checks,passed,overall_status) VALUES(?,?,?,?,?,?,?,?)",
               ("pf_a_1", TODAY, "A", _ts("08:30:00"), _ts("08:31:00"), 12, 12, "READY"))
-    c.execute("INSERT INTO preflight_check_results(run_id,run_date,check_name,check_group,"
-              "criticality,status) VALUES(?,?,?,?,?,?)",
-              ("pf_a_1", TODAY, "vm_ram", "VM Health", "CRITICAL", "PASS"))
+    # Screen-12: checks spanning the FIVE readiness pillars. ⭐ `capital_deployment`
+    # is seeded WARN on purpose so the Capital pillar is WARNING while every other
+    # pillar is HEALTHY — with all five identical, a rollup that ignored one
+    # pillar would still look right. ⭐ And Capital is assembled from check NAMES
+    # (it has no group of its own), so this also proves that path.
+    for _cn, _cg, _crit, _st in (
+            ("vm_ram", "VM Health", "CRITICAL", "PASS"),
+            ("kite_token_file_exists", "Broker", "CRITICAL", "PASS"),
+            ("kite_token_fresh_today", "Broker", "CRITICAL", "PASS"),
+            ("kite_profile_call_ok", "Broker", "CRITICAL", "PASS"),
+            ("kite_orders_endpoint", "Broker", "WARN", "PASS"),
+            ("kite_funds_available", "Broker", "WARN", "PASS"),
+            ("db_file_exists", "Database", "CRITICAL", "PASS"),
+            ("db_writable", "Database", "CRITICAL", "PASS"),
+            ("app_health", "Engine", "CRITICAL", "PASS"),
+            ("fund_manager_balance", "Engine", "CRITICAL", "PASS"),
+            ("capital_deployment", "Engine", "WARN", "WARN"),
+            ("kill_switch_state", "State", "CRITICAL", "PASS"),
+            ("open_positions_at_start", "State", "WARN", "PASS")):
+        c.execute("INSERT INTO preflight_check_results(run_id,run_date,check_name,"
+                  "check_group,criticality,status) VALUES(?,?,?,?,?,?)",
+                  ("pf_a_1", TODAY, _cn, _cg, _crit, _st))
+    # Recovery lifecycle — one of EACH state, so TRIGGERED can never be mistaken
+    # for SUCCESS by a counter that only looks at row presence.
+    for _cn, _act, _res, _err in (
+            ("alert_backlog", "flush_alert_backlog", "SUCCESS", None),
+            ("today_log_writable", "chmod_log_dir", "FAILED", "permission denied"),
+            ("cron_marks_dir_writable", "mkdir_marks", None, None)):
+        c.execute("INSERT INTO preflight_autofix_log(run_id,check_name,attempted_at,"
+                  "fix_action,before_state,after_state,result,error_msg) "
+                  "VALUES(?,?,?,?,?,?,?,?)",
+                  ("pf_a_1", _cn, _ts("08:30:30"), _act, "bad", "good", _res, _err))
     c.execute("INSERT INTO control_tower_findings(scan_time,category,severity,resource_type,"
               "resource_name,reason,status,first_seen,last_seen) VALUES(?,?,?,?,?,?,?,?,?)",
               (_ts("17:05:00"), "disk", "HIGH", "mount", "/dev/sda1",
@@ -475,6 +604,38 @@ def _seed(conn: sqlite3.Connection, schema_version: int) -> None:
               "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
               ("trd_c4", TODAY, "AAA", "gap_fade_long", "LONG", 10, "200-300",
                1000.0, 1000.5, 0.5, 10.0, 1.5, 1.45, 4.0, "WIN", "TGT_HIT"))
+    # ── SCREEN 10 (15-Aug-2026) ────────────────────────────────────────────────
+    # (a) trd_c1 carries the fraction the ORDER PATH actually resolved (0.15 via a
+    #     by_symbol override) while trd_c4 carries NONE. The two are seeded
+    #     DIFFERENTLY ON PURPOSE and neither equals the global 0.22, so a reader
+    #     that ignored the persisted value and always used the config global would
+    #     produce allowed=2.2 for both and FAIL — the fixture can tell the two
+    #     code paths apart. ⛔ A fixture where both paths give the same number
+    #     proves nothing.
+    #     trd_c1: min(10 × 0.15, 5) = 1.50  ⇒ actual 3.0 = 200% ⇒ EXCEEDED
+    #     trd_c4: min(10 × 0.22, 5) = 2.20  ⇒ actual 0.5 =  23% ⇒ WITHIN_LIMIT
+    #     The today-scoped /api/slippage endpoint does NOT read these columns, so
+    #     its tolerance_rs == 2.2 assertions are untouched.
+    c.execute("UPDATE trades SET tolerance_fraction_used=?, tolerance_source=? "
+              "WHERE trade_id=?", (0.15, "symbol:AAA", "trd_c1"))
+    # (b) Multi-day slippage rows so the RANGE layer, the five price buckets and
+    #     all four statuses are exercised. All are dated BEFORE today, so every
+    #     today-scoped assertion on /api/slippage (count == 2) is unmoved.
+    #       BBB @ 85    → bucket 0-100    · 0.30 vs min(5×0.22,5)=1.10 = 27% → WITHIN
+    #       CCC @ 450   → bucket 200-500  · 1.55 vs min(10×0.22,5)=2.20 = 70% → NEAR
+    #       DDD @ 150   → bucket 100-200  · slippage NULL            → UNMEASURED
+    #     ⭐ Bucket 500-1000 is deliberately left EMPTY: the panel must render all
+    #     five and show the empty one as unobserved, ⛔ never as a measured ₹0.00.
+    for tid, sym, band, px, fill, slip, dist, prr, arr, dmg, res, reason in (
+            ("trd_w1", "BBB", "0-100", 85.0, 85.3, 0.30, 5.0, 2.0, 1.7, 6.0, "LOSS", "SL_HIT"),
+            ("trd_w2", "CCC", "300-500", 450.0, 451.55, 1.55, 10.0, 2.0, 1.5, 15.5, "WIN", "TGT_HIT"),
+            ("trd_m1", "DDD", "100-200", 150.0, None, None, None, None, None, None, "WIN", "TGT_HIT")):
+        c.execute("INSERT INTO trade_slippage_log(trade_id,trade_date,symbol,strategy_name,side,qty,"
+                  "price_band,entry_signal_price,entry_fill_price,entry_slippage_rs,"
+                  "planned_sl_distance,planned_rr,actual_rr,rr_damage_pct,trade_result,exit_reason) "
+                  "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                  (tid, (YDAY if tid != "trd_m1" else TENDAYS), sym, "gap_fade_long",
+                   "LONG", 10, band, px, fill, slip, dist, prr, arr, dmg, res, reason))
     for oid, leg, slip in (("ord_e_0", "ENTRY", 1.0), ("ord_sl_0", "SL", 0.2)):
         c.execute("INSERT INTO order_execution_log(order_id,parent_trade_id,symbol,strategy_name,"
                   "leg,side,intended_price,actual_price,slippage_rs,qty,filled_qty,status,"
@@ -520,11 +681,31 @@ def _build_db(path: str, schema_version: int) -> None:
 
 
 def _build_analytics(path: str) -> None:
+    """analytics.db — MIRRORS `core/analytics_schema.sql:51`.
+
+    ⚠️⚠️ THIS FIXTURE USED TO INVENT `id INTEGER PRIMARY KEY` + `ts`, NEITHER OF
+    WHICH EXISTS IN PRODUCTION (the real columns are `timestamp … disk_used_pct`,
+    with no `id`). A reader written against the fixture therefore passed its
+    tests while raising `no such column: ts` against the real database — the
+    Health Trends disk series was structurally empty in production and displayed
+    as "NOT INSTRUMENTED". ⛔ A FIXTURE MUST MATCH PRODUCTION SHAPE, or it makes a
+    wrong reader look right.
+
+    Rows are REAL disk percentages with the -1.0 psutil sentinels left in place
+    for cpu/memory, because a caller that charts a sentinel must fail a test.
+    """
     conn = sqlite3.connect(path)
     try:
         conn.execute(
-            "CREATE TABLE system_metrics (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, "
-            "cpu_pct REAL, memory_mb REAL, disk_used_pct REAL)"
+            "CREATE TABLE system_metrics (timestamp TEXT NOT NULL, cpu_pct REAL, "
+            "memory_mb REAL, db_size_mb REAL, log_size_mb REAL, open_fds INTEGER, "
+            "thread_count INTEGER, disk_used_pct REAL)"
+        )
+        conn.executemany(
+            "INSERT INTO system_metrics (timestamp, cpu_pct, memory_mb, "
+            "disk_used_pct) VALUES (?,?,?,?)",
+            [("2026-08-15 09:%02d:00" % m, -1.0, -1.0, 41.0 + m / 60.0)
+             for m in (15, 20, 25, 30, 35, 40)],
         )
         conn.commit()
     finally:
@@ -536,25 +717,38 @@ def _write_strategies(config_dir: str) -> None:
     range_breakout_long, first_pullback_long (SILENT enabled), gap_fade_short (disabled)."""
     sdir = os.path.join(config_dir, "strategies")
     os.makedirs(sdir, exist_ok=True)
+    # ⭐ SCREEN 19/20 (16-Aug-2026): `intent` is the Trade Type source of truth
+    # (`strategies/schema.py::_val_intent` permits exactly INTRADAY | DELIVERY;
+    # the 16 production YAMLs are 13 / 3). The fixture now carries BOTH values
+    # AND one strategy with NO intent at all, because a fixture where every row
+    # resolves the same way proves nothing: with all-INTRADAY a reader that
+    # ignored the YAML and returned a constant would pass, and with none missing
+    # the unavailable path would never be exercised.
+    #   range_breakout_long → DELIVERY   · first_pullback_long → (absent)
+    # ⚠️ `intent` was previously absent from every fixture strategy, so every
+    # Trade Type assertion would have been vacuously None.
     strategies = [
-        ("gap_fade_long", "LONG", True, 3),
-        ("vwap_bounce_long", "LONG", True, 2),
-        ("range_breakout_long", "LONG", True, 2),
-        ("first_pullback_long", "LONG", True, 2),   # silent — configured, zero rows
-        ("gap_fade_short", "SHORT", False, 2),
+        ("gap_fade_long", "LONG", True, 3, "INTRADAY"),
+        ("vwap_bounce_long", "LONG", True, 2, "INTRADAY"),
+        ("range_breakout_long", "LONG", True, 2, "DELIVERY"),
+        ("first_pullback_long", "LONG", True, 2, None),   # silent — and NO intent
+        ("gap_fade_short", "SHORT", False, 2, "INTRADAY"),
     ]
-    for name, direction, enabled, cap in strategies:
+    for name, direction, enabled, cap, intent in strategies:
+        doc = {
+            "name": name, "display_name": name.replace("_", " ").title(),
+            "direction": direction, "enabled": enabled,
+            "order_protocol": "CO_PLUS_TGT", "max_concurrent_positions": cap,
+            "entry_start_time": "09:25", "entry_end_time": "15:00",
+        }
+        if intent is not None:
+            doc["intent"] = intent
         with open(os.path.join(sdir, f"{name}.yaml"), "w", encoding="utf-8") as fh:
-            yaml.safe_dump({
-                "name": name, "display_name": name.replace("_", " ").title(),
-                "direction": direction, "enabled": enabled,
-                "order_protocol": "CO_PLUS_TGT", "max_concurrent_positions": cap,
-                "entry_start_time": "09:25", "entry_end_time": "15:00",
-            }, fh, sort_keys=False)
+            yaml.safe_dump(doc, fh, sort_keys=False)
     # scan_webhook_map: 1:1 for each strategy + N:1 (gap_fade_long_alt → gap_fade_long).
     # momentum_combo is deliberately ABSENT (unmapped → "scanner-level (shared)").
     scan_map = {"scanners": {}}
-    for name, _d, _e, _c in strategies:
+    for name, _d, _e, _c, _i in strategies:
         scan_map["scanners"][name] = {"strategy": name, "chartink_url": f"https://x/{name}"}
     scan_map["scanners"]["gap_fade_long_alt"] = {"strategy": "gap_fade_long",
                                                  "chartink_url": "https://x/alt"}

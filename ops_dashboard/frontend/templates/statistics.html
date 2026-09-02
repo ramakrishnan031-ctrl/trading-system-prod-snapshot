@@ -23,7 +23,7 @@
     <h2 class="panel-title" style="margin-top:14px">Closed trades + MFE/MAE (today)</h2>
     <div class="tbl-scroll">
     <table class="cap-table">
-      <thead><tr><th>Symbol</th><th>Strategy</th><th>Dir</th><th>Net</th><th>MFE %</th><th>MAE %</th></tr></thead>
+      <thead><tr><th class="lbl">Symbol</th><th class="lbl">Strategy</th><th>Dir</th><th>Net</th><th>MFE %</th><th>MAE %</th></tr></thead>
       <tbody>
         <template x-for="t in data.trades_with_excursions || []" :key="t.trade_id">
           <tr>

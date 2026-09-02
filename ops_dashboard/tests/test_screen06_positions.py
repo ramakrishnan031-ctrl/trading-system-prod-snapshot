@@ -479,11 +479,39 @@ def test_no_write_route_exists_in_the_whole_dashboard() -> None:
                 for n, line in enumerate(fh, 1):
                     if _re.search(r'methods\s*=\s*\[[^\]]*["\']POST["\']', line):
                         posts.append(f"{os.path.relpath(p, root)}:{n}")
-    # login + logout are the only two, and both are SESSION routes — neither
-    # writes trading data, and there is no order path anywhere.
-    assert all("auth.py" in p for p in posts), \
-        f"a write route appeared outside auth — the dialog's claim must be revisited: {posts}"
-    assert len(posts) == 2, f"expected exactly login+logout, got: {posts}"
+    # ── NARROWED 17-Aug-2026, ⛔ NOT relaxed ────────────────────────────────
+    # 📜 Rama's ruling makes Screen 17 the operational control surface, so
+    # "login+logout are the ONLY POSTs" can no longer hold. What this test was
+    # actually protecting is UNCHANGED and is re-pinned below:
+    #   (a) the dashboard writes NOTHING itself — no DB write, no broker path;
+    #   (b) any POST beyond the session routes must be the SINGLE control
+    #       forwarder, which validates against an allowlist and hands off to the
+    #       trading process's own control plane;
+    #   (c) there is still no order path anywhere.
+    # ⛔ A NEW POST appearing anywhere else still fails this test.
+    allowed = ("auth.py", "operations.py")
+    assert all(any(a in p for a in allowed) for p in posts), \
+        f"a write route appeared outside auth/operations: {posts}"
+    non_auth = [p for p in posts if "auth.py" not in p]
+    assert len(posts) - len(non_auth) == 2, f"expected exactly login+logout in auth: {posts}"
+    assert len(non_auth) == 1, f"exactly ONE control forwarder is permitted, got: {non_auth}"
+
+    # (b) the forwarder must be the allowlisted control route, and must not write.
+    ops = open(os.path.join(root, "backend", "api", "operations.py"),
+               encoding="utf-8").read()
+    assert "/api/controls/action" in ops
+    assert "_CONTROL_ACTIONS" in ops, "the forwarder must use an allowlist, not a passthrough"
+    assert "control_client.post_action" in ops, "it must hand off, not act locally"
+    for forbidden in ("INSERT ", "UPDATE ", "DELETE ", "commit()"):
+        assert forbidden not in ops, f"the control route must not write: {forbidden!r}"
+
+    # (c) still no broker/order path anywhere in the dashboard.
+    for dirpath, _d, files in os.walk(os.path.join(root, "backend")):
+        for name in files:
+            if name.endswith(".py"):
+                txt = open(os.path.join(dirpath, name), encoding="utf-8",
+                           errors="ignore").read()
+                assert "place_order" not in txt, f"an order path appeared in {name}"
 
 
 # ── 11 · Total Capital Used — the corrected formula ─────────────────────────
@@ -726,3 +754,86 @@ def test_rr_backend_path_is_not_duplicated() -> None:
     with open(os.path.join(root, "backend", "api", "trading.py"),
               encoding="utf-8") as fh:
         assert "config_reader.get_strategies(cfg)" in fh.read()
+
+
+# ── 7 · Rama's ruled heading treatment, carried forward from S04/S05 ─────────
+_HC_EXPECTED = {
+    "trade_type", "direction", "system_score", "score_threshold", "position_status",
+    "qty_system", "qty_position", "entry_target_price", "entry_actual_price",
+    "sl_initial", "sl_broker", "tgt_initial", "tgt_broker", "rr_configured",
+    "sl_points", "tgt_points", "ltp", "unrealised", "actions",
+}
+_HC_LEFT = {"date", "time", "strategy", "symbol"}
+
+
+def test_headings_from_trade_type_onward_are_centred(tpl: str) -> None:
+    """`hc` marks Trade Type -> Action and NOTHING else.
+
+    It rides on the column DEFINITION, never on a position: these columns are
+    drag-reorderable, so an nth-child rule would centre the wrong heading after
+    a drag.
+    """
+    block = tpl.split("DEFAULT_COLS: [", 1)[1].split("\n      ],", 1)[0]
+    got = {m.group(1) for m in
+           re.finditer(r'\{ key: "([a-z_]+)",[^\n]*\bhc: true', block)}
+    assert got == _HC_EXPECTED, "centred set drifted: %s" % (got ^ _HC_EXPECTED)
+    for key in _HC_LEFT:
+        row = re.search(r'\{ key: "%s",[^\n]*' % key, block).group(0)
+        assert "hc: true" not in row, "%s must stay left-aligned" % key
+    assert "c.hc ? 'hc' : ''" in tpl, "the hc class is not bound onto the <th>"
+
+
+def test_hc_centres_the_heading_only_and_never_the_data_cell(tpl: str) -> None:
+    """⛔ `hc` must NOT reach the <td>.
+
+    `ctr` deliberately centres BOTH th and td (style.css). The carried design
+    rule is to PRESERVE the established body/data alignment, so the heading
+    treatment had to be a separate flag rather than a reuse of `ctr`. This test
+    is what stops a later edit from "simplifying" the two into one.
+    """
+    td = re.search(r"<td :class=\"\[[^\]]*\]\"", tpl).group(0)
+    assert "c.hc" not in td, "hc leaked onto the data cell — body alignment would move"
+    assert "c.ctr" in td, "ctr must still reach the data cell"
+    css_path = os.path.join(_HERE, "..", "frontend", "static", "style.css")
+    with open(css_path, encoding="utf-8") as fh:
+        css = fh.read()
+    assert ".pos-page .pos-tbl th.hc { text-align: center; }" in css
+    assert ".pos-page .pos-tbl th.ctr, .pos-page .pos-tbl td.ctr" in css
+
+
+def test_grouped_bands_are_separated_by_a_rule_at_every_boundary(tpl: str) -> None:
+    """Rama, 20-Aug: the four grouped pairs must be visually separable.
+
+    Qty / Entry / SL / TGT sat flush against one another, so eight System|Broker
+    sub-headings read as one undifferentiated run and an operator could not see
+    where a band ended. A 1px rule now marks every BAND BOUNDARY.
+
+    The boundary is computed from the CURRENT column order, so a drag carries it
+    with the band. ⛔ Never nth-child — these columns are reorderable, and a
+    positional rule would leave the separator behind on the old index.
+    """
+    assert "sep: prev !== null && prev !== g" in tpl, \
+        "groups() no longer reports where a band starts"
+    assert "g.sep ? 'sep' : ''" in tpl, "the group row does not bind sep"
+
+    isep = re.search(r"isSep\(c\) \{.*?\n      \},", tpl, re.S).group(0)
+    assert "findIndex(x => x.key === c.key)" in isep, \
+        "isSep must match by key — identity lookup can fail in the nested row scope"
+    # strip comments first — the only legitimate mentions of nth-child in this
+    # file are the two comments that FORBID it
+    code = re.sub(r"/\*.*?\*/", "", tpl, flags=re.S)
+    assert "nth-child" not in code, "a positional rule breaks drag-reorder"
+
+    # the rule has to reach BOTH header rows and the body, or a band is only
+    # delimited at its top and stops being traceable down the rows
+    th = re.search(r"<th :class=\"\[c\.num[^\]]*\]\"", tpl, re.S).group(0)
+    td = re.search(r"<td :class=\"\[[^\]]*\]\"", tpl).group(0)
+    assert "isSep(c)" in th, "the sub-heading row is not separated"
+    assert "isSep(c)" in td, "the body is not separated — the band stops at the header"
+
+    css_path = os.path.join(_HERE, "..", "frontend", "static", "style.css")
+    with open(css_path, encoding="utf-8") as fh:
+        css = fh.read()
+    rule = re.search(r"\.pos-page \.pos-tbl th\.sep[^}]*\}", css).group(0)
+    assert "border-left: 1px solid var(--card-bd)" in rule, \
+        "the separator must reuse the group underline's own token — no new colour"

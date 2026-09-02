@@ -1,58 +1,896 @@
 {% extends "base.html" %}
-{% from "components.html" import kpi_row, kpi_card %}
 {% block title %}AlgoCore Systems — Live Activity{% endblock %}
 {% block nav_live_activity %}active{% endblock %}
 {% block content %}
-{# G5d: the single merged attention surface (L10). One reverse-chronological feed
-   over 7 read-only sources — signals · orders · trades · system events · capital
-   (fm_ledger) · risk (kill). No standalone Alerts screen; /alerts stays 200 by
-   direct URL. Poll cadence follows freshness (5s market / 60s off). #}
-<div x-data="activityPage()" x-init="load()" @ops-refresh.window="load()">
-  {% call kpi_row() %}
-    {{ kpi_card("Events", "data.count || 0", tone="info") }}
-    {{ kpi_card("Signals/min", "perMin('SIGNAL')", tone="info") }}
-    {{ kpi_card("Orders/min", "perMin('ORDER')", tone="info") }}
-    {{ kpi_card("Trades/min", "perMin('TRADE')", tone="info") }}
-    {{ kpi_card("Sources", "(data.types||[]).length", tone="info") }}
-  {% endcall %}
+{#  SCREEN 18 — LIVE ACTIVITY.  `gui/18. Live_Activity.png` + `.txt` are BINDING:
+    the KPI strip (6) · REAL-TIME ACTIVITY FEED (9 chips + pause, 6 columns) ·
+    LIVE PROCESSING PIPELINE (6 stages) · STRATEGY ACTIVITY · ALERTS BANNER ·
+    MARKET PULSE (LIVE) · LIVE MODE · EXPORT · RECENT WINNERS / LOSERS ·
+    SYSTEM EVENTS · FEED FILTERS · ACTIVE POSITIONS (LIVE) · CAPITAL UTILIZATION.
 
-  <section class="panel">
-    <h2 class="panel-title">Live Activity — Mission Control Feed
-      <span class="panel-sub" x-text="'sources: ' + (data.types||[]).join(' · ')"></span></h2>
-    <div class="filters">
-      <button class="rt-btn" :class="filter==='' ? 'rt-active':''" @click="filter=''">All</button>
-      <template x-for="t in data.types || []" :key="t">
-        <button class="rt-btn" :class="filter===t ? 'rt-active':''" @click="filter=t" x-text="t"></button>
-      </template>
+    ⛔ NO SCANNER ANYWHERE — no column, no chip, no filter, no export column.
+       Screen 18's binding design names STRATEGY, and strategy IS the scanner
+       identity in this system (Rama, 14-Aug). A test asserts the absence.
+
+    ⭐ SYMBOL BEFORE STRATEGY in ACTIVE POSITIONS, the Screens 13-15 convention,
+       and the binding PNG draws it that way too. ⚠️ The FEED's fourth column is
+       ONE approved heading — "Strategy / Symbol" — not two fields, so the
+       ordering rule has nothing to reorder there; the heading is preserved
+       verbatim as the design draws it.
+
+    ⛔ CURRENT MTM IS NOT INSTRUMENTED, and neither are LTP / MTM (₹) / MTM (%)
+       in ACTIVE POSITIONS. They need a live price and this dashboard has none —
+       /api/positions already declares those fields unavailable under "Pending
+       Broker Source (G4)". They render the established NOT INSTRUMENTED state.
+       ⭐ Realised P&L is REAL and is shown beside the gap, never inside it.
+
+    ⛔ THE OPEN-POSITIONS DELTA IS NOT INSTRUMENTED. Signals and Orders have a
+       real yesterday (they are dated rows); the open set is a live status read
+       with no stored history.
+
+    ⛔ LIVE MODE ON/OFF AND THE FEED PAUSE ARE DISPLAY CONTROLS — they start and
+       stop THIS PAGE's polling. This dashboard has no write path (L4).
+
+    ⛔ An Alpine x-for TEMPLATE placed inside an SVG element renders NOTHING —
+       the HTML parser turns it into an SVG node named "template". The donut's
+       repeated children are injected with `x-html` on a group node instead, the
+       pattern Screens 06/07/09/10/11/13/15 already use. The tag names are
+       spelled out in words ON PURPOSE: the layout scanners read RAW source
+       without stripping comments.  #}
+<div class="lav-page" x-data="liveActivityPage()" x-init="init()"
+     @ops-refresh.window="live && load()">
+
+  <div class="lav-head">
+    <div>
+      <h1 class="lav-title">LIVE ACTIVITY</h1>
+      <div class="lav-sub">Mission Control Wall — Real-time system activity</div>
     </div>
-    <ul class="events">
-      <template x-for="(e, i) in shown()" :key="i">
-        <li>
-          <span class="ev-ts" x-text="(e.ts||'').replace('T',' ').slice(11,19)"></span>
-          <span class="sev-chip" :class="typeClass(e.type)" x-text="e.type"></span>
-          <a class="panel-link" :href="e.link || '#'" x-text="e.summary"></a>
-        </li>
-      </template>
-      <li class="ev-empty" x-show="!shown().length" x-cloak>No activity.</li>
-    </ul>
-  </section>
+    <div class="lav-headright">
+      <span class="lav-livechip" :class="live ? 'is-on' : 'is-off'">
+        <i class="lav-livedot"></i><span x-text="live ? 'LIVE' : 'PAUSED'"></span>
+      </span>
+      <span class="lav-lastcheck">
+        <span class="lav-lc-l">LAST UPDATED</span>
+        <span class="lav-lc-v mono" x-text="hhmmss(data.generated_at) || '—'"></span>
+      </span>
+    </div>
+  </div>
+
+  {# ── TOP KPI STRIP — the six approved cards, in the approved order ───────── #}
+  <div class="lav-kpis">
+    <template x-for="k in KPIS" :key="k.key">
+      <section class="panel lav-kpi">
+        <span class="lav-kpi-ico" :class="'lav-ico-' + k.tone" x-html="k.ico"></span>
+        <span class="lav-kpi-body">
+          <span class="lav-kpi-l" x-text="k.label"></span>
+          <b class="lav-kpi-v" :class="'lav-v-' + kpiTone(k.key)"
+             x-text="kpiValue(k.key)"></b>
+          <span class="lav-kpi-s" :class="kpiSubClass(k.key)"
+                x-text="kpiSub(k.key)"></span>
+        </span>
+      </section>
+    </template>
+  </div>
+
+  <div class="lav-work">
+    {# ⛔⛔ TWO INDEPENDENT STRIPS, ⛔ NOT full-width rows — and this is the whole
+       shape of the page. 🔴 The rows version was REJECTED: a grid row is as tall
+       as its TALLEST cell, so on a quiet day the short REAL-TIME ACTIVITY FEED
+       left a ~210px dead band beneath it while RECENT WINNERS / LOSERS waited
+       for the unrelated PIPELINE + STRATEGY stack beside it to close.
+       ⭐ THE STRIPS ARE THE PNG's OWN COLUMNS, read off the artwork:
+         WIDE  strip (x200-890)  — FEED · WINNERS/LOSERS + SYSTEM EVENTS · ACTIVE POSITIONS
+         NARROW strip (x805-1250) — PIPELINE · STRATEGY ACTIVITY · FEED FILTERS · CAPITAL
+       ⛔ No panel changes strip, no section is added or removed, and there is no
+       spacer anywhere — each strip simply stops when its own content stops. #}
+    <div class="lav-left">
+      <div class="lav-main">
+
+        <section class="panel lav-feed">
+          <div class="lav-panel-head">
+            <h3 class="panel-title">REAL-TIME ACTIVITY FEED</h3>
+          </div>
+          {# The nine approved toolbar chips. ⭐ They are bound to the SAME
+             `cat` state as the FEED FILTERS tiles below, so the two controls
+             the design draws twice can never disagree about what is showing. #}
+          <div class="lav-chips">
+            <template x-for="c in CHIPS" :key="c.key">
+              <button class="rt-btn lav-chip" type="button"
+                      :class="cat === c.key ? 'rt-active' : ''"
+                      @click="setCat(c.key)" x-text="c.label"></button>
+            </template>
+            <button class="rt-btn lav-pause" type="button"
+                    :class="live ? '' : 'rt-active'"
+                    :title="live ? 'Pause the feed' : 'Resume the feed'"
+                    @click="setLive(!live)" x-text="live ? '❙❙' : '▶'"></button>
+          </div>
+
+          <div class="lav-tbl-wrap tbl-freeze">
+            <table class="cap-table lav-tbl">
+              <thead><tr>
+                {# ⭐ ONE `cols` array drives the header AND the body, so a drag
+                   can never leave the two out of step. #}
+                <template x-for="c in cols" :key="c.key">
+                  <th class="lbl lav-th"
+                      :class="[dragKey === c.key ? 'is-drag' : '',
+                               overKey === c.key ? 'is-over' : '', c.ctr ? 'ctr' : '']"
+                      :style="c.w ? ('width:' + c.w) : ''"
+                      draggable="true" role="button" tabindex="0"
+                      :title="c.label + ' · click to sort, drag to reorder'"
+                      @dragstart="onDragStart(c.key, $event)"
+                      @dragover.prevent="overKey = c.key"
+                      @dragleave="overKey === c.key && (overKey = '')"
+                      @drop.prevent="onDrop(c.key)"
+                      @dragend="onDragEnd()"
+                      @click="headClick(c.key)" @keyup.enter="tSort(c.key)">
+                    <span class="lav-grip" aria-hidden="true">⠿</span><span
+                          x-text="c.label"></span><span
+                          class="lav-arrow" x-text="tArrow(c.key)"></span>
+                  </th>
+                </template>
+              </tr></thead>
+              <tbody>
+                <template x-for="r in tSorted(rows())" :key="r.ref_id">
+                  <tr>
+                    <template x-for="c in cols" :key="c.key">
+                      <td :class="[c.ctr ? 'ctr' : '',
+                                   c.key === 'time' ? 'mono lav-time' : '',
+                                   c.key === 'details' ? 'lav-det' : '']"
+                          :title="cellTitle(r, c.key)">
+                        <template x-if="c.key === 'category'">
+                          <span class="lav-cat" :class="'lav-c-' + r.category.toLowerCase()"
+                                x-text="r.category"></span>
+                        </template>
+                        <template x-if="c.key === 'status'">
+                          <span class="lav-st" :class="'lav-st-' + r.status.toLowerCase()"
+                                x-text="r.status"></span>
+                        </template>
+                        <template x-if="c.key === 'strategy_symbol'">
+                          <span x-text="strategySymbol(r)"></span>
+                        </template>
+                        <template x-if="c.key !== 'category' && c.key !== 'status'
+                                        && c.key !== 'strategy_symbol'">
+                          <span x-text="cell(r, c.key)"></span>
+                        </template>
+                      </td>
+                    </template>
+                  </tr>
+                </template>
+                <tr x-show="!rows().length" x-cloak>
+                  <td :colspan="cols.length" class="lav-empty"
+                      x-text="emptyText()"></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="lav-foot">
+            <span class="lav-showing" x-text="showing()"></span>
+            <a class="panel-link lav-more" href="/trade-logs">View Full Feed →</a>
+          </div>
+        </section>
+      </div>
+
+      {# ── NARROW STRIP — LIVE PROCESSING PIPELINE · STRATEGY ACTIVITY. ⭐ The
+         artwork's right-hand column of the work area carries these TWO only;
+         FEED FILTERS and CAPITAL UTILIZATION sit in the full-width bands below,
+         which is where the PNG draws them. ─────────────────────────────────── #}
+      <div class="lav-side">
+        <section class="panel lav-pipe">
+          <h3 class="panel-title">LIVE PROCESSING PIPELINE
+            <span class="panel-sub" x-text="pipelineBase()"></span>
+          </h3>
+          <div class="lav-pipe-row">
+            <template x-for="s in stages()" :key="s.key">
+              <div class="lav-pstep" :class="s.active ? 'is-active' : ''">
+                <span class="lav-pdot" :class="'lav-pd-' + s.key"
+                      x-html="STAGE_ICON[s.key]"></span>
+                <span class="lav-pname" x-text="s.name"></span>
+              </div>
+            </template>
+          </div>
+          <div class="lav-pipe-counts">
+            <template x-for="s in stages()" :key="s.key">
+              <div class="lav-pcount" :class="s.active ? 'is-active' : ''">
+                <b x-text="fmt(s.count)"></b>
+                <span x-text="s.last_time ? ('Last: ' + s.last_time) : 'No event yet'"></span>
+              </div>
+            </template>
+          </div>
+        </section>
+
+        <section class="panel lav-strat">
+          <h3 class="panel-title">STRATEGY ACTIVITY
+            <span class="panel-sub" x-text="'(' + strategies().length + ')'"></span>
+          </h3>
+          {# 🔴 CAUGHT IN THE BROWSER at 1440: without this wrapper the five
+             columns overflowed the panel and the LAST SIGNAL TIME header
+             painted on top of the right rail. #}
+          <div class="lav-tbl-wrap tbl-freeze">
+          <table class="cap-table lav-stbl">
+            <thead><tr>
+              <th class="lbl">Strategy</th>
+              <th class="lbl ctr">Signals</th>
+              <th class="lbl ctr">Orders</th>
+              <th class="lbl ctr">Trades</th>
+              <th class="lbl ctr">Last Signal Time</th>
+            </tr></thead>
+            <tbody>
+              <template x-for="s in strategies()" :key="s.strategy">
+                <tr>
+                  <td x-text="s.strategy"></td>
+                  <td class="ctr mono" x-text="fmt(s.signals)"></td>
+                  <td class="ctr mono" x-text="fmt(s.orders)"></td>
+                  <td class="ctr mono" x-text="fmt(s.trades)"></td>
+                  <td class="ctr lav-last">
+                    <i class="lav-dot" :class="'lav-dot-' + s.dot"></i><span
+                       class="mono" x-text="s.last_signal_time || '—'"></span>
+                  </td>
+                </tr>
+              </template>
+              <tr x-show="!strategies().length" x-cloak>
+                <td colspan="5" class="lav-empty">No strategy activity recorded today.</td>
+              </tr>
+            </tbody>
+          </table>
+          </div>
+          {# ⛔ An order whose trade row is absent cannot be attributed to a
+             strategy. It is REPORTED rather than dropped, so this table can
+             never quietly total less than the ORDERS TODAY card above it. #}
+          <p class="lav-note" x-show="unattributedNote()" x-cloak
+             x-text="unattributedNote()"></p>
+          <div class="lav-foot">
+            <a class="panel-link lav-more" href="/strategies">View All Strategies →</a>
+          </div>
+        </section>
+      </div>
+
+      {# ── BAND B — RECENT WINNERS / LOSERS · SYSTEM EVENTS · FEED FILTERS ───
+         ⭐ THE ARTWORK'S OWN THIRD ROW, and it spans the wide AND narrow strips
+         exactly as the PNG draws it (x205→1240, under both). 👤 Rama, 01-Sep-2026:
+         restore the row spans so the layout matches the original design.
+         ⚠️ AN EARLIER SESSION TRIED FULL-WIDTH ROWS AND RECORDED THEM AS
+         REJECTED — a grid row is as tall as its tallest cell, so a short feed
+         left a band beneath it. ⭐ THAT FAILURE IS ADDRESSED, ⛔ not ignored: the
+         feed's own scroll window now grows to the height of the pipeline +
+         strategy stack beside it, so row A closes level on CONTENT — more rows
+         become visible — ⛔ not on a spacer, ⛔ not on a min-height, ⛔ not on a
+         stretch. The 🔬 measured 206px band this replaces is recorded in the
+         ledger. ──────────────────────────────────────────────────────────── #}
+      <div class="lav-rowb">
+        <section class="panel lav-wl">
+        <h3 class="panel-title">RECENT WINNERS / LOSERS
+          <span class="panel-sub" x-text="wlBase()"></span>
+        </h3>
+        <div class="lav-wl-grid">
+          <template x-for="c in WL_CARDS" :key="c.key">
+            <div class="lav-wl-card" :class="'lav-wl-' + c.tone">
+              <span class="lav-wl-l" x-text="c.label"></span>
+              <b class="lav-wl-v" x-text="wlAmount(c.key)"></b>
+              <span class="lav-wl-sym" x-text="wlSymbol(c.key)"></span>
+              <span class="lav-wl-t mono" x-text="wlTime(c.key)"></span>
+            </div>
+          </template>
+        </div>
+      </section>
+
+        <section class="panel lav-sysev">
+        <h3 class="panel-title">SYSTEM EVENTS
+          <span class="panel-sub" x-text="sysEventsSub()"></span>
+        </h3>
+        <ol class="lav-evlist">
+          <template x-for="e in sysEvents()" :key="e.ref_id">
+            <li>
+              <i class="lav-ev-dot" :class="'lav-ev-' + e.chip.toLowerCase()"></i>
+              <span class="lav-ev-t mono" x-text="e.time"></span>
+              <span class="lav-ev-b">
+                <span class="lav-ev-n" x-text="e.event"></span>
+                <span class="lav-ev-d" x-text="e.details || '—'"></span>
+              </span>
+              <span class="lav-ev-chip" :class="'lav-ev-' + e.chip.toLowerCase()"
+                    x-text="e.chip"></span>
+            </li>
+          </template>
+          <li class="lav-empty" x-show="!sysEvents().length" x-cloak>
+            No service events recorded today.</li>
+        </ol>
+        {# ⛔ Two of the four approved examples have NO source and the panel
+           says so rather than leaving a reader to assume a quiet day. #}
+        <p class="lav-note" x-show="uninstrumentedSysEvents().length" x-cloak
+           x-text="'NOT INSTRUMENTED: ' + uninstrumentedSysEvents().join(' · ')
+                   + ' — nothing in this system writes them.'"></p>
+        <div class="lav-foot">
+          <a class="panel-link lav-more" href="/logs">View All Events →</a>
+        </div>
+        </section>
+
+        <section class="panel lav-filters">
+          <h3 class="panel-title">FEED FILTERS</h3>
+          <div class="lav-tiles">
+            <template x-for="t in TILES" :key="t.key">
+              <button class="lav-tile" type="button"
+                      :class="tileActive(t.key) ? 'is-on' : ''"
+                      @click="setCat(t.key)">
+                <span class="lav-tile-ico" x-html="t.ico"></span>
+                <span class="lav-tile-l" x-text="t.label"></span>
+              </button>
+            </template>
+          </div>
+        </section>
+      </div>
+
+      {# ── BAND C — ACTIVE POSITIONS · CAPITAL UTILIZATION ──────────────────
+         ⭐ The artwork's bottom row, both panels side by side across the same
+         span. ⛔ CAPITAL UTILIZATION keeps its donut — a pictorial element the
+         binding TXT forbids replacing with text. ───────────────────────────── #}
+      <div class="lav-rowc">
+        <section class="panel lav-pos">
+          <h3 class="panel-title">ACTIVE POSITIONS <span class="lav-live-tag">(LIVE)</span>
+            <span class="panel-sub" x-text="posBase()"></span>
+          </h3>
+          <div class="lav-tbl-wrap tbl-freeze">
+            <table class="cap-table lav-postbl">
+              {# ⭐ The approved ten columns, in the approved order — Symbol
+                 BEFORE Strategy. ⛔ No Scanner column, and none is invented. #}
+              <thead><tr>
+                <th class="lbl">Symbol</th>
+                <th class="lbl">Strategy</th>
+                <th class="lbl ctr">Qty</th>
+                <th class="lbl ctr">Entry Price</th>
+                <th class="lbl ctr">LTP</th>
+                <th class="lbl ctr">MTM (₹)</th>
+                <th class="lbl ctr">MTM (%)</th>
+                <th class="lbl ctr">SL</th>
+                <th class="lbl ctr">TGT</th>
+                <th class="lbl ctr">Status</th>
+              </tr></thead>
+              <tbody>
+                <template x-for="p in positions()" :key="p.trade_id">
+                  <tr>
+                    <td x-text="p.symbol || '—'"></td>
+                    <td x-text="p.strategy || '—'"></td>
+                    <td class="ctr mono" x-text="fmt(p.qty)"></td>
+                    <td class="ctr mono" x-text="num(p.entry_price)"></td>
+                    {# ⛔ NO LIVE PRICE EXISTS IN THIS BUILD. The compact `n/a`
+                       marker is Screen 06's approved treatment for exactly
+                       these three fields in exactly this kind of cell —
+                       ⛔ never a 0, never a blank that reads as measured — and
+                       the full reason is on the tooltip and in the note under
+                       the table. #}
+                    <td class="ctr"><span class="lav-nolive"
+                        title="Needs LTP — Pending Broker Source (G4); this dashboard has no live price">n/a</span></td>
+                    <td class="ctr"><span class="lav-nolive"
+                        title="Needs LTP — Pending Broker Source (G4); this dashboard has no live price">n/a</span></td>
+                    <td class="ctr"><span class="lav-nolive"
+                        title="Needs LTP — Pending Broker Source (G4); this dashboard has no live price">n/a</span></td>
+                    <td class="ctr mono" x-text="num(p.sl)"></td>
+                    <td class="ctr mono" x-text="num(p.tgt)"></td>
+                    <td class="ctr">
+                      <span class="lav-st lav-st-success" x-text="p.status"></span>
+                    </td>
+                  </tr>
+                </template>
+                <tr x-show="!positions().length" x-cloak>
+                  <td colspan="10" class="lav-empty">No open positions.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="lav-note" x-text="posNote()"></p>
+          <div class="lav-foot">
+            <a class="panel-link lav-more" href="/positions">View All Positions →</a>
+          </div>
+        </section>
+
+        <section class="panel lav-cap">
+          <h3 class="panel-title">CAPITAL UTILIZATION</h3>
+          <div class="lav-cap-body" x-show="capital().available_basis" x-cloak>
+            <svg class="lav-donut" viewBox="0 0 42 42" aria-hidden="true">
+              <circle class="lav-donut-bg" cx="21" cy="21" r="15.9155"
+                      fill="none" stroke-width="6"></circle>
+              {# ⛔ x-html on a group node, never an x-for loop here — header note. #}
+              <g x-html="donutMarkup()"></g>
+            </svg>
+            <ul class="lav-cap-legend">
+              <li>
+                <i class="dot lav-arc-used"></i>
+                <span class="lav-lg-c"
+                      x-text="'Utilized (' + num(capital().utilized_pct) + '%)'"></span>
+                <span class="lav-lg-n mono" x-text="money(capital().utilized)"></span>
+              </li>
+              <li>
+                <i class="dot lav-arc-free"></i>
+                <span class="lav-lg-c"
+                      x-text="'Available (' + num(capital().available_pct) + '%)'"></span>
+                <span class="lav-lg-n mono" x-text="money(capital().available)"></span>
+              </li>
+              <li class="lav-cap-total">
+                <span class="lav-lg-c">Total Capital:</span>
+                <span class="lav-lg-n mono" x-text="money(capital().total)"></span>
+              </li>
+            </ul>
+          </div>
+          <div class="lav-d-empty" x-show="!capital().available_basis" x-cloak>
+            <span class="lav-ni">NOT INSTRUMENTED</span>
+            <span x-text="capital().reason || ''"></span>
+          </div>
+          <p class="lav-note" x-text="capNote()"></p>
+        </section>
+      </div>
+    </div>
+
+    {# ── RIGHT RAIL — ALERTS BANNER · MARKET PULSE · LIVE MODE · EXPORT ──── #}
+    <aside class="lav-rail">
+      <section class="panel lav-alerts">
+        <h3 class="panel-title">ALERTS BANNER
+          <span class="panel-sub" x-text="alertsSub()"></span>
+        </h3>
+        {# ⭐ The cards and the empty state share ONE region so the approved
+           two-card footprint is held either way — ⛔ the card geometry does not
+           disappear on a day with no alerts. #}
+        <div class="lav-alert-list">
+        <template x-for="a in alertCards()" :key="a.ts + a.title">
+          <div class="lav-alert" :class="a.kind === 'WARNING' ? 'is-warn' : 'is-crit'">
+            <div class="lav-alert-top">
+              <span class="lav-alert-k">
+                <i class="lav-alert-i" aria-hidden="true"
+                   x-text="a.kind === 'WARNING' ? '⚠' : '⊗'"></i><span x-text="a.kind"></span>
+              </span>
+              <span class="lav-alert-t mono" x-text="a.time"></span>
+            </div>
+            <div class="lav-alert-body">
+              <div class="lav-alert-b">
+                <span class="lav-alert-title" x-text="a.title"></span>
+                <span class="lav-alert-d" x-text="a.detail || ('severity ' + a.severity)"></span>
+              </div>
+              <a class="rt-btn lav-alert-view" href="/alerts">View</a>
+            </div>
+          </div>
+        </template>
+        <div class="lav-d-empty" x-show="!alertCards().length" x-cloak>
+          No critical alerts or warnings today.
+        </div>
+        </div>
+        <div class="lav-foot">
+          <a class="panel-link lav-more" href="/alerts">View All Alerts →</a>
+        </div>
+      </section>
+
+      <section class="panel lav-pulse">
+        <h3 class="panel-title">MARKET PULSE <span class="lav-live-tag">(LIVE)</span>
+          <span class="panel-sub" x-text="pulseSub()"></span>
+        </h3>
+        <template x-for="s in pulseSeries()" :key="s.key">
+          <div class="lav-pl-row">
+            <span class="lav-pl-l" x-text="s.label"></span>
+            <span class="lav-pl-body">
+              <b class="lav-pl-v" x-text="s.rate.toFixed(2)"></b>
+              <span class="lav-pl-d" :class="deltaClass(s.delta)"
+                    x-text="deltaText(s.delta)"></span>
+              <svg class="lav-spark" viewBox="0 0 120 34" preserveAspectRatio="none"
+                   aria-hidden="true">
+                <polyline :points="sparkPts(s.spark)" :class="'lav-spk-' + s.key"
+                          fill="none" stroke-width="1.6"
+                          vector-effect="non-scaling-stroke"></polyline>
+              </svg>
+            </span>
+          </div>
+        </template>
+        <div class="lav-foot">
+          <a class="panel-link lav-more" href="/execution">View Full Pulse →</a>
+        </div>
+      </section>
+
+      <section class="panel lav-mode">
+        <h3 class="panel-title">LIVE MODE</h3>
+        {# ⛔ A DISPLAY CONTROL. It starts and stops THIS PAGE's polling; this
+           dashboard has no write path (L4) and nothing here reaches the
+           trading system. #}
+        <div class="lav-mode-btns">
+          <button class="lav-mode-b" type="button" :class="live ? 'is-on' : ''"
+                  @click="setLive(true)">
+            <span class="lav-mode-i" aria-hidden="true">((•))</span>
+            <span class="lav-mode-t"><span>LIVE MODE</span><b>ON</b></span>
+          </button>
+          <button class="lav-mode-b" type="button" :class="!live ? 'is-off' : ''"
+                  @click="setLive(false)">
+            <span class="lav-mode-i" aria-hidden="true">❙❙</span>
+            <span class="lav-mode-t"><span>LIVE MODE</span><b>OFF</b></span>
+          </button>
+        </div>
+        <p class="lav-note" x-text="modeNote()"></p>
+      </section>
+
+      <section class="panel lav-export">
+        <h3 class="panel-title">EXPORT</h3>
+        <p class="lav-note">Download live activity data.</p>
+        <a class="btn-primary lav-xbtn" :href="exportUrl()">⇩ Export to XLSX</a>
+      </section>
+    </aside>
+  </div>
+
+  <div class="lav-foot-note">
+    <span class="lav-i">ⓘ</span>
+    <span x-text="footNote()"></span>
+    <span class="lav-conn">
+      <i class="lav-dot" :class="live ? 'lav-dot-on' : 'lav-dot-off'"></i><span
+        x-text="live ? 'Live data connected' : 'Live updates paused'"></span>
+    </span>
+  </div>
 </div>
+
 <script>
-function activityPage() {
-  return Object.assign(pageBase("/api/activity"), {
-    filter: "",
-    shown() { const rows = this.data.rows || []; return this.filter ? rows.filter(e => e.type === this.filter) : rows; },
-    perMin(t) {
-      const rows = (this.data.rows || []).filter(e => e.type === t);
-      if (rows.length < 2) return rows.length;
-      const ts = rows.map(e => Date.parse(String(e.ts))).filter(n => !isNaN(n));
-      if (ts.length < 2) return rows.length;
-      const mins = Math.max(1, (Math.max(...ts) - Math.min(...ts)) / 60000);
-      return (rows.length / mins).toFixed(1);
+function liveActivityPage() {
+  return Object.assign(
+    colDragMixin(),pageBase("/api/live-activity/screen"),
+    (typeof tableMixin === "function" ? tableMixin({defaultSize: 400, pageSizes: [400]}) : {}), {
+
+    /* ── the six approved KPI cards, in the approved order ─────────────────── */
+    KPIS: [
+      { key: "current_time", label: "CURRENT TIME", tone: "info",
+        ico: '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6.2"/><path d="M8 4.3V8l2.6 1.6"/></svg>' },
+      { key: "signals_today", label: "SIGNALS TODAY", tone: "purple",
+        ico: '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="1.6"/><path d="M4.4 11.6a5 5 0 0 1 0-7.2M11.6 4.4a5 5 0 0 1 0 7.2"/></svg>' },
+      { key: "orders_today", label: "ORDERS TODAY", tone: "info",
+        ico: '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 1.6h5l3 3v9.8H4z"/><path d="M9 1.6v3h3M6 8h4M6 10.6h4"/></svg>' },
+      { key: "open_positions", label: "OPEN POSITIONS", tone: "warn",
+        ico: '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="5" width="12" height="8" rx="1.4"/><path d="M6 5V3.6h4V5"/></svg>' },
+      { key: "current_mtm", label: "CURRENT MTM", tone: "pos",
+        ico: '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 3h6M5 6h6M5.6 3c2.6 0 3.4 1.4 3.4 2.6S8 8.4 5.6 8.4h-.6L10 13.4"/></svg>' },
+      { key: "trading_status", label: "TRADING STATUS", tone: "pos",
+        ico: '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 1.6l5.4 2v4c0 3.4-2.4 5.9-5.4 6.8-3-.9-5.4-3.4-5.4-6.8v-4z"/><path d="M5.2 8h1.6l1 1.8L9 6.6l.7 1.4h1.3"/></svg>' },
+    ],
+
+    /* the nine approved FEED toolbar chips, in the approved order */
+    CHIPS: [
+      { key: "All", label: "All" }, { key: "Signals", label: "Signals" },
+      { key: "Orders", label: "Orders" }, { key: "Positions", label: "Positions" },
+      { key: "Trades", label: "Trades" }, { key: "Risk", label: "Risk" },
+      { key: "Capital", label: "Capital" }, { key: "System", label: "System" },
+      { key: "Alerts", label: "Alerts" },
+    ],
+
+    /* the eight approved FEED FILTERS tiles (the PNG's 4 x 2 grid) */
+    TILES: [
+      { key: "All", label: "All",
+        ico: '<svg viewBox="0 0 16 16" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 1.6h5l3 3v9.8H4z"/><path d="M9 1.6v3h3M6 8.4h4M6 11h4"/></svg>' },
+      { key: "Signals", label: "Signals",
+        ico: '<svg viewBox="0 0 16 16" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="1.6"/><path d="M4.4 11.6a5 5 0 0 1 0-7.2M11.6 4.4a5 5 0 0 1 0 7.2"/></svg>' },
+      { key: "Orders", label: "Orders",
+        ico: '<svg viewBox="0 0 16 16" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="1.8" width="10" height="12.4" rx="1.4"/><path d="M5.6 5.4h4.8M5.6 8h4.8M5.6 10.6h3"/></svg>' },
+      { key: "Positions", label: "Positions",
+        ico: '<svg viewBox="0 0 16 16" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2" width="12" height="12" rx="2"/><path d="M5.4 8.2l1.8 1.8 3.4-3.6"/></svg>' },
+      { key: "Trades", label: "Trades",
+        ico: '<svg viewBox="0 0 16 16" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6"/><path d="M8 4.6v5M5.8 7.4L8 9.6l2.2-2.2"/></svg>' },
+      { key: "System", label: "System",
+        ico: '<svg viewBox="0 0 16 16" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2.6" width="12" height="4.4" rx="1.2"/><rect x="2" y="9" width="12" height="4.4" rx="1.2"/><path d="M4.6 4.8h.01M4.6 11.2h.01"/></svg>' },
+      { key: "Alerts", label: "Alerts",
+        ico: '<svg viewBox="0 0 16 16" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 2.4L14.2 13.4H1.8z"/><path d="M8 6.4v3M8 11.4v.01"/></svg>' },
+      { key: "Reset", label: "Reset",
+        ico: '<svg viewBox="0 0 16 16" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M13 8a5 5 0 1 1-1.6-3.7"/><path d="M13 2.6V5h-2.4"/></svg>' },
+    ],
+
+    /* the four approved RECENT WINNERS / LOSERS cards, in the approved order */
+    WL_CARDS: [
+      { key: "last_profit", label: "LAST PROFIT", tone: "pos" },
+      { key: "last_loss", label: "LAST LOSS", tone: "neg" },
+      { key: "best_trade", label: "BEST TRADE TODAY", tone: "pos" },
+      { key: "worst_trade", label: "WORST TRADE TODAY", tone: "neg" },
+    ],
+
+    STAGE_ICON: {
+      signal:     '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="1.5"/><path d="M4.6 11.4a4.8 4.8 0 0 1 0-6.8M11.4 4.6a4.8 4.8 0 0 1 0 6.8"/></svg>',
+      validation: '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M8 1.8l5 1.9v3.8c0 3.1-2.2 5.4-5 6.2-2.8-.8-5-3.1-5-6.2V3.7z"/><path d="M5.8 7.9l1.5 1.5 3-3.1"/></svg>',
+      risk:       '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M8 1.8l5 1.9v3.8c0 3.1-2.2 5.4-5 6.2-2.8-.8-5-3.1-5-6.2V3.7z"/><path d="M8 5.6v3M8 10.6v.01"/></svg>',
+      capital:    '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.6" y="2.6" width="10.8" height="10.8" rx="2.2"/><path d="M8 5.6a2.4 2.4 0 1 0 0 4.8 2.4 2.4 0 0 0 0-4.8z"/></svg>',
+      order:      '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.6 4.4h7.2M2.6 8h5.4M2.6 11.6h3.6"/><path d="M10.2 8.6l2.8 2.8M13 8.6l-2.8 2.8"/></svg>',
+      fill:       '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.6" y="2.6" width="10.8" height="10.8" rx="2.2"/><path d="M5.6 8.2l1.7 1.7 3.3-3.5"/></svg>',
     },
-    typeClass(t) {
-      return {SIGNAL:"sev-INFO",ORDER:"sev-INFO",TRADE:"sev-INFO",SYSTEM:"sev-WARNING",
-              CAPITAL:"sev-INFO",RISK:"sev-CRITICAL"}[t] || "sev-INFO";
+
+    /* the approved six columns, in the approved order. ⚠️ "Strategy / Symbol"
+       is ONE approved heading in the binding design, not two fields — the
+       Symbol-before-Strategy rule applies to ACTIVE POSITIONS, where the design
+       does draw them as two columns, and it is honoured there. */
+    /* ⭐ `w` is a FIXED-LAYOUT width bound to the COLUMN KEY, not to a position,
+       so a drag cannot hand Time's 78px to Details. Time, Category and Status
+       are the three whose content is a known short shape; the three free-text
+       columns share whatever is left and ellipsis with a tooltip.
+       🔴 Without this the Details cell alone pushed the approved STATUS traffic
+       light out of the panel and into a horizontal scroll (caught at 1920). */
+    DEFAULT_COLS: [
+      { key: "time",             label: "Time", w: "80px" },
+      { key: "category",         label: "Category", ctr: true, w: "98px" },
+      { key: "event",            label: "Event" },
+      { key: "strategy_symbol",  label: "Strategy / Symbol" },
+      { key: "details",          label: "Details" },
+      { key: "status",           label: "Status", ctr: true, w: "94px" },
+    ],
+    cols: [],
+    COLS_KEY: "screen18.liveactivity.colOrder.v1",
+
+    cat: "All",
+    live: true,
+
+    init() {
+      this.initCols();
+      this.load();
+    },
+
+    /* ── the ONE feed filter both controls bind to ───────────────────────── */
+    setCat(key) {
+      this.cat = (key === "Reset") ? "All" : key;
+      this.load();
+    },
+    tileActive(key) {
+      if (key === "Reset") return false;
+      return this.cat === key;
+    },
+    setLive(on) {
+      this.live = !!on;
+      if (this.live) this.load();
+    },
+
+    qs() {
+      const p = new URLSearchParams();
+      if (this.cat && this.cat !== "All") p.set("category", this.cat);
+      const s = p.toString();
+      return s ? "?" + s : "";
+    },
+    exportUrl() { return "/api/export/live-activity" + this.qs(); },
+
+    /* ── payload accessors ───────────────────────────────────────────────── */
+    rows() { return this.data.records || []; },
+    stages() { return ((this.data.pipeline || {}).stages) || []; },
+    strategies() { return ((this.data.strategy_activity || {}).rows) || []; },
+    unattributedNote() {
+      const s = this.data.strategy_activity || {};
+      const o = s.unattributed_orders || 0, t = s.unattributed_trades || 0;
+      if (!o && !t) return "";
+      const bits = [];
+      if (o) bits.push(this.fmt(o) + " order(s)");
+      if (t) bits.push(this.fmt(t) + " position(s)");
+      return bits.join(" and ") + " today have no trade row and cannot be "
+             + "attributed to a strategy, so they are not in this table.";
+    },
+    sysEvents() { return ((this.data.system_events || {}).rows) || []; },
+    /* ⛔ NO SILENT CAP: the panel shows the approved four and says how many
+       exist, so a truncated list can never read as a quiet day. */
+    sysEventsSub() {
+      const s = this.data.system_events || {};
+      if (s.total === undefined) return "";
+      return s.total > s.shown ? "(showing " + s.shown + " of " + this.fmt(s.total) + ")"
+                               : "(" + this.fmt(s.total) + ")";
+    },
+    alertCards() { return ((this.data.alerts_banner || {}).cards) || []; },
+    pulseSeries() { return ((this.data.market_pulse || {}).series) || []; },
+    positions() { return ((this.data.active_positions || {}).rows) || []; },
+    capital() { return this.data.capital || {}; },
+    wl() { return this.data.winners_losers || {}; },
+    kpi() { return this.data.kpi || {}; },
+
+    uninstrumentedSysEvents() {
+      const all = this.data.system_event_types || [];
+      const have = this.data.instrumented_system_event_types || [];
+      return all.filter(t => have.indexOf(t) === -1);
+    },
+
+    /* ── formatting ──────────────────────────────────────────────────────── */
+    fmt(n) { return (n === null || n === undefined) ? "—" : Number(n).toLocaleString("en-IN"); },
+    num(v) {
+      if (v === null || v === undefined || v === "") return "—";
+      return Number(v).toLocaleString("en-IN", {minimumFractionDigits: 2,
+                                                maximumFractionDigits: 2});
+    },
+    money(v) {
+      if (v === null || v === undefined || v === "") return "—";
+      const n = Number(v);
+      return (n < 0 ? "-₹" : "₹") + Math.abs(n).toLocaleString("en-IN",
+        {minimumFractionDigits: 2, maximumFractionDigits: 2});
+    },
+    hhmmss(ts) { return ts ? String(ts).replace("T", " ").slice(11, 19) : ""; },
+    cell(r, k) { const v = r[k]; return (v === null || v === undefined || v === "") ? "—" : v; },
+    /* the three free-text columns ellipsis in a fixed layout, so the full value
+       is always reachable on the cell's own tooltip — ⛔ never lost */
+    cellTitle(r, k) {
+      if (k !== "details" && k !== "event" && k !== "strategy_symbol") return "";
+      return r[k] || "";
+    },
+    /* ⭐ composed ONCE on the server and read here, so the cell, the sort and
+       the export cannot drift apart. */
+    strategySymbol(r) { return r.strategy_symbol || "—"; },
+
+    /* ── KPI ─────────────────────────────────────────────────────────────── */
+    kpiValue(k) {
+      const d = this.kpi();
+      if (k === "current_time") return d.current_time || "—";
+      if (k === "signals_today") return this.fmt(d.signals_today);
+      if (k === "orders_today") return this.fmt(d.orders_today);
+      if (k === "open_positions") return this.fmt(d.open_positions);
+      /* ⛔ NEVER a number — no live price exists in this dashboard */
+      if (k === "current_mtm") return "NOT INSTRUMENTED";
+      if (k === "trading_status") return d.trading_status || "—";
+      return "—";
+    },
+    kpiTone(k) {
+      const d = this.kpi();
+      if (k === "current_mtm") return "ni";
+      if (k === "trading_status") return d.trading_status_tone || "info";
+      if (k === "current_time") return "info";
+      return "plain";
+    },
+    kpiSubClass(k) {
+      const d = this.kpi();
+      if (k === "signals_today") return this.deltaClass(d.signals_delta_pct);
+      if (k === "orders_today") return this.deltaClass(d.orders_delta_pct);
+      return "";
+    },
+    kpiSub(k) {
+      const d = this.kpi();
+      if (k === "current_time") return (d.current_date || "—") + " | " + (d.weekday || "");
+      /* ⛔ every percentage carries its base */
+      if (k === "signals_today") return this.vsText(d.signals_delta_pct, d.signals_yesterday, d.compare_date);
+      if (k === "orders_today") return this.vsText(d.orders_delta_pct, d.orders_yesterday, d.compare_date);
+      if (k === "open_positions") return "NOT INSTRUMENTED vs yesterday — no stored history";
+      if (k === "current_mtm") {
+        /* ⭐ the REALISED figure is real and is named as itself; ⛔ it is never
+           shown in the MTM card's place, only beside the reason MTM is absent. */
+        return "MTM needs a live price this dashboard does not have · "
+               + "Realised today: " + this.money(d.realized_pnl_today);
+      }
+      if (k === "trading_status") return d.trading_status_basis || "—";
+      return "";
+    },
+    vsText(pct, base, when) {
+      if (pct === null || pct === undefined) {
+        return "no comparison — " + (when || "yesterday") + " had " + this.fmt(base);
+      }
+      const arrow = pct > 0 ? "↑ " : (pct < 0 ? "↓ " : "");
+      return arrow + Math.abs(pct).toFixed(2) + "% vs yesterday (" + this.fmt(base) + ")";
+    },
+    deltaClass(v) {
+      if (v === null || v === undefined || Number(v) === 0) return "";
+      return Number(v) > 0 ? "lav-up" : "lav-down";
+    },
+    deltaText(v) {
+      if (v === null || v === undefined) return "";
+      const n = Number(v);
+      if (n === 0) return "→ 0.00";
+      return (n > 0 ? "↑ " : "↓ ") + Math.abs(n).toFixed(2);
+    },
+
+    /* ── panels ──────────────────────────────────────────────────────────── */
+    pipelineBase() {
+      const p = this.data.pipeline || {};
+      return p.base ? "base: " + p.base : "";
+    },
+    wlBase() {
+      const w = this.wl();
+      return w.base ? "(" + this.fmt(w.closed_today) + " closed today)" : "";
+    },
+    wlAmount(k) {
+      const c = (this.wl() || {})[k];
+      if (!c) return "—";
+      const n = Number(c.amount);
+      return (n > 0 ? "+" : (n < 0 ? "-" : "")) + "₹" +
+             Math.abs(n).toLocaleString("en-IN", {minimumFractionDigits: 0,
+                                                  maximumFractionDigits: 0});
+    },
+    wlSymbol(k) {
+      const c = (this.wl() || {})[k];
+      return c ? (c.symbol || "—") : "No qualifying close today";
+    },
+    wlTime(k) {
+      const c = (this.wl() || {})[k];
+      return c ? (c.time || "—") : "";
+    },
+    alertsSub() {
+      const a = this.data.alerts_banner || {};
+      if (!a.base) return "";
+      return this.fmt(a.critical) + " critical · " + this.fmt(a.warnings) + " warning";
+    },
+    pulseSub() {
+      const p = this.data.market_pulse || {};
+      if (!p.window_min) return "";
+      return "last " + p.window_min + " min, as of " + (p.as_of || "—");
+    },
+    posBase() {
+      const p = this.data.active_positions || {};
+      return p.count === undefined ? "" : "(" + this.fmt(p.count) + " open)";
+    },
+    posNote() {
+      const p = this.data.active_positions || {};
+      const u = p.unavailable || {};
+      return "Base: " + (p.base || "") + ". LTP, MTM (₹) and MTM (%) are " +
+             (u.reason || "unavailable") + " — this dashboard has no live price.";
+    },
+    capNote() {
+      const c = this.capital();
+      let s = c.base ? "Base: " + c.base + "." : "";
+      if (c.unpriced) s += " " + c.unpriced + " open position(s) have no filled entry price and are not in the total.";
+      if (c.over_note) s += " ⚠ " + c.over_note + ".";
+      return s;
+    },
+    modeNote() {
+      const l = this.data.live || {};
+      if (!this.live) return "Live updates paused — the wall is frozen at " +
+                             (this.hhmmss(this.data.generated_at) || "—") + ".";
+      return "Currently connected to live data stream — refreshing every " +
+             Math.round((l.poll_ms || 60000) / 1000) + "s. " + (l.note || "");
+    },
+    footNote() {
+      const d = this.data;
+      const l = d.live || {};
+      return "All times are in IST (Asia/Kolkata) exactly as stored, and this page "
+             + "auto-updates every " + Math.round((l.poll_ms || 60000) / 1000)
+             + " seconds. " + (d.note || "");
+    },
+    emptyText() {
+      return this.cat === "All" ? "No activity recorded today."
+                                : "No " + this.cat.toLowerCase() + " activity today.";
+    },
+    showing() {
+      const n = this.rows().length;
+      const total = this.data.total_events || 0;
+      if (!n) return "Showing 0 to 0 of 0 events";
+      return "Showing 1 to " + this.fmt(n) + " of " + this.fmt(n) + " events"
+             + (n === total ? "" : " (" + this.fmt(total) + " today, all categories)");
+    },
+
+    /* ── charts ──────────────────────────────────────────────────────────── */
+    sparkPts(series) {
+      const s = series || [];
+      if (!s.length) return "";
+      const max = Math.max.apply(null, s.concat([1]));
+      const step = s.length > 1 ? 120 / (s.length - 1) : 120;
+      return s.map((v, i) => (i * step).toFixed(1) + "," +
+                             (32 - 30 * (v / max)).toFixed(1)).join(" ");
+    },
+    donutMarkup() {
+      const c = this.capital();
+      if (!c.available_basis) return "";
+      const used = Math.max(0, Math.min(100, Number(c.utilized_pct) || 0));
+      const free = Math.max(0, 100 - used);
+      let out = "", off = 25;      /* 25 = start at 12 o'clock */
+      [["used", used], ["free", free]].forEach(function (pair) {
+        const cls = pair[0], p = pair[1];
+        out += '<circle class="lav-arc lav-arc-' + cls + '" cx="21" cy="21"'
+             + ' r="15.9155" fill="none" stroke-width="6"'
+             + ' stroke-dasharray="' + p.toFixed(3) + ' ' + (100 - p).toFixed(3) + '"'
+             + ' stroke-dashoffset="' + off.toFixed(3) + '"></circle>';
+        off = (off - p + 100) % 100;
+      });
+      return out;
+    },
+
+    /* ── column order: the Screens 04/05/07/11/12/13/14/15 convention, reused ─ */
+    initCols() {
+      this.cols = this.DEFAULT_COLS.slice();
+      let saved = null;
+      try { saved = JSON.parse(window.localStorage.getItem(this.COLS_KEY) || "null"); }
+      catch (e) { saved = null; }
+      if (!Array.isArray(saved) || !saved.length) return;
+      const byKey = {};
+      this.DEFAULT_COLS.forEach(c => { byKey[c.key] = c; });
+      const next = [];
+      saved.forEach(k => { if (byKey[k] && next.indexOf(byKey[k]) === -1) next.push(byKey[k]); });
+      this.DEFAULT_COLS.forEach(c => { if (next.indexOf(c) === -1) next.push(c); });
+      if (next.length === this.DEFAULT_COLS.length) this.cols = next;
+    },
+    saveCols() {
+      try { window.localStorage.setItem(this.COLS_KEY, JSON.stringify(this.cols.map(c => c.key))); }
+      catch (e) {}
+    },
+    isDefaultOrder() {
+      return this.cols.length === this.DEFAULT_COLS.length
+             && this.cols.every((c, i) => c.key === this.DEFAULT_COLS[i].key);
+    },
+    resetCols() {
+      this.cols = this.DEFAULT_COLS.slice();
+      try { window.localStorage.removeItem(this.COLS_KEY); } catch (e) {}
+    },
+    headClick(key) {
+      if (Date.now() - this._dragEndAt < 250) return;   /* drag, not a sort click */
+      this.tSort(key);
     },
   });
 }

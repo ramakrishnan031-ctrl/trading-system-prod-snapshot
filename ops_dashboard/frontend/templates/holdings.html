@@ -1,70 +1,829 @@
 {% extends "base.html" %}
-{% from "components.html" import kpi_row, kpi_card, two_state_panel, export_button %}
 {% block title %}AlgoCore Systems — Holdings{% endblock %}
 {% block nav_holdings %}active{% endblock %}
 {% block content %}
-{# G5d broker-first reconciliation (L3: Broker→System→Delta). The SYSTEM/expected
-   side (gtt_state mirror + trade context) renders fully. The BROKER side + Delta +
-   Reconciliation Status are UNAVAILABLE (two_state_panel, G-1/P1) — the P1 broker-
-   reconcile table is not live (Phase A), so we NEVER fabricate a broker qty or a
-   delta. Reconciliation activates when P1 ships. #}
-<div x-data="holdingsPage()" x-init="load()" @ops-refresh.window="load()">
-  {% call kpi_row() %}
-    {{ kpi_card("System Holdings", "data.count || 0", tone="info") }}
-    {{ kpi_card("Broker Holdings", "'—'", tone="info") }}
-    {{ kpi_card("Mismatches", "'—'", tone="info") }}
-  {% endcall %}
+{#  SCREEN 22 — HOLDINGS.  `gui/22. Holdings.png` + `.txt` are BINDING: the six
+    KPI cards · FILTERS · HOLDINGS RECONCILIATION TABLE · DELTA ANALYSIS ·
+    BROKER SNAPSHOT · RECONCILIATION TIMELINE · POSITIONS BY PRODUCT ·
+    HOLDINGS HEALTH SUMMARY · DELIVERY PORTFOLIO · ORPHAN DETECTOR ·
+    SIDE-BY-SIDE COMPARISON · HOLDINGS CATEGORIES · REJECTION/QUALITY INSIGHTS ·
+    EXPORT.
 
-  <section class="panel">
-    <h2 class="panel-title">Holdings — Broker-First Reconciliation</h2>
-    <div class="info-banner">Broker is the final source of truth · System = expected state · Delta = difference. The broker side activates when P1 (eod_broker_reconciliation) ships.</div>
+        BROKER = FINAL SOURCE OF TRUTH · SYSTEM = EXPECTED STATE
+        DELTA  = THE DIFFERENCE BETWEEN THEM
 
-    <!-- BROKER side + Delta + Reconciliation Status = honest UNAVAILABLE -->
-    {% call two_state_panel("false", reason="Broker Qty / Delta / Reconciliation Status — Pending Broker Source (G4/P1)") %}<span></span>{% endcall %}
+    ⭐ THE BROKER SIDE IS REAL: `position_reconciliation`, the per-symbol
+       broker-vs-system table the 15:45 `reconcile_positions` cron writes.
+    ⛔⛔ AND IT READS `kite.positions()` ONLY — never `kite.holdings()` — so it
+       is BLIND to delivery that has settled into the holdings book (T+1). The
+       footer, the delivery panel and the orphan detector all say so. A matched
+       verdict is NOT a statement that the delivery book is flat.
+    ⛔⛔ THERE IS NO LIVE PRICE IN THIS DASHBOARD, so Current Price, Market
+       Value, Unrealized P&L, Total Value and Total P&L are gaps with reasons.
+       ⛔ The entry price is NOT substituted — it would make every unrealised
+       P&L exactly zero, which reads as a measurement. The measured value AT
+       COST is shown beside them under its own name, exactly as the artwork's
+       own SIDE-BY-SIDE panel already distinguishes "Market Value" from
+       "Expected Value".
 
-    <div class="filters" style="margin-top:10px">{{ export_button("Export Holdings") }}</div>
+    ⛔ An x-if TEMPLATE MUST HAVE EXACTLY ONE ROOT ELEMENT — two siblings make
+       Alpine render only the first, silently blanking every "no value" cell.
+    ⛔ An Alpine x-for inside an SVG renders nothing; repeated SVG children go
+       through `x-html` on a group node.  #}
+<div class="hld-page" x-data="holdingsPage()" x-init="init()"
+     @ops-refresh.window="load()">
 
-    <template x-if="data.rows && data.rows.length > 0">
-      <div class="tbl-scroll">
-      <table class="cap-table">
-        <thead><tr>
-          <th>Trade Date</th><th>Time</th><th>Strategy</th><th>Symbol</th><th>Product</th><th>System Qty</th>
-          <th>Avg Price</th><th>Broker Qty</th><th>Delta Qty</th><th>Recon Status</th>
-          <th>SL trig/limit</th><th>TGT trig/limit</th><th>Review</th>
-        </tr></thead>
-        <tbody>
-          <template x-for="h in data.rows" :key="h.gtt_id">
-            <tr>
-              <td class="ev-ts" x-text="h.created_at ? String(h.created_at).slice(0,10) : '—'"></td>
-              <td class="ev-ts" x-text="h.created_at ? String(h.created_at).replace('T',' ').slice(11,19) : '—'"></td>
-              <td x-text="h.strategy || '—'"></td>
-              <td x-text="h.symbol || '—'"></td>
-              <td>CNC</td>
-              <td class="cap-num" x-text="h.qty"></td>
-              <td class="cap-num" x-text="dash(h.avg_price)"></td>
-              <td class="cap-num ts-reason" title="Pending Broker Source (G4/P1)">—</td>
-              <td class="cap-num ts-reason" title="Pending Broker Source (G4/P1)">—</td>
-              <td><span class="cap-inert">pending broker</span></td>
-              <td class="cap-num" x-text="dash(h.sl_trigger) + ' / ' + dash(h.sl_limit)"></td>
-              <td class="cap-num" x-text="dash(h.tgt_trigger) + ' / ' + dash(h.tgt_limit)"></td>
-              <td><span x-show="h.needs_review" x-cloak class="cap-inert">REVIEW</span></td>
-            </tr>
-          </template>
-        </tbody>
-      </table>
+  <div class="hld-head">
+    <div class="hld-head-l">
+      <h1 class="hld-title">HOLDINGS</h1>
+      <div class="hld-subline">
+        <span class="hld-sub">Broker-First Reconciliation Center</span>
+        <span class="hld-badge">Broker = Final Source of Truth</span>
       </div>
-    </template>
-
-    <div class="empty-state" x-show="!data.rows || data.rows.length === 0" x-cloak>
-      <div class="es-icon">📦</div>
-      <div class="es-title">No overnight holdings (system side)</div>
-      <div class="es-body">Delivery (CNC) is parked behind Slice 2.5 (<span class="mono">delivery_enabled: false</span>).
-        When a CNC position is protected by an OCO-GTT, its local mirror (<span class="mono">gtt_state</span>)
-        appears here as the SYSTEM side. The broker side + delta light up only when P1 ships — never faked.</div>
     </div>
-  </section>
+    <span class="hld-lastcheck">
+      <span class="hld-lc-l">LAST UPDATED</span>
+      <span class="hld-lc-v mono" x-text="hhmmss(data.generated_at) || '—'"></span>
+    </span>
+  </div>
+
+  {# ── the six approved KPI cards, in the approved order ─────────────────── #}
+  <div class="hld-kpis">
+    <template x-for="k in KPIS" :key="k.key">
+      <section class="panel hld-kpi">
+        <span class="hld-kpi-ico" :class="'hld-ico-' + k.tone" x-html="k.ico"></span>
+        <span class="hld-kpi-body">
+          <span class="hld-kpi-l" x-text="k.label"></span>
+          <b class="hld-kpi-v" :class="kpiMeasured(k) ? '' : 'hld-ni'"
+             :title="kpiTitle(k)" x-text="kpiVal(k)"></b>
+          <span class="hld-kpi-s" :class="'hld-v-' + k.tone" x-text="kpiSub(k)"></span>
+        </span>
+      </section>
+    </template>
+  </div>
+
+  <div class="hld-main">
+    <div class="hld-left">
+
+      {# ── FILTERS — the SAME control language as Screens 03/04/05/13/14/19/20 #}
+      <section class="panel hld-filters">
+        {# ⭐ EVERY FILTER RESETS `tPage`. Filtering while on page 3 of an
+           unfiltered 28 otherwise leaves `tPage` past the end of the smaller
+           filtered set, and the table renders "Showing 21 to 21 of 21" with a
+           single row — which reads as "the filter matched almost nothing".
+           ⛔ The reset canNOT live inside `load()`: the shared refresh
+           (`@ops-refresh.window="load()"`, above) calls it on every poll, and
+           that would yank a reader back to page 1 mid-read. #}
+        <div class="flt-row">
+          <label class="flt-field">
+            <span class="flt-k">Product</span>
+            <select class="sel" x-model="f.product" @change="tPage = 1; load()">
+              <option value="">All Products</option>
+              <template x-for="p in productOptions()" :key="p.key">
+                <option :value="p.key" x-text="p.label"></option>
+              </template>
+            </select>
+          </label>
+          <label class="flt-field">
+            <span class="flt-k">Status</span>
+            <select class="sel" x-model="f.status" @change="tPage = 1; load()">
+              <option value="">All Status</option>
+              <template x-for="s in statusOptions()" :key="s">
+                <option :value="s" x-text="s"></option>
+              </template>
+            </select>
+          </label>
+          <label class="flt-field">
+            <span class="flt-k">Source</span>
+            <select class="sel" x-model="f.source" @change="tPage = 1; load()">
+              <option value="">All Sources</option>
+              <template x-for="s in sourceOptions()" :key="s">
+                <option :value="s" x-text="s"></option>
+              </template>
+            </select>
+          </label>
+          <label class="flt-field">
+            {# ⭐ the STRATEGY's YAML intent — the SAME value Screens 19/20 use #}
+            <span class="flt-k">Trade Type</span>
+            <select class="sel" x-model="f.trade_type" @change="tPage = 1; load()">
+              <option value="">All Types</option>
+              <template x-for="t in ttOptions()" :key="t">
+                <option :value="t" x-text="t"></option>
+              </template>
+            </select>
+          </label>
+          <label class="flt-field">
+            <span class="flt-k">Search Symbol / Strategy</span>
+            <input type="search" class="sel" x-model="f.symbol"
+                   placeholder="Search Symbol / Strategy"
+                   @change="tPage = 1; load()" @keyup.enter="tPage = 1; load()">
+          </label>
+          <div class="flt-actions">
+            <button class="btn-ghost" type="button" @click="resetFilters()">↻ Reset Filters</button>
+          </div>
+        </div>
+      </section>
+
+      {# ── HOLDINGS RECONCILIATION TABLE ───────────────────────────────────── #}
+      <section class="panel hld-tablep">
+        <div class="hld-panel-head">
+          <h3 class="panel-title">HOLDINGS RECONCILIATION TABLE</h3>
+          <span class="hld-recon-note" :title="reconTitle()" x-text="reconLabel()"></span>
+        </div>
+
+        <div class="hld-tbl-wrap">
+          <table class="cap-table hld-tbl">
+            <thead><tr>
+              <template x-for="c in cols" :key="c.key">
+                <th class="lbl hld-th"
+                    :class="[dragKey === c.key ? 'is-drag' : '',
+                             overKey === c.key ? 'is-over' : '', c.ctr ? 'ctr' : '']"
+                    :style="c.w ? ('width:' + c.w) : ''"
+                    draggable="true" role="button" tabindex="0"
+                    :title="c.label + ' · click to sort, drag to reorder'"
+                    @dragstart="onDragStart(c.key, $event)"
+                    @dragover.prevent="overKey = c.key"
+                    @dragleave="overKey === c.key && (overKey = '')"
+                    @drop.prevent="onDrop(c.key)"
+                    @dragend="onDragEnd()"
+                    @click="headClick(c.key)" @keyup.enter="tSort(c.key)">
+                  <span x-text="c.label"></span><span
+                        class="hld-arrow" x-show="tSortKey === c.key"
+                        x-text="tArrow(c.key)"></span>
+                </th>
+              </template>
+            </tr></thead>
+            <tbody>
+              <template x-for="r in tPaged(rows())" :key="rowKey(r)">
+                <tr>
+                  <template x-for="c in cols" :key="c.key">
+                    <td :class="[c.ctr ? 'ctr' : '', c.num ? 'mono' : '']">
+                      {# ⛔ THE THREE PRICE COLUMNS HAVE NO SOURCE — every row
+                         renders the same marker with the same reason on its
+                         tooltip, so the gap cannot look like a per-row blank. #}
+                      <template x-if="PRICE_COLS.includes(c.key)">
+                        <span class="hld-ni" :title="gap('price').reason">—</span>
+                      </template>
+                      <template x-if="c.key === 'delta_qty'">
+                        <span>
+                          <span x-show="r.delta_qty !== null" class="mono"
+                                :class="deltaClass(r.delta_qty)"
+                                x-text="deltaText(r.delta_qty)"></span>
+                          <span x-show="r.delta_qty === null" class="hld-ni"
+                                :title="r.recon_note || ''">—</span>
+                        </span>
+                      </template>
+                      <template x-if="c.key === 'recon_status'">
+                        <span>
+                          <span x-show="r.recon_status" class="hld-rs"
+                                :class="statusClass(r.recon_status)"
+                                :title="reconCellTitle(r)">
+                            <i class="dot"></i><span x-text="r.recon_status"></span>
+                            <span x-show="r.recon_shared" class="hld-shared"
+                                  title="this verdict is symbol-level and covers every row for this symbol">*</span>
+                          </span>
+                          <span x-show="!r.recon_status" class="hld-ni"
+                                :title="r.recon_note || ''">Not Reconciled</span>
+                        </span>
+                      </template>
+                      <template x-if="c.key === 'source'">
+                        <span class="hld-src" :class="srcClass(r.source)" x-text="r.source"></span>
+                      </template>
+                      <template x-if="c.key === 'display_name'">
+                        <span>
+                          <span x-show="r.display_name" class="hld-nm"
+                                :title="r.display_name" x-text="r.display_name"></span>
+                          <span x-show="!r.display_name" class="hld-ni"
+                                title="no open system trade owns this symbol">—</span>
+                        </span>
+                      </template>
+                      <template x-if="c.key === 'product'">
+                        <span>
+                          <span x-show="r.product" class="hld-prod"
+                                :class="'hld-pr-' + (r.product || '').toLowerCase()"
+                                x-text="r.product"></span>
+                          <span x-show="!r.product" class="hld-ni"
+                                title="no ENTRY order row, so no product was recorded">—</span>
+                        </span>
+                      </template>
+                      <template x-if="!SPECIAL.includes(c.key)">
+                        <span x-text="cell(r, c)"></span>
+                      </template>
+                    </td>
+                  </template>
+                </tr>
+              </template>
+              <tr x-show="!rows().length" x-cloak>
+                <td :colspan="cols.length" class="hld-empty">
+                  No holdings match the current filters.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        {# ⭐ THE ARTWORK'S PAGINATION ROW, verbatim: the count on the left, then
+           `‹ [1] 2 3 ›` with the current page boxed, then the rows-per-page
+           select. ⛔ The page state is `tableMixin`'s existing `tPage` /
+           `tPageSize` — no second pagination model was written, and
+           `tPageSizes` was already [10, 25, 50] and simply never rendered. #}
+        <div class="hld-tbl-foot">
+          <span class="hld-showing" x-text="showing()"></span>
+          <span class="hld-pager">
+            <span class="hld-pg-nav" x-show="tPageCount(rows()) > 1" x-cloak>
+              <button class="hld-pg-b" type="button" :disabled="tPage <= 1"
+                      title="Previous page"
+                      @click="tPage = Math.max(1, tPage - 1)">‹</button>
+              <template x-for="p in pageList()" :key="p">
+                <span>
+                  <button x-show="p !== '…'" class="hld-pg-b"
+                          :class="p === tPage ? 'is-on' : ''" type="button"
+                          @click="tPage = p" x-text="p"></button>
+                  <span x-show="p === '…'" class="hld-pg-gap">…</span>
+                </span>
+              </template>
+              <button class="hld-pg-b" type="button" title="Next page"
+                      :disabled="tPage >= tPageCount(rows())"
+                      @click="tPage = Math.min(tPageCount(rows()), tPage + 1)">›</button>
+            </span>
+            <label class="hld-rpp">
+              <select class="sel" x-model.number="tPageSize" @change="tPage = 1">
+                <template x-for="n in tPageSizes" :key="n">
+                  <option :value="n" x-text="n + ' / page'"></option>
+                </template>
+              </select>
+            </label>
+          </span>
+        </div>
+        <p class="hld-note" x-show="anyShared()" x-cloak>
+          * a symbol-level reconciliation verdict shown on more than one row —
+          the comparison is written per symbol, not per product.</p>
+      </section>
+
+      {# ── PRODUCT · HEALTH · DELIVERY · ORPHANS ───────────────────────────── #}
+      <div class="hld-row2">
+        <section class="panel hld-prodp">
+          <h3 class="panel-title">POSITIONS BY PRODUCT</h3>
+          <div class="hld-pr-body">
+            <svg class="hld-donut" viewBox="0 0 42 42" aria-hidden="true">
+              <circle class="hld-donut-bg" cx="21" cy="21" r="15.9155"
+                      fill="none" stroke-width="6"></circle>
+              <g transform="rotate(-90 21 21)" x-html="productDonut()"></g>
+              <text class="hld-donut-t1" x="21" y="20.5" text-anchor="middle"
+                    x-text="String(productTotal())"></text>
+              <text class="hld-donut-t2" x="21" y="25" text-anchor="middle">Total</text>
+            </svg>
+            <ul class="hld-pr-legend">
+              <template x-for="(s, i) in productSlices()" :key="s.key">
+                <li>
+                  <i class="dot" :class="'hld-pr-c' + i"></i>
+                  <span class="hld-pr-c" x-text="s.label"></span>
+                  <span class="hld-pr-n mono" x-text="fmt(s.n) + ' (' + pct(s.pct) + ')'"></span>
+                </li>
+              </template>
+              <li class="hld-ni" x-show="!productSlices().length" x-cloak>
+                No open system position.</li>
+            </ul>
+          </div>
+          <p class="hld-note" x-show="unknownProduct()" x-cloak
+             x-text="unknownProduct() + ' reconciled symbol(s) have no open system trade, so no product.'"></p>
+        </section>
+
+        <section class="panel hld-healthp">
+          <h3 class="panel-title">HOLDINGS HEALTH SUMMARY</h3>
+          <div class="hld-h-grid">
+            <template x-for="t in healthTiles()" :key="t.label">
+              <div class="hld-h-cell" :class="'hld-h-' + t.tone"
+                   :title="t.measured ? ('base: ' + t.base) : gap('price_mismatch').reason">
+                <span class="hld-h-l" x-text="t.label"></span>
+                <b class="hld-h-n" :class="t.measured ? '' : 'hld-ni'"
+                   x-text="t.measured ? fmt(t.n) : '—'"></b>
+                <span class="hld-h-p" x-text="t.measured ? pct(t.pct) : 'NOT INSTRUMENTED'"></span>
+              </div>
+            </template>
+          </div>
+          <p class="hld-note" x-text="healthBase()"></p>
+        </section>
+
+        <section class="panel hld-delivery">
+          <h3 class="panel-title">DELIVERY PORTFOLIO</h3>
+          <div class="hld-d-grid">
+            <div class="hld-d-cell">
+              <span class="hld-d-l">Total Delivery Value</span>
+              <b class="hld-d-v" :class="delivery().value_at_cost === null ? 'hld-ni' : ''"
+                 :title="'filled qty x filled entry price — ' + gap('price').reason"
+                 x-text="delivery().value_at_cost === null ? '—' : money(delivery().value_at_cost)"></b>
+              <span class="hld-d-s">at cost — no live price</span>
+            </div>
+            <div class="hld-d-cell">
+              <span class="hld-d-l">Unrealized P&amp;L</span>
+              <b class="hld-d-v hld-ni" :title="gap('price').reason">—</b>
+              <span class="hld-d-s">NOT INSTRUMENTED</span>
+            </div>
+            <div class="hld-d-cell">
+              <span class="hld-d-l">Total Positions</span>
+              <b class="hld-d-v" x-text="fmt(delivery().positions)"></b>
+              <span class="hld-d-s">CNC / NRML open now</span>
+            </div>
+            <div class="hld-d-cell">
+              <span class="hld-d-l">Average Holding Days</span>
+              <b class="hld-d-v" :class="delivery().avg_holding_days === null ? 'hld-ni' : ''"
+                 x-text="delivery().avg_holding_days === null ? '—' : (num(delivery().avg_holding_days, 1) + ' Days')"></b>
+              <span class="hld-d-s" x-text="delivery().dated + ' dated position(s)'"></span>
+            </div>
+          </div>
+          <a class="hld-more" href="/positions">View Delivery Portfolio <span>→</span></a>
+        </section>
+
+        <section class="panel hld-orphan">
+          <h3 class="panel-title">ORPHAN DETECTOR</h3>
+          <div class="hld-o-list">
+            <div class="hld-o-cell hld-o-broker">
+              <span class="hld-o-body">
+                <span class="hld-o-l">Broker Position</span>
+                <span class="hld-o-s">Without System Record</span>
+              </span>
+              <b class="hld-o-n" x-text="orphans().broker_without_system.n"></b>
+            </div>
+            <div class="hld-o-cell hld-o-system">
+              <span class="hld-o-body">
+                <span class="hld-o-l">System Position</span>
+                <span class="hld-o-s">Without Broker Record</span>
+              </span>
+              <b class="hld-o-n" x-text="orphans().system_without_broker.n"></b>
+            </div>
+          </div>
+          <p class="hld-note" x-text="orphans().note"></p>
+          <a class="hld-more" href="/positions">View Orphan Details <span>→</span></a>
+        </section>
+      </div>
+
+      {# ── SIDE-BY-SIDE · CATEGORIES · REJECTION INSIGHTS ──────────────────── #}
+      <div class="hld-row3">
+        <section class="panel hld-sbs">
+          <h3 class="panel-title">SIDE-BY-SIDE COMPARISON</h3>
+          <div class="hld-sbs-grid">
+            <div class="hld-sbs-col hld-sbs-b">
+              <span class="hld-sbs-h">BROKER SNAPSHOT</span>
+              <span class="hld-sbs-n" x-text="fmt(sbs().broker.positions) + ' Positions'"></span>
+              <b class="hld-sbs-v hld-ni" :title="gap('price').reason">—</b>
+              <span class="hld-sbs-s">Market Value · NOT INSTRUMENTED</span>
+              <span class="hld-sbs-t mono" x-text="hhmmss(sbs().broker.at) || '—'"></span>
+              <span class="hld-sbs-s" x-text="sbs().broker.at_label"></span>
+            </div>
+            <span class="hld-sbs-vs">VS</span>
+            <div class="hld-sbs-col hld-sbs-s">
+              <span class="hld-sbs-h">SYSTEM SNAPSHOT</span>
+              <span class="hld-sbs-n" x-text="fmt(sbs().system.positions) + ' Positions'"></span>
+              <b class="hld-sbs-v" :class="sbs().system.expected_value === null ? 'hld-ni' : ''"
+                 x-text="sbs().system.expected_value === null ? '—' : money(sbs().system.expected_value)"></b>
+              <span class="hld-sbs-s">Expected Value · at cost</span>
+              <span class="hld-sbs-t mono" x-text="hhmmss(sbs().system.at) || '—'"></span>
+              <span class="hld-sbs-s" x-text="sbs().system.at_label"></span>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel hld-cats">
+          <h3 class="panel-title">HOLDINGS CATEGORIES</h3>
+          <div class="hld-cat-grid">
+            <template x-for="(s, i) in productSlices()" :key="s.key">
+              <div class="hld-cat-cell">
+                <span class="hld-cat-ico" :class="'hld-cat-i' + i" x-html="catIcon(s.key)"></span>
+                <span class="hld-cat-l" :class="'hld-cat-t' + i" x-text="s.label"></span>
+                <b class="hld-cat-n" :class="'hld-cat-t' + i" x-text="fmt(s.n)"></b>
+                <span class="hld-cat-p" x-text="pct(s.pct)"></span>
+              </div>
+            </template>
+            <div class="hld-ni" x-show="!productSlices().length" x-cloak>
+              No open system position to categorise.</div>
+          </div>
+        </section>
+
+        <section class="panel hld-rej">
+          <h3 class="panel-title">REJECTION / QUALITY INSIGHTS
+            <span class="panel-sub">(RELATED)</span></h3>
+          <div class="hld-rej-grid">
+            <div class="hld-rej-cell">
+              <span class="hld-rej-l">Total Signals</span>
+              <b class="hld-rej-v" x-text="fmt(rej().total_signals)"></b>
+            </div>
+            <div class="hld-rej-cell">
+              <span class="hld-rej-l">Accepted</span>
+              <b class="hld-rej-v" x-text="fmt(rej().accepted) + ' (' + pct(rej().accepted_pct) + ')'"></b>
+            </div>
+            <div class="hld-rej-cell">
+              <span class="hld-rej-l">Rejected</span>
+              <b class="hld-rej-v hld-neg"
+                 x-text="fmt(rej().rejected) + ' (' + pct(rej().rejected_pct) + ')'"></b>
+            </div>
+            <div class="hld-rej-cell">
+              <span class="hld-rej-l">Top Rejection Reason</span>
+              <b class="hld-rej-v" :class="rej().top ? '' : 'hld-ni'"
+                 x-text="rej().top ? rej().top.label : '—'"></b>
+              <span class="hld-rej-s" x-show="rej().top" x-cloak
+                    x-text="rej().top ? pct(rej().top.pct) : ''"></span>
+            </div>
+          </div>
+          <a class="hld-more" href="/scanner-attribution">View Rejection Analysis <span>→</span></a>
+        </section>
+      </div>
+    </div>
+
+    {# ── the right rail ───────────────────────────────────────────────────── #}
+    <div class="hld-rail">
+      <section class="panel hld-delta">
+        <h3 class="panel-title">DELTA ANALYSIS</h3>
+        <div class="hld-dl-eq">
+          <div class="hld-dl-box">
+            <span class="hld-dl-l">Broker Qty</span>
+            <b class="hld-dl-v mono" x-text="fmt(delta().broker_qty)"></b>
+          </div>
+          <span class="hld-dl-op">−</span>
+          <div class="hld-dl-box">
+            <span class="hld-dl-l">System Qty</span>
+            <b class="hld-dl-v mono" x-text="fmt(delta().system_qty)"></b>
+          </div>
+          <span class="hld-dl-op">=</span>
+          <div class="hld-dl-box" :class="deltaBox(delta().delta_qty)">
+            <span class="hld-dl-l">Delta Qty</span>
+            <b class="hld-dl-v mono" :class="deltaClass(delta().delta_qty)"
+               x-text="deltaText(delta().delta_qty)"></b>
+          </div>
+        </div>
+        <p class="hld-note" x-text="deltaBase()"></p>
+      </section>
+
+      <section class="panel hld-snap">
+        <h3 class="panel-title">BROKER SNAPSHOT</h3>
+        <ul class="hld-kv">
+          <li><span class="hld-k">Last Broker Sync</span>
+            <span class="hld-v mono" x-text="hhmmss(snap().last_sync) || '—'"></span>
+            <span class="hld-live" x-show="snap().last_sync" x-cloak
+                  :title="snap().cadence">
+              <i class="dot"></i>CRON</span></li>
+          <li><span class="hld-k">Broker Account</span>
+            <span class="hld-v" :class="snap().account_label ? '' : 'hld-ni'"
+                  x-text="snap().account_label || '—'"></span></li>
+          <li><span class="hld-k">Broker Holdings Count</span>
+            <span class="hld-v" x-text="fmt(snap().holdings_count) + ' Positions'"></span></li>
+        </ul>
+        {# ⛔ SYNC NOW IS NOT SUPPORTED AND IS NOT FAKED. This dashboard is
+           read-only over the production database and has no broker path; the
+           control keeps the artwork's footprint, is disabled, and says why. #}
+        <div class="hld-sync">
+          <button class="btn-ghost hld-sync-btn" type="button" disabled
+                  :title="gap('broker_sync_control').reason">Sync Now</button>
+          <span class="hld-sync-s" x-text="snap().cadence"></span>
+        </div>
+        <p class="hld-note" x-show="reconAvailable() === false" x-cloak>
+          No reconciliation run has been recorded yet, so the broker side is
+          empty — it is not "matched".</p>
+        <p class="hld-note hld-warn" x-show="brokerUnreachable()" x-cloak>
+          The last run could not reach the broker: its verdict is an error, not
+          an agreement.</p>
+      </section>
+
+      <section class="panel hld-timeline">
+        <h3 class="panel-title">RECONCILIATION TIMELINE</h3>
+        <ul class="hld-kv">
+          <li><span class="hld-k">Last Reconciliation</span>
+            <span class="hld-v mono" :class="tl().last_reconciliation ? '' : 'hld-ni'"
+                  x-text="hhmmss(tl().last_reconciliation) || '—'"></span></li>
+          <li><span class="hld-k hld-neg">Last Mismatch</span>
+            <span class="hld-v mono" :class="tl().last_mismatch ? 'hld-neg' : 'hld-ni'"
+                  x-text="hhmmss(tl().last_mismatch) || 'none recorded'"></span></li>
+          <li><span class="hld-k hld-pos">Last Correction</span>
+            <span class="hld-v mono" :class="tl().last_correction ? 'hld-pos' : 'hld-ni'"
+                  :title="tl().correction_note"
+                  x-text="hhmmss(tl().last_correction) || 'none recorded'"></span></li>
+        </ul>
+        <a class="hld-more" href="/audit">View Timeline <span>→</span></a>
+      </section>
+
+      <section class="panel hld-export">
+        <h3 class="panel-title">EXPORT</h3>
+        <p class="hld-exp-sub">Export filtered holdings data — the rows this screen is showing.</p>
+        <a class="btn-primary hld-exp-btn" :href="exportUrl()">
+          <span class="hld-exp-ico">⇩</span><span>Export to XLSX</span></a>
+      </section>
+    </div>
+  </div>
+
+  <div class="hld-foot-note">
+    <span class="hld-i">ⓘ</span>
+    <span x-text="footNote()"></span>
+    <span class="hld-conn"><i class="dot hld-dot-pos"></i>Live data connected</span>
+  </div>
 </div>
+
 <script>
-function holdingsPage() { return pageBase("/api/holdings"); }
+function holdingsPage() {
+  return Object.assign(
+    colDragMixin(),pageBase("/api/holdings/screen"),
+    (typeof tableMixin === "function" ? tableMixin({defaultSize: 10, pageSizes: [10, 25, 50]}) : {}), {
+
+    /* the six approved KPI cards, in the approved order */
+    KPIS: [
+      { key: "broker_holdings", label: "BROKER HOLDINGS", tone: "info", kind: "count",
+        ico: '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 6.2L8 3l6 3.2v5.6L8 15l-6-3.2z"/><path d="M2 6.2L8 9.4l6-3.2M8 9.4V15"/></svg>' },
+      { key: "system_holdings", label: "SYSTEM HOLDINGS", tone: "purple", kind: "count",
+        ico: '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2.5" width="12" height="4" rx="1"/><rect x="2" y="9.5" width="12" height="4" rx="1"/><path d="M4.5 4.5h.01M4.5 11.5h.01"/></svg>' },
+      { key: "matched", label: "MATCHED HOLDINGS", tone: "pos", kind: "count",
+        ico: '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6.2"/><path d="M5.3 8.2l1.9 1.9 3.5-3.9"/></svg>' },
+      { key: "mismatches", label: "MISMATCHES", tone: "neg", kind: "count",
+        ico: '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 2.2l6 10.6H2z"/><path d="M8 6.4v3M8 11.2h.01"/></svg>' },
+      { key: "total_value", label: "TOTAL VALUE", tone: "warn", kind: "money",
+        ico: '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1.8" y="4" width="12.4" height="8.5" rx="1.5"/><path d="M1.8 6.8h12.4M4.5 2.2h7"/></svg>' },
+      { key: "total_pnl", label: "TOTAL UNREALIZED P&L", tone: "pos", kind: "money",
+        ico: '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 11.5l4-4 3 3 5-6"/><path d="M14 4.5h-3.2M14 4.5v3.2"/></svg>' },
+    ],
+
+    /* ⭐ THE APPROVED COLUMN ORDER, exactly as the artwork draws it. */
+    DEFAULT_COLS: [
+      { key: "trade_date",     label: "Trade Date",   ctr: true, w: "90px" },
+      { key: "trade_time",     label: "Trade Time",   ctr: true, w: "82px" },
+      { key: "display_name",   label: "Strategy",                w: "140px" },
+      { key: "symbol",         label: "Symbol",                  w: "78px" },
+      { key: "product",        label: "Product",      ctr: true, w: "76px" },
+      { key: "quantity",       label: "Quantity",     ctr: true, num: true, w: "76px" },
+      { key: "avg_price",      label: "Avg Price",    ctr: true, num: true, w: "88px" },
+      { key: "current_price",  label: "Current Price", ctr: true, num: true, w: "74px" },
+      { key: "market_value",   label: "Market Value", ctr: true, num: true, w: "74px" },
+      { key: "unrealized_pnl", label: "Unrealized P&L", ctr: true, num: true, w: "96px" },
+      { key: "broker_qty",     label: "Broker Qty",   ctr: true, num: true, w: "80px" },
+      { key: "system_qty",     label: "System Qty",   ctr: true, num: true, w: "82px" },
+      { key: "delta_qty",      label: "Delta Qty",    ctr: true, num: true, w: "76px" },
+      { key: "recon_status",   label: "Reconciliation Status", ctr: true, w: "126px" },
+      { key: "source",         label: "Source",       ctr: true, w: "88px" },
+    ],
+    /* the three the artwork fills with market figures and this system cannot */
+    PRICE_COLS: ["current_price", "market_value", "unrealized_pnl"],
+    SPECIAL: ["current_price", "market_value", "unrealized_pnl",
+              "delta_qty", "recon_status", "source", "display_name", "product"],
+    cols: [],
+    COLS_KEY: "screen22.holdings.colOrder.v1",
+
+    f: { product: "", status: "", source: "", trade_type: "", symbol: "" },
+
+    init() { this.initCols(); this.load(); },
+
+    qs() {
+      const p = new URLSearchParams();
+      Object.keys(this.f).forEach(k => { if (this.f[k]) p.set(k, this.f[k]); });
+      const s = p.toString();
+      return s ? "?" + s : "";
+    },
+    exportUrl() { return "/api/export/holdings" + this.qs(); },
+    resetFilters() {
+      this.f = { product: "", status: "", source: "", trade_type: "", symbol: "" };
+      this.tSortKey = ""; this.tPage = 1;
+      this.load();
+    },
+
+    /* ── payload accessors ───────────────────────────────────────────────── */
+    rows() { return this.data.rows || []; },
+    delta() { return this.data.delta || {broker_qty: 0, system_qty: 0, delta_qty: 0}; },
+    snap() { return this.data.broker_snapshot || {}; },
+    tl() { return this.data.timeline || {}; },
+    delivery() { return this.data.delivery || {positions: 0, dated: 0}; },
+    orphans() {
+      return this.data.orphans
+        || {broker_without_system: {n: 0}, system_without_broker: {n: 0}, note: ""};
+    },
+    sbs() {
+      return this.data.side_by_side || {broker: {}, system: {}};
+    },
+    rej() { return this.data.rejection_insights || {}; },
+    healthTiles() { return ((this.data.health || {}).tiles) || []; },
+    /* ⛔ EVERY PERCENTAGE CARRIES ITS BASE OR IT IS NOT A NUMBER, and two
+       bases are in play here: the five reconciliation tiles are shares of
+       reconciled SYMBOLS, Unknown Position is a share of table ROWS. */
+    healthBase() {
+      const h = this.data.health || {};
+      if (!h.tiles) return "";
+      return "Shares are of " + (h.total || 0) + " reconciled symbol(s); "
+             + "Unknown Position is of " + (h.rows || 0) + " holdings row(s).";
+    },
+    productSlices() { return ((this.data.by_product || {}).slices) || []; },
+    productTotal() { return ((this.data.by_product || {}).total) || 0; },
+    unknownProduct() { return ((this.data.by_product || {}).unknown_product) || 0; },
+    productOptions() { return ((this.data.filters || {}).product) || []; },
+    statusOptions() { return ((this.data.filters || {}).status) || []; },
+    sourceOptions() { return ((this.data.filters || {}).source) || []; },
+    ttOptions() { return ((this.data.filters || {}).trade_type) || []; },
+    gap(key) { return ((this.data.gaps || {})[key]) || {reason: "", short: ""}; },
+    reconAvailable() { return ((this.data.reconciliation || {}).available); },
+    brokerUnreachable() {
+      return ((this.data.reconciliation || {}).broker_reachable) === false;
+    },
+    anyShared() { return this.rows().some(r => r.recon_shared); },
+
+    /* The page numbers the artwork draws. ⭐ Every page is listed while they
+       fit; beyond that the list windows around the current page with an
+       ellipsis, so the row can never outgrow the panel it sits in. ⛔ Not a
+       different pagination design — the same numbered buttons, bounded. */
+    PAGE_WINDOW: 7,
+    pageList() {
+      const last = this.tPageCount(this.rows());
+      if (last <= this.PAGE_WINDOW) {
+        return Array.from({length: last}, (_, i) => i + 1);
+      }
+      const cur = Math.min(Math.max(1, this.tPage), last);
+      const out = [1];
+      let lo = Math.max(2, cur - 1), hi = Math.min(last - 1, cur + 1);
+      if (lo > 2) out.push("…");
+      for (let p = lo; p <= hi; p++) out.push(p);
+      if (hi < last - 1) out.push("…");
+      out.push(last);
+      return out;
+    },
+
+    /* ── formatting ──────────────────────────────────────────────────────── */
+    fmt(n) { return (n === null || n === undefined) ? "—" : Number(n).toLocaleString("en-IN"); },
+    num(v, dp) {
+      if (v === null || v === undefined || v === "") return "—";
+      return Number(v).toLocaleString("en-IN", {minimumFractionDigits: dp === undefined ? 2 : dp,
+                                                maximumFractionDigits: dp === undefined ? 2 : dp});
+    },
+    pct(v) { return (v === null || v === undefined || v === "") ? "—" : this.num(v) + "%"; },
+    money(v) {
+      if (v === null || v === undefined || v === "") return "—";
+      const n = Number(v);
+      return (n < 0 ? "-₹ " : "₹ ") + Math.abs(n).toLocaleString("en-IN",
+        {minimumFractionDigits: 0, maximumFractionDigits: 0});
+    },
+    {# ⛔ A STAMP FROM AN EARLIER DAY MUST SAY WHICH DAY. `slice(11,19)` alone
+       rendered the 18-Aug reconciliation as a bare "15:45:02", which a reader
+       on 01-Sep necessarily takes for TODAY at 15:45 — and a green CRON dot
+       sits beside it. 🔬 Measured 01-Sep-2026: last_sync was 14 days old.
+       ⭐ Today keeps the bare time, so panel density is unchanged in the
+       normal case and the date appears ONLY when it carries information.
+       ⛔ NO APOSTROPHES IN THIS BLOCK: `script_of()` does not strip Jinja
+       comments, so one would open a JS string literal spanning newlines. #}
+    hhmmss(ts) {
+      if (!ts) return "";
+      const s = String(ts).replace("T", " ");
+      const day = s.slice(0, 10), t = s.slice(11, 19);
+      if (!day || day === (this.data.today || "")) return t;
+      const M = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                 "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+      const p = day.split("-");
+      return p[2] + "-" + (M[Number(p[1]) - 1] || p[1]) + " " + t;
+    },
+    rowKey(r) { return (r.trade_id || "recon") + "|" + r.symbol + "|" + (r.product || "-"); },
+
+    cell(r, c) {
+      const v = r[c.key];
+      if (v === null || v === undefined || v === "") return "—";
+      if (c.key === "avg_price") return this.num(v);
+      if (["quantity", "broker_qty", "system_qty"].includes(c.key)) return this.fmt(v);
+      return v;
+    },
+    deltaText(d) {
+      if (d === null || d === undefined) return "—";
+      const n = Number(d);
+      return (n > 0 ? "+" : "") + n;
+    },
+    deltaClass(d) {
+      if (d === null || d === undefined || Number(d) === 0) return "";
+      return "hld-neg";
+    },
+    deltaBox(d) {
+      return (d === null || d === undefined || Number(d) === 0) ? "" : "is-off";
+    },
+    statusClass(s) {
+      return {"Matched": "hld-rs-ok", "Minor Difference": "hld-rs-minor",
+              "Mismatch": "hld-rs-bad"}[s] || "";
+    },
+    srcClass(s) {
+      if (s === "Broker Only") return "hld-src-b";
+      if (s === "System Only") return "hld-src-s";
+      return "";
+    },
+    reconCellTitle(r) {
+      const at = this.hhmmss(r.recon_at);
+      return "source status " + (r.recon_source_status || "—")
+             + (at ? " · reconciled " + at : "");
+    },
+    reconLabel() {
+      const rc = this.data.reconciliation || {};
+      if (!rc.available) return "no reconciliation run recorded";
+      return "broker side: " + (rc.rows_in_last_run || 0) + " symbol(s) from the "
+             + (this.hhmmss(rc.last_run) || "last") + " run";
+    },
+    reconTitle() {
+      const rc = this.data.reconciliation || {};
+      return (rc.source || "") + " · grain: " + (rc.grain || "");
+    },
+    deltaBase() {
+      const d = this.delta();
+      let s = "Base: " + (d.base || "") + " (" + (d.symbols || 0) + ")";
+      if (d.excluded) s += " · " + d.excluded + " excluded for want of one side";
+      return s;
+    },
+    showing() {
+      const d = this.data;
+      if (!d.rows) return "";
+      const n = this.rows().length;
+      const per = this.tPageSize || n;
+      const from = n ? ((this.tPage - 1) * per + 1) : 0;
+      const to = Math.min(n, this.tPage * per);
+      return "Showing " + from + " to " + to + " of " + n + " holdings"
+             + (d.total !== n ? " (" + d.total + " unfiltered)" : "");
+    },
+    footNote() {
+      return "Broker is the final source of truth; the system side is the "
+             + "expected state. The broker side is the most recent 15:45 "
+             + "reconciliation, which reads positions() only and is blind to "
+             + "settled T+1 delivery. All values are in INR; times are IST.";
+    },
+
+    /* ── KPI ─────────────────────────────────────────────────────────────── */
+    kpiMeasured(k) {
+      const kpi = this.data.kpi || {};
+      return !(k.kind === "money" && (kpi[k.key] === null || kpi[k.key] === undefined));
+    },
+    kpiVal(k) {
+      const kpi = this.data.kpi || {};
+      if (k.kind === "count") return this.fmt(kpi[k.key]);
+      return (kpi[k.key] === null || kpi[k.key] === undefined) ? "—" : this.money(kpi[k.key]);
+    },
+    kpiTitle(k) {
+      const kpi = this.data.kpi || {};
+      if (k.key === "broker_holdings") return kpi.broker_base || "";
+      if (k.key === "system_holdings") return kpi.system_base || "";
+      if (k.kind === "money") return this.gap("price").reason;
+      return "";
+    },
+    kpiSub(k) {
+      const kpi = this.data.kpi || {};
+      if (k.key === "broker_holdings") return "reconciled symbols";
+      if (k.key === "system_holdings") return "open system positions";
+      if (k.key === "matched") {
+        return (kpi.matched_pct === null || kpi.matched_pct === undefined)
+          ? "nothing reconciled yet" : this.pct(kpi.matched_pct) + " matched";
+      }
+      if (k.key === "mismatches") {
+        return (kpi.mismatch_pct === null || kpi.mismatch_pct === undefined)
+          ? "nothing reconciled yet" : this.pct(kpi.mismatch_pct) + " mismatch";
+      }
+      if (k.key === "total_value") {
+        return (kpi.value_at_cost === null || kpi.value_at_cost === undefined)
+          ? "NOT INSTRUMENTED" : "NOT INSTRUMENTED · " + this.money(kpi.value_at_cost) + " at cost";
+      }
+      return "NOT INSTRUMENTED";
+    },
+
+    catIcon(key) {
+      const m = {
+        MIS: '<svg viewBox="0 0 16 16" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.2" y="2.5" width="11.6" height="11" rx="1.6"/><path d="M5 6h6M5 9h4M5 11.5h2.5"/></svg>',
+        CNC: '<svg viewBox="0 0 16 16" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 5.6h12v7.2a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"/><path d="M4.6 5.6V4a1.4 1.4 0 0 1 1.4-1.4h4A1.4 1.4 0 0 1 11.4 4v1.6"/></svg>',
+        NRML: '<svg viewBox="0 0 16 16" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M8 1.9l5.2 2.3v4c0 3.2-2.2 5.5-5.2 6.4-3-.9-5.2-3.2-5.2-6.4v-4z"/><path d="M6 8.1l1.5 1.5L10.3 6.6"/></svg>',
+        OTHER: '<svg viewBox="0 0 16 16" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="2.1"/><path d="M8 1.8v2.4M8 11.8v2.4M1.8 8h2.4M11.8 8h2.4M3.6 3.6l1.7 1.7M10.7 10.7l1.7 1.7M12.4 3.6l-1.7 1.7M5.3 10.7l-1.7 1.7"/></svg>',
+      };
+      return m[key] || m.OTHER;
+    },
+
+    productDonut() {
+      const sl = this.productSlices();
+      const total = sl.reduce((a, s) => a + (s.n || 0), 0);
+      if (!total) return "";
+      let out = "", off = 25;
+      sl.forEach((seg, i) => {
+        const p = Math.max(0, (100 * (seg.n || 0)) / total);
+        if (p <= 0) return;
+        out += '<circle class="hld-arc hld-pr-c' + i
+             + '" cx="21" cy="21" r="15.9155" fill="none" stroke-width="6"'
+             + ' stroke-dasharray="' + p.toFixed(3) + ' ' + (100 - p).toFixed(3) + '"'
+             + ' stroke-dashoffset="' + off.toFixed(3) + '"></circle>';
+        off = (off - p + 100) % 100;
+      });
+      return out;
+    },
+
+    /* ── column order: the established convention, reused ─────────────────── */
+    initCols() {
+      this.cols = this.DEFAULT_COLS.slice();
+      let saved = null;
+      try { saved = JSON.parse(window.localStorage.getItem(this.COLS_KEY) || "null"); }
+      catch (e) { saved = null; }
+      if (!Array.isArray(saved) || !saved.length) return;
+      const byKey = {};
+      this.DEFAULT_COLS.forEach(c => { byKey[c.key] = c; });
+      const next = [];
+      saved.forEach(k => { if (byKey[k] && next.indexOf(byKey[k]) === -1) next.push(byKey[k]); });
+      this.DEFAULT_COLS.forEach(c => { if (next.indexOf(c) === -1) next.push(c); });
+      if (next.length === this.DEFAULT_COLS.length) this.cols = next;
+    },
+    saveCols() {
+      try { window.localStorage.setItem(this.COLS_KEY, JSON.stringify(this.cols.map(c => c.key))); }
+      catch (e) {}
+    },
+    headClick(key) {
+      if (Date.now() - this._dragEndAt < 250) return;   /* drag, not a sort click */
+      this.tSort(key);
+    },
+  });
+}
 </script>
 {% endblock %}

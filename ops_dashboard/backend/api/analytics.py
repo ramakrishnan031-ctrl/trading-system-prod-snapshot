@@ -202,3 +202,39 @@ def download_report():
 def get_config():
     cfg, _today = _ctx()
     return jsonify(config_view.build_config_view(cfg))
+
+
+# ── SCREEN 16 — CONFIGURATION (18-Aug-2026) ──────────────────────────────────
+# ⛔ `/api/config` ABOVE IS BYTE-UNCHANGED. It has a live contract test
+#    (test_g2b2_screens::test_config_api_groups_and_drift) that pins its group
+#    order, its drift block and its header, and other readers depend on it. The
+#    approved Screen-16 artwork needs a different, wider payload, so this is a
+#    SECOND endpoint beside it — the same shape Screen 17 used when it added
+#    `/api/controls/screen` beside the older controls summary.
+# ⛔ READ-ONLY, and structurally so: neither route below writes anything, and no
+#    Screen-16 route accepts a method other than GET.
+@analytics_api.route("/api/config/screen", methods=["GET"])
+@login_required
+def get_config_screen():
+    cfg, _today = _ctx()
+    return jsonify(config_view.build_config_center(cfg))
+
+
+@analytics_api.route("/api/export/config-screen", methods=["GET"])
+@login_required
+def export_config_screen():
+    """XLSX of the configuration this screen is showing (artwork panel EXPORT).
+
+    ⭐ SAME builder, SAME arguments as `/api/config/screen`, so an exported cell
+    can never disagree with the panel it came from.
+    ⭐ Reuses the established `_xlsx` writer every other screen export uses —
+    ⛔ no second export architecture, and the workbook carries real rows, never
+    a placeholder download.
+    """
+    from .analytics2 import _xlsx          # the one shared workbook writer
+
+    cfg, _today = _ctx()
+    payload = config_view.build_config_center(cfg)
+    q = (request.args.get("q") or "").strip()
+    return _xlsx(config_view.export_sheets(payload, q),
+                 "configuration_%s.xlsx" % (payload.get("today") or "unknown"))

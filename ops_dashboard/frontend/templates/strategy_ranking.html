@@ -1,72 +1,520 @@
 {% extends "base.html" %}
-{% from "components.html" import kpi_row, kpi_card, period_selector, export_button, medal %}
 {% block title %}AlgoCore Systems — Strategy Ranking{% endblock %}
 {% block nav_strategy_ranking %}active{% endblock %}
 {% block content %}
-{# G5c: leaderboard over the period-scoped strategy aggregation. Mode toggle
-   re-sorts the SAME dataset (rankings[mode]); ties stable by name. Medals top-3.
-   System Score only (L8). #}
-<div x-data="rankingPage()" x-init="load(); $watch('pPeriod', () => load()); $watch('pFrom', () => load()); $watch('pTo', () => load())" @ops-refresh.window="load()">
-  <h2 class="panel-title">Strategy Ranking
-    <span class="panel-sub" x-text="data.from ? (data.from + ' → ' + data.to) : ''"></span></h2>
+{#  SCREEN 19 — STRATEGY RANKING.  `gui/19. Strategy_Ranking.png` + `.txt` are
+    BINDING: the six KPI cards · RANKING MODE (5) · FILTERS (Date Range · Trade
+    Type · Direction · Reset) · the ranking table · STRATEGY SCORE BREAKDOWN ·
+    TREND SUMMARY · RECENT WINNERS / LOSERS · RANKING INSIGHTS · Export XLSX.
 
-  {% call kpi_row() %}
-    {{ kpi_card("Best", "best('net_pnl')", tone="pos") }}
-    {{ kpi_card("Highest ROI", "best('roi')", tone="info") }}
-    {{ kpi_card("Highest Win %", "best('win_rate')", tone="info") }}
-    {{ kpi_card("Highest PF", "best('profit_factor')", tone="info") }}
-    {{ kpi_card("Most Trades", "best('trade_count')", tone="info") }}
-  {% endcall %}
+    ⭐ TRADE TYPE is the NEW column, inserted immediately after Strategy exactly
+       as instructed and with every other approved column left in place. Its
+       value is the STRATEGY's own `intent` from `config/strategies/<name>.yaml`,
+       resolved through the ONE shared path (`services/strategy_meta.py`).
+    ⛔⛔ It is NOT the order product (MIS/CNC) — a different quantity. The Trade
+       Type FILTER binds to the SAME strategy-level value as the column, so the
+       two can never describe different things on one screen.
 
-  {{ period_selector() }}
-  <div class="rank-toggle">
-    <span class="rt-label">Rank by:</span>
-    <template x-for="m in modeList" :key="m.key">
-      <button class="rt-btn" :class="mode===m.key ? 'rt-active' : ''" @click="mode=m.key" x-text="m.label"></button>
-    </template>
-    {{ export_button("Export Ranking") }}
+    ⛔ NO SCANNER — no column, no filter, no panel. Strategy is the identity.
+
+    ⛔ An Alpine x-for TEMPLATE placed inside an SVG renders NOTHING — the HTML
+       parser turns it into an SVG node named "template". The donut's repeated
+       children are injected with `x-html` on a group node instead, the pattern
+       Screens 06/07/09/10/11/13/15/18 already use.  #}
+<div class="sr-page" x-data="rankingPage()" x-init="init()"
+     @ops-refresh.window="load()">
+
+  <div class="sr-head">
+    <div>
+      <h1 class="sr-title">STRATEGY RANKING</h1>
+      <div class="sr-sub">Leaderboard of all strategies based on performance metrics</div>
+    </div>
+    <span class="sr-lastcheck">
+      <span class="sr-lc-l">LAST UPDATED</span>
+      <span class="sr-lc-v mono" x-text="hhmmss(data.generated_at) || '—'"></span>
+    </span>
   </div>
 
-  <div class="tbl-scroll">
-    <table class="cap-table">
-      <thead><tr><th>Rank</th><th>Strategy</th><th>Trades</th><th>Wins</th><th>Losses</th>
-        <th>Win %</th><th>ROI %</th><th>PF</th><th>Gross</th><th>Net</th><th>Avg</th><th>Best</th><th>Worst</th></tr></thead>
-      <tbody>
-        <template x-for="(m, i) in ordered()" :key="m.strategy">
-          <tr>
-            <td>{{ medal("i+1") }}</td>
-            <td x-text="m.strategy"></td>
-            <td class="cap-num" x-text="m.trades"></td>
-            <td class="cap-num" x-text="m.wins"></td><td class="cap-num" x-text="m.losses"></td>
-            <td class="cap-num" x-text="dash(m.win_rate)"></td>
-            <td class="cap-num" x-text="dash(m.roi_pct)"></td>
-            <td class="cap-num" x-text="dash(m.profit_factor)"></td>
-            <td class="cap-num" x-text="money(m.gross)"></td>
-            <td class="cap-num" :class="m.net>0?'num-pos':(m.net<0?'num-neg':'')" x-text="money(m.net)"></td>
-            <td class="cap-num" x-text="money(m.avg_trade)"></td>
-            <td class="cap-num" x-text="dash(m.best)"></td><td class="cap-num" x-text="dash(m.worst)"></td>
-          </tr>
+  {# ── the six approved KPI cards, in the approved order ─────────────────── #}
+  <div class="sr-kpis">
+    <template x-for="k in KPIS" :key="k.key">
+      <section class="panel sr-kpi">
+        <span class="sr-kpi-ico" :class="'sr-ico-' + k.tone" x-html="k.ico"></span>
+        <span class="sr-kpi-body">
+          <span class="sr-kpi-l" x-text="k.label"></span>
+          <b class="sr-kpi-v" :class="'sr-v-' + k.tone"
+             :title="kpiName(k.key)" x-text="kpiName(k.key)"></b>
+          <span class="sr-kpi-s" x-text="kpiSub(k)"></span>
+        </span>
+      </section>
+    </template>
+  </div>
+
+  <div class="sr-controls">
+    <section class="panel sr-modes">
+      <h3 class="panel-title">RANKING MODE</h3>
+      <div class="sr-mode-btns">
+        <template x-for="m in modes()" :key="m.key">
+          <button class="sr-mode" type="button" :class="mode === m.key ? 'is-on' : ''"
+                  @click="setMode(m.key)" x-text="m.label"></button>
         </template>
-        <tr x-show="!(data.rows||[]).length" x-cloak><td colspan="13" class="ev-empty">No closed trades in this period.</td></tr>
-      </tbody>
-    </table>
+      </div>
+    </section>
+
+    {# ⭐ THE ESTABLISHED FILTER LANGUAGE, ⛔ not a one-off for this screen:
+       `.flt-row` / `.flt-field` / `.flt-k` / `.flt-actions` are the classes
+       Screens 03/04/05 own and Screens 13/14/15 already joined, and the controls
+       carry `.sel` so they take the standard 36px / radius-8 / card-background
+       treatment. ⭐ `.flt-field` is `flex: 1 1 150px`, so the fields SPREAD
+       across the panel instead of clustering on the left and leaving the right
+       half empty. ⛔ No new control size, radius or colour is introduced here. #}
+    <section class="panel sr-filters">
+      <h3 class="panel-title">FILTERS</h3>
+      <div class="flt-row">
+        <label class="flt-field">
+          <span class="flt-k">Date Range</span>
+          <select class="sel" x-model="f.period" @change="applyFilters()">
+            <template x-for="d in dateRanges()" :key="d.key">
+              <option :value="d.key" x-text="d.label"></option>
+            </template>
+          </select>
+        </label>
+        <label class="flt-field sr-dates" x-show="f.period === 'custom'" x-cloak>
+          <span class="flt-k">From → To</span>
+          <span class="sr-f-dates">
+            <input type="date" class="sel" x-model="f.from" @change="applyFilters()">
+            <span class="sr-f-to">→</span>
+            <input type="date" class="sel" x-model="f.to" @change="applyFilters()">
+          </span>
+        </label>
+        <label class="flt-field">
+          {# ⭐ the STRATEGY's YAML intent — the same value the column shows, and
+             an ordinary dropdown like every other filter on the page #}
+          <span class="flt-k">Trade Type</span>
+          <select class="sel" x-model="f.trade_type" @change="applyFilters()">
+            <option value="">All Types</option>
+            <template x-for="t in ttOptions()" :key="t">
+              <option :value="t" x-text="t"></option>
+            </template>
+          </select>
+        </label>
+        <label class="flt-field">
+          <span class="flt-k">Direction</span>
+          <select class="sel" x-model="f.direction" @change="applyFilters()">
+            <option value="">All Directions</option>
+            <template x-for="d in dirOptions()" :key="d">
+              <option :value="d" x-text="d"></option>
+            </template>
+          </select>
+        </label>
+        <div class="flt-actions">
+          <button class="btn-ghost" type="button" @click="resetFilters()">↻ Reset Filters</button>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  {# ── STRATEGY RANKING TABLE ────────────────────────────────────────────── #}
+  <section class="panel sr-tablep">
+    <div class="sr-panel-head">
+      <h3 class="panel-title">STRATEGY RANKING TABLE
+        <span class="panel-sub" x-text="tableSub()"></span>
+      </h3>
+      <a class="rt-btn sr-exp" :href="exportUrl()">⇩ Export XLSX</a>
+    </div>
+
+    <div class="sr-tbl-wrap tbl-freeze">
+      <table class="cap-table sr-tbl">
+        <thead><tr>
+          {# ⭐ ONE `cols` array drives the header AND the body, so a drag can
+             never leave the two out of step. #}
+          <template x-for="c in cols" :key="c.key">
+            <th class="lbl sr-th"
+                :class="[dragKey === c.key ? 'is-drag' : '',
+                         overKey === c.key ? 'is-over' : '', c.ctr ? 'ctr' : '']"
+                :style="c.w ? ('width:' + c.w) : ''"
+                draggable="true" role="button" tabindex="0"
+                :title="c.label + ' · click to sort, drag to reorder'"
+                @dragstart="onDragStart(c.key, $event)"
+                @dragover.prevent="overKey = c.key"
+                @dragleave="overKey === c.key && (overKey = '')"
+                @drop.prevent="onDrop(c.key)"
+                @dragend="onDragEnd()"
+                @click="headClick(c.key)" @keyup.enter="tSort(c.key)">
+              {# ⭐ The binding artwork draws PLAIN headings; the drag glyph was
+                 my own addition and it ate width the approved labels needed.
+                 ⛔ The affordance is NOT removed — the <th> is still draggable,
+                 still `cursor: grab`, and its tooltip still says so. #}
+              <span x-text="c.label"></span><span
+                    class="sr-arrow" x-show="tSortKey === c.key"
+                    x-text="tArrow(c.key)"></span>
+            </th>
+          </template>
+        </tr></thead>
+        <tbody>
+          <template x-for="r in tSorted(rows())" :key="r.strategy">
+            <tr>
+              <template x-for="c in cols" :key="c.key">
+                <td :class="[c.ctr ? 'ctr' : '', c.num ? 'mono' : '']">
+                  <template x-if="c.key === 'rank'">
+                    <span class="sr-rank" :class="'sr-medal-' + r.rank"
+                          x-text="r.rank"></span>
+                  </template>
+                  {# ⛔ AN x-if TEMPLATE MUST HAVE EXACTLY ONE ROOT ELEMENT — with
+                     two siblings Alpine renders only the first, which silently
+                     blanks every "no value" cell. Each branch is wrapped. #}
+                  <template x-if="c.key === 'trade_type'">
+                    <span>
+                      <span x-show="r.trade_type" class="sr-tt"
+                            :class="'sr-tt-' + (r.trade_type || '').toLowerCase()"
+                            x-text="r.trade_type"></span>
+                      <span x-show="!r.trade_type" class="sr-ni"
+                            title="this strategy's YAML declares no intent">n/a</span>
+                    </span>
+                  </template>
+                  <template x-if="c.key === 'score'">
+                    <span>
+                      <span x-show="r.score !== null" class="sr-score"
+                            :class="scoreClass(r.score)"
+                            x-text="r.score + ' / 100'"></span>
+                      <span x-show="r.score === null" class="sr-ni"
+                            title="no completed trades in this window">—</span>
+                    </span>
+                  </template>
+                  <template x-if="c.key === 'trend'">
+                    <span>
+                      <span x-show="r.trend" class="sr-trend"
+                            :class="'sr-tr-' + (r.trend || '').toLowerCase()">
+                        <span x-text="trendIcon(r.trend)"></span><span x-text="r.trend"></span>
+                      </span>
+                      <span x-show="!r.trend" class="sr-ni"
+                            title="no comparable earlier window for this strategy">—</span>
+                    </span>
+                  </template>
+                  <template x-if="!['rank','trade_type','score','trend'].includes(c.key)">
+                    <span :class="signClass(r, c)" x-text="cell(r, c)"></span>
+                  </template>
+                </td>
+              </template>
+            </tr>
+          </template>
+          <tr x-show="!rows().length" x-cloak>
+            <td :colspan="cols.length" class="sr-empty">
+              No strategies match the current filters.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="sr-note" x-text="baseNote()"></p>
+  </section>
+
+  {# ── the four approved bottom panels ───────────────────────────────────── #}
+  <div class="sr-bottom">
+    <section class="panel sr-break">
+      <h3 class="panel-title">STRATEGY SCORE BREAKDOWN</h3>
+      <div class="sr-donut-body">
+        {# ⛔ The ROTATION belongs to the ARC GROUP, not to the whole <svg>: a
+           rotated svg drags the centre labels round with it, and undoing that
+           per-<text> rotates each line about its OWN centre, stacking them on
+           top of each other. #}
+        <svg class="sr-donut" viewBox="0 0 42 42" aria-hidden="true">
+          <circle class="sr-donut-bg" cx="21" cy="21" r="15.9155"
+                  fill="none" stroke-width="6"></circle>
+          {# ⛔ x-html on a group node, never an x-for loop here — header note. #}
+          <g transform="rotate(-90 21 21)" x-html="donutMarkup()"></g>
+          <text class="sr-donut-t1" x="21" y="20" text-anchor="middle">Weighted</text>
+          <text class="sr-donut-t2" x="21" y="24.5" text-anchor="middle">Score</text>
+        </svg>
+        <ul class="sr-legend">
+          <template x-for="w in weights()" :key="w.key">
+            <li>
+              <i class="dot" :class="'sr-arc-' + w.key"></i>
+              <span class="sr-lg-c" x-text="w.label"></span>
+              <span class="sr-lg-n mono" x-text="w.pct + '%'"></span>
+            </li>
+          </template>
+        </ul>
+      </div>
+    </section>
+
+    <section class="panel sr-trends">
+      <h3 class="panel-title">TREND SUMMARY</h3>
+      <div class="sr-trend-grid">
+        <template x-for="t in TRENDS" :key="t.key">
+          <div class="sr-trend-cell">
+            <span class="sr-trend-ring" :class="'sr-tr-' + t.key"
+                  x-text="t.icon"></span>
+            <span class="sr-trend-l" :class="'sr-tr-' + t.key" x-text="t.label"></span>
+            {# ⛔ THE NOUN AGREES WITH THE NUMBER. This panel rendered
+               "1 Strategies", the exact formatting bug `_n()` in
+               strategy_ranking.py already records; the smallest correction
+               is made HERE so Screen 21 does not become inconsistent with
+               its own sibling. #}
+            <b class="sr-trend-n" x-text="trendCount(t.label)"></b>
+            <span class="sr-trend-s"
+                  x-text="trendCount(t.label) === 1 ? 'Strategy' : 'Strategies'"></span>
+          </div>
+        </template>
+      </div>
+      <p class="sr-note" x-show="trendUnavailable()" x-cloak
+         x-text="trendUnavailable() + ' strategy(ies) have no earlier window to compare against.'"></p>
+    </section>
+
+    <section class="panel sr-wl">
+      <h3 class="panel-title">RECENT WINNERS / LOSERS</h3>
+      <div class="sr-wl-grid">
+        <div class="sr-wl-col">
+          <span class="sr-wl-h sr-wl-win">TOP WINNERS TODAY</span>
+          <ol class="sr-wl-list">
+            <template x-for="(w, i) in winners()" :key="w.strategy">
+              <li><span class="sr-wl-i" x-text="(i + 1) + '.'"></span><span
+                    class="sr-wl-n" x-text="w.display_name"></span><span
+                    class="sr-wl-v mono sr-pos" x-text="money(w.net)"></span></li>
+            </template>
+            <li class="sr-ni" x-show="!winners().length" x-cloak>No profitable strategy in this window.</li>
+          </ol>
+        </div>
+        <div class="sr-wl-col">
+          <span class="sr-wl-h sr-wl-lose">TOP LOSERS TODAY</span>
+          <ol class="sr-wl-list">
+            <template x-for="(l, i) in losers()" :key="l.strategy">
+              <li><span class="sr-wl-i" x-text="(i + 1) + '.'"></span><span
+                    class="sr-wl-n" x-text="l.display_name"></span><span
+                    class="sr-wl-v mono sr-neg" x-text="money(l.net)"></span></li>
+            </template>
+            <li class="sr-ni" x-show="!losers().length" x-cloak>No losing strategy in this window.</li>
+          </ol>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel sr-insights">
+      <h3 class="panel-title">RANKING INSIGHTS</h3>
+      <ul class="sr-ins-list">
+        <template x-for="(i, ix) in insights()" :key="ix">
+          <li><i class="dot" :class="'sr-ins-' + i.tone"></i><span x-text="i.text"></span></li>
+        </template>
+        <li class="sr-ni" x-show="!insights().length" x-cloak>
+          No completed trades in this window, so there is nothing to compare.</li>
+      </ul>
+    </section>
+  </div>
+
+  <div class="sr-foot-note">
+    <span class="sr-i">ⓘ</span>
+    <span x-text="footNote()"></span>
+    <span class="sr-conn"><i class="dot sr-ins-pos"></i>Live data connected</span>
   </div>
 </div>
+
 <script>
 function rankingPage() {
-  return Object.assign(pageBase("/api/strategy-ranking"), periodMixin("today"), {
+  return Object.assign(
+    colDragMixin(),pageBase("/api/strategy-ranking/screen"),
+    (typeof tableMixin === "function" ? tableMixin({defaultSize: 100, pageSizes: [100]}) : {}), {
+
+    /* the six approved KPI cards, in the approved order */
+    KPIS: [
+      { key: "best", label: "BEST STRATEGY", tone: "pos", metric: "net", kind: "money", pre: "Net P&L: ",
+        ico: '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4.5 2h7v3a3.5 3.5 0 0 1-7 0z"/><path d="M4.5 3H3a1.5 1.5 0 0 0 1.5 3M11.5 3H13a1.5 1.5 0 0 1-1.5 3"/><path d="M8 8.5V11M6 13.5h4"/></svg>' },
+      { key: "worst", label: "WORST STRATEGY", tone: "neg", metric: "net", kind: "money", pre: "Net P&L: ",
+        ico: '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4l4.5 5 3-2.5L14 12"/><path d="M14 12h-3.5M14 12V8.5"/></svg>' },
+      { key: "highest_roi", label: "HIGHEST ROI", tone: "pos", metric: "roi_pct", kind: "pct", pre: "ROI: ",
+        ico: '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 2a6 6 0 1 0 6 6H8z"/><path d="M8 2v6h6"/></svg>' },
+      { key: "highest_win_rate", label: "HIGHEST WIN RATE", tone: "info", metric: "win_rate", kind: "pct", pre: "Win Rate: ",
+        ico: '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6"/><circle cx="8" cy="8" r="2.5"/><path d="M8 2v1.5M8 12.5V14M2 8h1.5M12.5 8H14"/></svg>' },
+      { key: "highest_profit_factor", label: "HIGHEST PROFIT FACTOR", tone: "purple", metric: "profit_factor", kind: "num", pre: "PF: ",
+        ico: '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 2.5v11M4 5h8M3 5l-1.5 4h3zM13 5l1.5 4h-3zM5.5 13.5h5"/></svg>' },
+      { key: "most_trades", label: "MOST TRADES", tone: "warn", metric: "trades", kind: "int", pre: "Trades: ",
+        ico: '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 1.8l6 3-6 3-6-3z"/><path d="M2 8l6 3 6-3M2 11l6 3 6-3"/></svg>' },
+    ],
+
+    TRENDS: [
+      { key: "improving", label: "Improving", icon: "↗" },
+      { key: "stable", label: "Stable", icon: "→" },
+      { key: "declining", label: "Declining", icon: "↘" },
+    ],
+
+    /* ⭐ THE APPROVED COLUMN ORDER, with TRADE TYPE inserted immediately after
+       Strategy exactly as instructed. ⛔ No other approved column moved.
+       `w` is a FIXED-LAYOUT width bound to the COLUMN KEY, not to a position,
+       so a drag cannot hand Rank's width to Net P&L. */
+    DEFAULT_COLS: [
+      { key: "rank",          label: "Rank",          ctr: true, w: "74px" },
+      { key: "display_name",  label: "Strategy",                 w: "168px" },
+      { key: "trade_type",    label: "Trade Type",    ctr: true, w: "104px" },
+      { key: "trades",        label: "Trades",        ctr: true, num: true, w: "86px" },
+      { key: "wins",          label: "Wins",          ctr: true, num: true, w: "74px" },
+      { key: "losses",        label: "Losses",        ctr: true, num: true, w: "86px" },
+      { key: "win_rate",      label: "Win %",         ctr: true, num: true, w: "74px" },
+      { key: "roi_pct",       label: "ROI %",         ctr: true, num: true, w: "76px" },
+      { key: "profit_factor", label: "Profit Factor", ctr: true, num: true, w: "98px" },
+      { key: "gross",         label: "Gross P&L",     ctr: true, num: true, w: "100px" },
+      { key: "net",           label: "Net P&L",       ctr: true, num: true, w: "100px" },
+      { key: "avg_trade",     label: "Avg Trade",     ctr: true, num: true, w: "94px" },
+      { key: "best",          label: "Best Trade",    ctr: true, num: true, w: "96px" },
+      { key: "worst",         label: "Worst Trade",   ctr: true, num: true, w: "100px" },
+      { key: "score",         label: "Score",         ctr: true, w: "92px" },
+      { key: "trend",         label: "Trend",         ctr: true, w: "108px" },
+    ],
+    cols: [],
+    COLS_KEY: "screen19.ranking.colOrder.v1",
+
     mode: "net_pnl",
-    modeList: [{key:"net_pnl",label:"Net P&L"},{key:"roi",label:"ROI"},{key:"win_rate",label:"Win %"},
-               {key:"profit_factor",label:"Profit Factor"},{key:"trade_count",label:"Trade Count"}],
-    qs() { return this.pQuery(); },
-    ordered() {
-      const order = (this.data.rankings || {})[this.mode] || [];
-      const by = this.data.by_name || {};
-      return order.map(n => by[n]).filter(Boolean);
+    f: { period: "today", from: "", to: "", trade_type: "", direction: "" },
+
+    init() { this.initCols(); this.load(); },
+
+    qs() {
+      const p = new URLSearchParams();
+      p.set("period", this.f.period);
+      if (this.f.period === "custom") {
+        if (this.f.from) p.set("from", this.f.from);
+        if (this.f.to) p.set("to", this.f.to);
+      }
+      if (this.f.trade_type) p.set("trade_type", this.f.trade_type);
+      if (this.f.direction) p.set("direction", this.f.direction);
+      p.set("mode", this.mode);
+      return "?" + p.toString();
     },
-    best(mode) {
-      const order = (this.data.rankings || {})[mode] || [];
-      return order.length ? order[0] : "—";
+    exportUrl() { return "/api/export/strategy-ranking" + this.qs(); },
+    applyFilters() { this.load(); },
+    resetFilters() {
+      this.f = { period: "today", from: "", to: "", trade_type: "", direction: "" };
+      this.mode = "net_pnl";
+      this.tSortKey = "";
+      this.load();
+    },
+    setMode(k) { this.mode = k; this.tSortKey = ""; this.load(); },
+
+    /* ── payload accessors ───────────────────────────────────────────────── */
+    rows() { return this.data.rows || []; },
+    modes() { return this.data.modes || []; },
+    dateRanges() { return this.data.date_ranges || []; },
+    ttOptions() { return ((this.data.filters || {}).trade_type) || []; },
+    dirOptions() { return ((this.data.filters || {}).direction) || []; },
+    weights() { return this.data.score_weights || []; },
+    winners() { return ((this.data.winners_losers || {}).winners) || []; },
+    losers() { return ((this.data.winners_losers || {}).losers) || []; },
+    insights() { return this.data.insights || []; },
+    trendCount(label) { return ((this.data.trend_summary || {})[label]) || 0; },
+    trendUnavailable() { return ((this.data.trend_summary || {}).unavailable) || 0; },
+
+    /* ── formatting ──────────────────────────────────────────────────────── */
+    fmt(n) { return (n === null || n === undefined) ? "—" : Number(n).toLocaleString("en-IN"); },
+    num(v, dp) {
+      if (v === null || v === undefined || v === "") return "—";
+      return Number(v).toLocaleString("en-IN", {minimumFractionDigits: dp === undefined ? 2 : dp,
+                                                maximumFractionDigits: dp === undefined ? 2 : dp});
+    },
+    money(v) {
+      if (v === null || v === undefined || v === "") return "—";
+      const n = Number(v);
+      return (n < 0 ? "-₹ " : "₹ ") + Math.abs(n).toLocaleString("en-IN",
+        {minimumFractionDigits: 0, maximumFractionDigits: 0});
+    },
+    hhmmss(ts) { return ts ? String(ts).replace("T", " ").slice(11, 19) : ""; },
+
+    cell(r, c) {
+      const v = r[c.key];
+      if (v === null || v === undefined || v === "") return "—";
+      if (["gross", "net", "avg_trade", "best", "worst"].includes(c.key)) return this.money(v);
+      if (["win_rate", "roi_pct"].includes(c.key)) return this.num(v) + "%";
+      if (c.key === "profit_factor") return this.num(v);
+      return v;
+    },
+    signClass(r, c) {
+      if (!["gross", "net", "avg_trade", "best", "worst", "roi_pct"].includes(c.key)) return "";
+      const v = r[c.key];
+      if (v === null || v === undefined) return "";
+      return Number(v) > 0 ? "sr-pos" : (Number(v) < 0 ? "sr-neg" : "");
+    },
+    scoreClass(s) {
+      if (s === null || s === undefined) return "";
+      if (s >= 75) return "sr-sc-hi";
+      if (s >= 50) return "sr-sc-mid";
+      return "sr-sc-lo";
+    },
+    trendIcon(t) { return {Improving: "↗", Stable: "→", Declining: "↘"}[t] || ""; },
+
+    /* ── KPI ─────────────────────────────────────────────────────────────── */
+    kpiName(key) {
+      const c = (this.data.kpi || {})[key];
+      return c ? (c.display_name || c.strategy) : "—";
+    },
+    kpiSub(k) {
+      const c = (this.data.kpi || {})[k.key];
+      if (!c) return "no completed trades in this window";
+      let v = c.value;
+      if (k.kind === "money") v = this.money(v);
+      else if (k.kind === "pct") v = this.num(v) + "%";
+      else if (k.kind === "num") v = this.num(v);
+      else v = this.fmt(v);
+      return k.pre + v;
+    },
+
+    tableSub() {
+      const d = this.data;
+      if (!d.from) return "";
+      return "(" + this.fmt(d.count) + " strategies · " + d.from + " → " + d.to + ")";
+    },
+    baseNote() {
+      const d = this.data;
+      if (!d.note) return "";
+      return d.note;
+    },
+    footNote() {
+      const d = this.data;
+      return "All performance metrics are based on completed trades only. "
+             + "Trade Type is each strategy's configured intent, read from its "
+             + "own YAML. Times are IST (Asia/Kolkata).";
+    },
+
+    /* ── donut ───────────────────────────────────────────────────────────── */
+    donutMarkup() {
+      const w = this.weights();
+      if (!w.length) return "";
+      let out = "", off = 25;      /* 25 = start at 12 o'clock */
+      w.forEach(seg => {
+        const p = Math.max(0, Number(seg.pct) || 0);
+        out += '<circle class="sr-arc sr-arc-' + String(seg.key).replace(/[^a-z_]/g, "")
+             + '" cx="21" cy="21" r="15.9155" fill="none" stroke-width="6"'
+             + ' stroke-dasharray="' + p.toFixed(3) + ' ' + (100 - p).toFixed(3) + '"'
+             + ' stroke-dashoffset="' + off.toFixed(3) + '"></circle>';
+        off = (off - p + 100) % 100;
+      });
+      return out;
+    },
+
+    /* ── column order: the Screens 04/05/07/11-15/18 convention, reused ───── */
+    initCols() {
+      this.cols = this.DEFAULT_COLS.slice();
+      let saved = null;
+      try { saved = JSON.parse(window.localStorage.getItem(this.COLS_KEY) || "null"); }
+      catch (e) { saved = null; }
+      if (!Array.isArray(saved) || !saved.length) return;
+      const byKey = {};
+      this.DEFAULT_COLS.forEach(c => { byKey[c.key] = c; });
+      const next = [];
+      saved.forEach(k => { if (byKey[k] && next.indexOf(byKey[k]) === -1) next.push(byKey[k]); });
+      this.DEFAULT_COLS.forEach(c => { if (next.indexOf(c) === -1) next.push(c); });
+      if (next.length === this.DEFAULT_COLS.length) this.cols = next;
+    },
+    saveCols() {
+      try { window.localStorage.setItem(this.COLS_KEY, JSON.stringify(this.cols.map(c => c.key))); }
+      catch (e) {}
+    },
+    isDefaultOrder() {
+      return this.cols.length === this.DEFAULT_COLS.length
+             && this.cols.every((c, i) => c.key === this.DEFAULT_COLS[i].key);
+    },
+    resetCols() {
+      this.cols = this.DEFAULT_COLS.slice();
+      try { window.localStorage.removeItem(this.COLS_KEY); } catch (e) {}
+    },
+    headClick(key) {
+      if (Date.now() - this._dragEndAt < 250) return;   /* drag, not a sort click */
+      this.tSort(key);
     },
   });
 }

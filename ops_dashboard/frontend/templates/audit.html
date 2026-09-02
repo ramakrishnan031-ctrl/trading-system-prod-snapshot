@@ -1,48 +1,770 @@
 {% extends "base.html" %}
-{% from "components.html" import kpi_row, kpi_card, filter_bar, data_table, export_button %}
 {% block title %}AlgoCore Systems — Audit{% endblock %}
 {% block nav_audit %}active{% endblock %}
 {% block content %}
-{# G5b: Audit accountability feed over 6 sources (audit_feed UNCHANGED). User /
-   who-changed / auth-events / control-actions are a GAP (G-5) — single-user, no
-   control writes; shown honestly, never fabricated. #}
-<div x-data="auditPage()" x-init="load()" @ops-refresh.window="load()">
+{#  SCREEN 13 — AUDIT.  `gui/13. Audit.png` + `.txt` are BINDING for structure:
+    KPI deck (6) · filters (6 + reset/apply) · the 9-column events table with a
+    global search · the Audit Details panel with OLD VALUE ↓ NEW VALUE · the
+    four-stage timeline · Critical Changes · category donut · events-over-time
+    line · Top Users · Retention Overview · footer exports.
 
-  {% call kpi_row() %}
-    {{ kpi_card("Total Events", "data.total || 0", tone="info") }}
-    {{ kpi_card("Critical", "sev('CRITICAL')", tone="neg") }}
-    {{ kpi_card("Warnings", "sev('WARN')", tone="warn") }}
-    {{ kpi_card("Last Event", "(data.rows && data.rows.length) ? tsShort(data.rows[0].ts) : '—'", tone="info") }}
-  {% endcall %}
+    ⛔ NO SCANNER ANYWHERE — no column, no filter, no legend, no export field.
+       `webhook_audit.scanner_name` is not even selected in the reader.
 
-  <section class="panel">
-    <h2 class="panel-title">Audit
-      <span class="panel-sub">accountability feed · user / who-changed not captured (G-5 — single-user, no control writes)</span>
-    </h2>
+    ⚠️ WHAT THIS SYSTEM DOES NOT RECORD is rendered as an explicit gap, never
+       invented: WHO changed something (auth.py persists nothing, so the
+       Authentication category has no source at all) · the Source origin ·
+       Requested/Validated/Confirmed lifecycle stages · any audit retention
+       policy. The old→new values ARE real: they are diffed from consecutive
+       `config_snapshots` rows, whose stamp is the startup that OBSERVED the
+       configuration rather than the moment a file was edited.
 
-    {{ filter_bar([
-      {"key":"date","label":"Date","type":"date"},
-      {"key":"table","label":"Source","type":"select","options":["system_events","reconciliation_log","webhook_audit","eod_verification","preflight","control_tower"]},
-      {"key":"severity","label":"Severity","type":"select","options":["INFO","WARN","CRITICAL"]},
-    ]) }}
-    {{ export_button("Export Audit") }}
+    ⛔ An Alpine x-for TEMPLATE placed inside an SVG element renders NOTHING —
+       the HTML parser turns it into an SVG node named "template", so Alpine
+       finds no content to repeat and the panel is a silent empty box. Every
+       repeated SVG child below is injected with `x-html` on a group node
+       instead, the pattern Screens 06/07/09/10/11 already use.
 
-    {{ data_table("audit", [
-      {"key":"ts","label":"Time","kind":"ts"},
-      {"key":"source","label":"Category"},
-      {"key":"severity","label":"Severity"},
-      {"key":"summary","label":"Detail"},
-    ], rows_expr="data.rows") }}
+       ⚠️ The tag names are spelled out in words ON PURPOSE. Screens 10/11/12
+       each carry a tree-wide scanner for this trap, and those scanners read RAW
+       source without stripping comments — writing the two tags literally here
+       made all three of them fail on the documentation of the very rule they
+       enforce.  #}
+<div class="aud-page" x-data="auditPage()" x-init="init()" @ops-refresh.window="load()">
+
+  <div class="aud-head">
+    <div>
+      <h1 class="aud-title">AUDIT</h1>
+      <div class="aud-sub">Complete accountability and traceability across the trading system</div>
+    </div>
+    <div class="aud-lastcheck">
+      <span class="aud-lc-l">LAST CHECKED</span>
+      <span class="aud-lc-v mono" x-text="hhmmss(data.generated_at) || '—'"></span>
+    </div>
+  </div>
+
+  {# ── the six approved KPI, in the approved order ─────────────────────────── #}
+  <div class="aud-kpis">
+    <template x-for="k in KPIS" :key="k.key">
+      <section class="panel aud-kpi">
+        <div class="aud-kpi-top">
+          <span class="aud-kpi-ico" :class="'aud-ico-' + k.tone" x-html="k.ico"></span>
+          <span class="aud-kpi-l" x-text="k.label"></span>
+        </div>
+        <b class="aud-kpi-v" :class="'aud-v-' + k.tone" x-text="kpiValue(k.key)"></b>
+        <span class="aud-kpi-s" x-text="kpiSub(k.key)"></span>
+        <svg class="aud-spark" viewBox="0 0 120 30" preserveAspectRatio="none"
+             aria-hidden="true" x-show="k.key !== 'last_event'">
+          <polyline :points="sparkPts(k.key)" :class="'aud-spk-' + k.tone"
+                    fill="none" stroke-width="1.6"
+                    vector-effect="non-scaling-stroke"></polyline>
+        </svg>
+      </section>
+    </template>
+  </div>
+
+  {# ── FILTERS ─────────────────────────────────────────────────────────────── #}
+  <section class="panel aud-filters">
+    <h3 class="panel-title">FILTERS</h3>
+    <div class="aud-frow">
+      <label class="aud-f">
+        <span class="aud-f-l">Date Range</span>
+        <span class="aud-f-dates">
+          <input type="date" class="sel aud-date" x-model="f.start">
+          <span class="aud-f-to">→</span>
+          <input type="date" class="sel aud-date" x-model="f.end">
+          <button class="rt-btn aud-x" type="button" title="Clear date range"
+                  @click="f.start=''; f.end=''">✕</button>
+        </span>
+      </label>
+      <template x-for="s in SELECTS" :key="s.key">
+        <label class="aud-f">
+          <span class="aud-f-l" x-text="s.label"></span>
+          <select class="sel" x-model="f[s.key]">
+            <option value="" x-text="s.all"></option>
+            <template x-for="o in opts(s.key)" :key="o">
+              <option :value="o" x-text="o"></option>
+            </template>
+          </select>
+        </label>
+      </template>
+      {# The two filter actions use the SHARED .btn-ghost/.btn-primary pair that
+         Screens 03/04/05 already use, so this panel's buttons cannot drift from
+         theirs. ⛔ The `▼` stays: it is approved content from `13. Audit.png`,
+         and this correction is cosmetic. ⛔ The `.rt-btn` pill is NOT retired —
+         it is still the right component for the AUDIT EVENTS toolbar and the
+         chart range chips, which are approved and out of scope. #}
+      <span class="aud-fbtns">
+        <button class="btn-ghost" type="button" @click="resetFilters()">Reset Filters</button>
+        <button class="btn-primary" type="button" @click="applyFilters()">▼ Apply Filters</button>
+      </span>
+    </div>
   </section>
+
+  {# ── MAIN: events table + right rail ─────────────────────────────────────── #}
+  {# ⚠️ THE CHARTS RUN FULL WIDTH BELOW, and that was MEASURED rather than
+     assumed. Nesting them in a left column beside the rail (as the mockup's
+     column edges suggest) was tried and REVERTED: it moved the dead space from
+     149px to ~865px, because the rail is short whenever no record is selected,
+     AND it squeezed the events-over-time chart until its x-axis labels
+     collided. Panels, order and the right-hand rail are unchanged; only the
+     charts' width differs from the mockup, in the direction that keeps them
+     legible. #}
+  <div class="aud-main">
+    <section class="panel aud-events">
+      <div class="aud-panel-head">
+        <h3 class="panel-title">AUDIT EVENTS
+          <span class="panel-sub" x-text="'(' + (data.records || []).length + ' matching)'"></span>
+        </h3>
+        <span class="aud-tools">
+          <span class="aud-search">
+            <input type="search" class="sel aud-q" placeholder="Global Search…"
+                   x-model="f.q" @keyup.enter="applyFilters()">
+            <button class="rt-btn aud-qgo" type="button" title="Search"
+                    @click="applyFilters()">⌕</button>
+          </span>
+          <a class="rt-btn aud-exp" :href="exportUrl()">⇩ Export XLSX</a>
+          <button class="rt-btn" type="button" x-show="!isDefaultOrder()" x-cloak
+                  @click="resetCols()" title="Restore the approved column order">↺ Columns</button>
+        </span>
+      </div>
+
+      <div class="aud-tbl-wrap">
+        <table class="cap-table aud-tbl">
+          <thead><tr>
+            <template x-for="c in cols" :key="c.key">
+              <th class="lbl aud-th"
+                  :class="[dragKey === c.key ? 'is-drag' : '',
+                           overKey === c.key ? 'is-over' : '']"
+                  draggable="true" role="button" tabindex="0"
+                  :title="c.label + ' · click to sort, drag to reorder'"
+                  @dragstart="onDragStart(c.key, $event)"
+                  @dragover.prevent="overKey = c.key"
+                  @dragleave="overKey === c.key && (overKey = '')"
+                  @drop.prevent="onDrop(c.key)"
+                  @dragend="onDragEnd()"
+                  @click="headClick(c.key)" @keyup.enter="tSort(c.key)">
+                <span class="aud-grip" aria-hidden="true">⠿</span><span
+                      x-text="c.label"></span><span class="aud-arrow" x-text="tArrow(c.key)"></span>
+              </th>
+            </template>
+          </tr></thead>
+          <tbody>
+            <template x-for="r in tPaged(rows())" :key="r.ref_id">
+              <tr :class="sel && sel.ref_id === r.ref_id ? 'aud-sel' : ''"
+                  @click="pick(r)" tabindex="0" @keyup.enter="pick(r)">
+                {# ⭐ The per-column class follows the KEY, not the position, so
+                   a width rule survives a drag-reorder intact. #}
+                <template x-for="c in cols" :key="c.key">
+                  <td class="lbl" :class="'aud-c-' + c.key"
+                      :title="String(r[c.key] === null || r[c.key] === undefined ? '' : r[c.key])"
+                      x-html="cell(r, c)"></td>
+                </template>
+              </tr>
+            </template>
+            <tr x-show="!rows().length" x-cloak>
+              <td :colspan="cols.length" class="aud-empty">
+                No audit records match the current filters.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="aud-foot">
+        <span class="aud-showing" x-text="showing()"></span>
+        <span class="aud-pager">
+          <button class="rt-btn" type="button" @click="tPage = Math.max(1, tPage - 1)"
+                  :disabled="tPage <= 1">‹</button>
+          <template x-for="p in pageList()" :key="p">
+            <button class="rt-btn aud-pg" type="button"
+                    :class="p === tPage ? 'rt-active' : ''"
+                    :disabled="p === '…'"
+                    @click="p !== '…' && (tPage = p)" x-text="p"></button>
+          </template>
+          <button class="rt-btn" type="button" @click="tPage = Math.min(tPageCount(rows()), tPage + 1)"
+                  :disabled="tPage >= tPageCount(rows())">›</button>
+        </span>
+        <span class="aud-rpp">Rows per page:
+          <select class="sel" x-model.number="tPageSize" @change="tPage = 1">
+            <template x-for="n in tPageSizes" :key="n">
+              <option :value="n" x-text="n"></option>
+            </template>
+          </select>
+        </span>
+      </div>
+    </section>
+    <aside class="aud-rail">
+      {# ── AUDIT DETAILS — the approved OLD VALUE ↓ NEW VALUE panel ────────── #}
+      <section class="panel aud-detail">
+        <div class="aud-panel-head">
+          <h3 class="panel-title">AUDIT DETAILS</h3>
+          <button class="rt-btn aud-x" type="button" x-show="sel" x-cloak
+                  @click="sel = null" title="Close">✕</button>
+        </div>
+
+        <div class="aud-d-empty" x-show="!sel" x-cloak>
+          Select an audit record to see what changed.
+        </div>
+
+        <div class="aud-d-body" x-show="sel" x-cloak>
+          <table class="cap-table aud-kv"><tbody>
+            <template x-for="row in detailRows()" :key="row.k">
+              <tr>
+                <td class="lbl" x-text="row.k"></td>
+                <td class="aud-kv-v" x-html="row.v"></td>
+              </tr>
+            </template>
+          </tbody></table>
+
+          {# OLD → NEW. Real values from consecutive config snapshots, or an
+             explicit gap — ⛔ never a guessed pair. #}
+          <div class="aud-vals">
+            <template x-if="sel && sel.old_value !== null && sel.new_value !== null">
+              <div>
+                <div class="aud-v-h">OLD VALUE</div>
+                <div class="aud-v-box aud-v-old">
+                  <div class="aud-v-f" x-text="sel.field || ''"></div>
+                  <div class="aud-v-n mono" x-text="sel.old_value"></div>
+                </div>
+                <div class="aud-v-arrow">↓</div>
+                <div class="aud-v-h">NEW VALUE</div>
+                <div class="aud-v-box aud-v-new">
+                  <div class="aud-v-f" x-text="sel.field || ''"></div>
+                  <div class="aud-v-n mono num-pos" x-text="sel.new_value"></div>
+                </div>
+              </div>
+            </template>
+            <template x-if="sel && (sel.old_value === null || sel.new_value === null)">
+              <div class="aud-gapbox">
+                <b class="aud-unknown">NO OLD/NEW VALUE RECORDED</b>
+                <span>This record is not a configuration value change, so the
+                      system stores no before/after pair for it. Field-level
+                      old→new exists only where consecutive configuration
+                      snapshots prove it.</span>
+              </div>
+            </template>
+          </div>
+        </div>
+      </section>
+
+      {# ── TIMELINE ────────────────────────────────────────────────────────── #}
+      <section class="panel aud-timeline" x-show="sel" x-cloak>
+        <h3 class="panel-title">TIMELINE
+          <span class="panel-sub" x-text="sel ? '(' + (sel.category || '') + ' change)' : ''"></span>
+        </h3>
+        <ul class="aud-tl">
+          <template x-for="st in timeline()" :key="st.stage">
+            <li :class="st.measured ? 'is-on' : 'is-gap'">
+              <i class="aud-tl-dot" :class="st.measured ? 'aud-tl-ok' : 'aud-tl-gap'"></i>
+              <span class="aud-tl-ts mono" x-text="st.measured ? hhmmss(st.ts) : '—'"></span>
+              <span class="aud-tl-body">
+                <b class="aud-tl-st" :class="st.measured ? 'num-pos' : 'aud-unknown'"
+                   x-text="st.stage"></b>
+                <span class="aud-tl-n" x-text="st.measured ? st.note : 'NOT INSTRUMENTED — ' + st.note"></span>
+              </span>
+            </li>
+          </template>
+        </ul>
+        <div class="aud-note" x-text="timelineWhy()"></div>
+      </section>
+
+    </aside>
+  </div>
+
+  {# ── BOTTOM ROW: donut · line · top users · retention ─────────────────────── #}
+  {# LOWER BAND — the analytics with CRITICAL CHANGES beside them. ⭐ The
+     column geometry deliberately MATCHES `.aud-main` above (fluid + 330px), so
+     the critical panel lands directly beneath AUDIT DETAILS — the relationship
+     the original artwork draws and the design TXT asks to preserve. #}
+  <div class="aud-lower">
+    <div class="aud-zone">
+    <section class="panel aud-dist">
+      <h3 class="panel-title">AUDIT CATEGORY DISTRIBUTION</h3>
+      <div class="aud-dist-body">
+        <svg class="aud-donut" viewBox="0 0 42 42" aria-hidden="true">
+          <circle class="aud-donut-bg" cx="21" cy="21" r="15.9155"
+                  fill="none" stroke-width="6"></circle>
+          {# ⛔ x-html on a group node, never an x-for loop here — header note. #}
+          <g x-html="donutMarkup()"></g>
+        </svg>
+        <ul class="aud-legend">
+          <template x-for="s in (data.distribution || {}).slices || []" :key="s.category">
+            <li>
+              <i class="dot" :class="'aud-dot-' + s.category"></i>
+              <span class="aud-lg-c" x-text="s.category"></span>
+              <span class="aud-lg-n mono" x-text="fmt(s.count) + ' (' + s.pct.toFixed(1) + '%)'"></span>
+            </li>
+          </template>
+          <li x-show="!((data.distribution || {}).slices || []).length" x-cloak
+              class="aud-empty">No records in range.</li>
+        </ul>
+      </div>
+      <div class="aud-dist-total">
+        <span>Total Events</span>
+        <b class="mono" x-text="fmt((data.distribution || {}).total || 0)"></b>
+      </div>
+    </section>
+
+    <section class="panel aud-ot">
+      <div class="aud-panel-head">
+        <h3 class="panel-title">AUDIT EVENTS OVER TIME</h3>
+        <span class="aud-range">
+          <template x-for="r in RANGES" :key="r.k">
+            <button class="rt-btn" type="button" :class="rangeKey === r.k ? 'rt-active' : ''"
+                    @click="setRange(r.k)" x-text="r.l"></button>
+          </template>
+        </span>
+      </div>
+      {# ⛔ NO `preserveAspectRatio="none"` and NO fixed viewBox width. A
+         560-wide viewBox rendered into a narrower panel scales the axis TEXT
+         down with it — that is exactly how Screen 10 ended up with ~4px labels.
+         `otW` is measured from this wrapper, so one viewBox unit is one CSS
+         pixel and 13px text renders at 13px. #}
+      {# ⛔ NO viewBox AT ALL, deliberately. Two reasons, and the second is a
+         trap: (1) `otW` is measured from this wrapper and the CSS height is
+         200px, so the SVG's default user-unit == CSS-pixel mapping is already
+         exactly 1:1 — axis text renders at its literal 13px; (2) Alpine's
+         `:viewBox` would set the LOWERCASE attribute `viewbox`, which SVG
+         ignores entirely, so the binding would look correct in source and do
+         nothing. Omitting it is both simpler and honest about what happens. #}
+      <div class="aud-ot-wrap" x-ref="otwrap">
+        <svg class="aud-line" aria-hidden="true">
+          <g x-html="lineMarkup()"></g>
+        </svg>
+      </div>
+      <div class="aud-ot-legend"><i class="dot aud-dot-line"></i>Audit Events</div>
+    </section>
+
+    <section class="panel aud-users">
+      <div class="aud-panel-head">
+        <h3 class="panel-title">TOP USERS <span class="panel-sub">(BY CHANGES)</span></h3>
+      </div>
+      <table class="cap-table aud-utbl">
+        <thead><tr>
+          <th class="lbl">User</th><th class="ctr">Changes</th><th class="ctr">% of Total</th>
+        </tr></thead>
+        <tbody>
+          <template x-for="u in ((data.top_users || {}).users || [])" :key="u.user">
+            <tr>
+              <td class="lbl"><span x-text="u.user"></span>
+                <span class="aud-proc" title="a process, not a person">process</span></td>
+              <td class="ctr mono" x-text="fmt(u.changes)"></td>
+              <td class="ctr mono" x-text="u.pct.toFixed(2) + '%'"></td>
+            </tr>
+          </template>
+          <tr x-show="!((data.top_users || {}).users || []).length" x-cloak>
+            <td colspan="3" class="aud-empty">No attributed actor in this range.</td>
+          </tr>
+          <tr class="aud-utot">
+            <td class="lbl">Total</td>
+            <td class="ctr mono" x-text="fmt((data.top_users || {}).total || 0)"></td>
+            <td class="ctr mono" x-text="((data.top_users || {}).total ? '100%' : '—')"></td>
+          </tr>
+        </tbody>
+      </table>
+      {# ⚠️ Every actor this system records is a PROCESS. Saying so is the whole
+         point — presenting them as people would be fabricated attribution. #}
+      <div class="aud-note" x-text="(data.top_users || {}).note || ''"></div>
+      <div class="aud-note aud-unknown" x-show="((data.top_users || {}).unattributed || 0) > 0"
+           x-cloak x-text="(data.top_users || {}).unattributed_note || ''"></div>
+    </section>
+
+    <section class="panel aud-ret">
+      <h3 class="panel-title">RETENTION OVERVIEW</h3>
+      <table class="cap-table aud-kv"><tbody>
+        <tr><td class="lbl">Audit Records</td>
+            <td class="aud-kv-v mono" x-text="fmt((data.retention || {}).records || 0)"></td></tr>
+        <tr><td class="lbl">Oldest Record</td>
+            <td class="aud-kv-v mono" x-text="tsFull((data.retention || {}).oldest)"></td></tr>
+        <tr><td class="lbl">Newest Record</td>
+            <td class="aud-kv-v mono" x-text="tsFull((data.retention || {}).newest)"></td></tr>
+        <tr><td class="lbl">Observed Span</td>
+            <td class="aud-kv-v mono" x-html="spanCell()"></td></tr>
+        <tr><td class="lbl">Retention Period</td>
+            <td class="aud-kv-v" x-html="retentionCell()"></td></tr>
+      </tbody></table>
+      <div class="aud-note" x-text="(data.retention || {}).scope_note || ''"></div>
+    </section>
+    </div>
+
+    {# ── CRITICAL CHANGES ────────────────────────────────────────────────── #}
+    <section class="panel aud-critical">
+      <div class="aud-panel-head">
+        <h3 class="panel-title">CRITICAL CHANGES</h3>
+        <span class="aud-crit-n" x-text="(data.critical || []).length + ' in range'"></span>
+      </div>
+      <ul class="aud-crit">
+        <template x-for="c in (data.critical || [])" :key="c.ref_id">
+          <li @click="pickRef(c.ref_id)" tabindex="0" @keyup.enter="pickRef(c.ref_id)">
+            <i class="aud-crit-i" :class="'aud-cd-' + critTone(c)"></i>
+            <span class="aud-crit-b">
+              <b class="aud-crit-t" :class="txt(critTone(c))" x-text="c.action"></b>
+              <span class="aud-crit-d" x-text="critLine(c)"></span>
+            </span>
+            <span class="aud-crit-ts mono" x-text="c.time || '—'"></span>
+          </li>
+        </template>
+        <li x-show="!(data.critical || []).length" x-cloak class="aud-empty">
+          No risk, capital, control or failed changes in this range.</li>
+      </ul>
+    </section>
+  </div>
+
+  <div class="aud-footer">
+    <span class="aud-foot-note">ⓘ All times are IST (Asia/Kolkata). This page
+      auto-updates on the dashboard's own refresh cycle.
+      ⛔ Who changed a setting is <b>not captured</b> anywhere in this system —
+      GUI login/logout is never persisted, so the Authentication category has no
+      source and the User column shows the recorded PROCESS or an explicit gap.</span>
+    {# ⭐ `.btn-export` — the SAME control S09/S11/S12 carry on their bottom
+       bars, so the four approved screens cannot drift apart. ⛔ Still the
+       existing `exportUrl()`; ⛔ no new route. #}
+    <span class="aud-foot-btns">
+      <a class="btn-export" :href="exportUrl()"
+         :title="'Exports the CURRENT VIEW — ' + (data.total_records ?? 0) + ' record(s)'"
+         >⭳ Export Current View</a>
+      <a class="btn-export" :href="exportUrl()">⭳ Export XLSX</a>
+    </span>
+  </div>
 </div>
+
 <script>
 function auditPage() {
-  return Object.assign(pageBase("/api/audit"),
-    tableMixin({ defaultSize: 50 }),
-    filterMixin([{ key: "date" }, { key: "table" }, { key: "severity" }]), {
-    qs() { const q = this.fQuery(); return q ? q + "&size=200" : "?size=200"; },
-    sev(s) { return (this.data.rows || []).filter(r => (r.severity || "") === s).length; },
-    tsShort(ts) { return ts ? String(ts).replace("T", " ").slice(0, 19) : "—"; },
+  return Object.assign(
+    colDragMixin(),pageBase("/api/audit-screen"), tableMixin({ defaultSize: 10, pageSizes: [10, 25, 50, 100] }), {
+    /* the six approved KPI, in the approved order and wording */
+    KPIS: [
+      { key: "total_events",          label: "TOTAL AUDIT EVENTS",     tone: "info",   ico: "▤" },
+      { key: "todays_changes",        label: "TODAY'S CHANGES",        tone: "pos",    ico: "▦" },
+      { key: "configuration_changes", label: "CONFIGURATION CHANGES",  tone: "purple", ico: "◈" },
+      { key: "control_actions",       label: "CONTROL ACTIONS",        tone: "warn",   ico: "◉" },
+      { key: "failed_actions",        label: "FAILED ACTIONS",         tone: "neg",    ico: "✕" },
+      { key: "last_event",            label: "LAST AUDIT EVENT",       tone: "info",   ico: "◷" },
+    ],
+    SELECTS: [
+      { key: "category", label: "Category", all: "All Categories" },
+      { key: "action",   label: "Action",   all: "All Actions" },
+      { key: "status",   label: "Status",   all: "All Statuses" },
+      { key: "module",   label: "Module",   all: "All Modules" },
+      { key: "user",     label: "User",     all: "All Users" },
+    ],
+    RANGES: [{ k: "7d", l: "Last 7 Days" }, { k: "30d", l: "Last 30 Days" },
+             { k: "90d", l: "Last 90 Days" }, { k: "1y", l: "Last Year" }],
+
+    /* the approved 9 columns — ⛔ no Scanner */
+    DEFAULT_COLS: [
+      { key: "date",     label: "Date" },
+      { key: "time",     label: "Time" },
+      { key: "category", label: "Category" },
+      { key: "module",   label: "Module" },
+      { key: "action",   label: "Action" },
+      { key: "user",     label: "User" },
+      { key: "status",   label: "Status" },
+      { key: "source",   label: "Source" },
+      { key: "ref_id",   label: "Reference ID" },
+    ],
+    cols: [],
+    COLS_KEY: "screen13.audit.colOrder.v1",
+
+    f: { start: "", end: "", category: "", action: "", status: "", module: "", user: "", q: "" },
+    applied: {},
+    rangeKey: "7d",
+    sel: null,
+    otW: 560,
+
+    init() {
+      this.initCols();
+      this.setRange("7d", true);
+      this.measure();
+      window.addEventListener("resize", () => this.measure());
+    },
+    /* One viewBox unit == one CSS pixel, so the axis labels render at their
+       literal size instead of being scaled down with the panel. */
+    measure() {
+      const el = this.$refs.otwrap;
+      if (el && el.clientWidth > 60) this.otW = Math.round(el.clientWidth);
+    },
+
+    /* ── query ─────────────────────────────────────────────────────────────── */
+    qs() {
+      const a = this.applied, p = [];
+      Object.keys(a).forEach(k => { if (a[k]) p.push(k + "=" + encodeURIComponent(a[k])); });
+      return p.length ? "?" + p.join("&") : "";
+    },
+    exportUrl() { return "/api/export/audit-screen" + this.qs(); },
+
+    applyFilters() {
+      this.applied = Object.assign({}, this.f);
+      this.tPage = 1;
+      this.sel = null;                 /* a stale detail must not survive a refilter */
+      this.load();
+    },
+    resetFilters() {
+      this.f = { start: "", end: "", category: "", action: "", status: "",
+                 module: "", user: "", q: "" };
+      this.setRange("7d");
+    },
+    setRange(k, silent) {
+      this.rangeKey = k;
+      const days = { "7d": 7, "30d": 30, "90d": 90, "1y": 365 }[k] || 7;
+      const end = new Date();
+      const start = new Date(end.getTime() - (days - 1) * 86400000);
+      const iso = d => d.toISOString().slice(0, 10);
+      this.f.start = iso(start); this.f.end = iso(end);
+      if (!silent) { this.applyFilters(); return; }
+      this.applied = Object.assign({}, this.f);
+      this.load();
+    },
+    opts(key) { return ((this.data.filters || {}).options || {})[key] || []; },
+
+    /* ── KPI ───────────────────────────────────────────────────────────────── */
+    kpiValue(key) {
+      const k = this.data.kpi || {};
+      if (key === "last_event") {
+        return (k.last_event && k.last_event.time) ? k.last_event.time : "—";
+      }
+      return this.fmt(k[key] || 0);
+    },
+    kpiSub(key) {
+      const k = this.data.kpi || {};
+      if (key === "last_event") return (k.last_event && k.last_event.date) || "—";
+      if (key === "total_events") {
+        const r = this.data.range || {};
+        return (r.start || "") + " → " + (r.end || "");
+      }
+      if (key === "todays_changes") return "Since 00:00";
+      return "Today";
+    },
+    sparkPts(key) {
+      const s = (this.data.sparklines || {})[key] || [];
+      if (!s.length) return "";
+      const max = Math.max(1, ...s), n = s.length;
+      return s.map((v, i) => {
+        const x = n === 1 ? 60 : (i * 120) / (n - 1);
+        return x.toFixed(1) + "," + (28 - (v / max) * 26).toFixed(1);
+      }).join(" ");
+    },
+
+    /* ── table ─────────────────────────────────────────────────────────────── */
+    rows() { return this.data.records || []; },
+    showing() {
+      const n = this.rows().length;
+      if (!n) return "Showing 0 of 0 entries";
+      const a = (this.tPage - 1) * this.tPageSize + 1;
+      const b = Math.min(n, this.tPage * this.tPageSize);
+      return "Showing " + a + " to " + b + " of " + this.fmt(n) + " entries";
+    },
+    pageList() {
+      const t = this.tPageCount(this.rows()), c = this.tPage, out = [];
+      if (t <= 7) { for (let i = 1; i <= t; i++) out.push(i); return out; }
+      out.push(1);
+      if (c > 3) out.push("…");
+      for (let i = Math.max(2, c - 1); i <= Math.min(t - 1, c + 1); i++) out.push(i);
+      if (c < t - 2) out.push("…");
+      out.push(t);
+      return out;
+    },
+    esc(s) {
+      return String(s === null || s === undefined ? "" : s)
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    },
+    /* ⛔ An unrecorded field renders as NOT INSTRUMENTED, never as a blank or a
+       dash that could read as "nothing happened". */
+    gap(why) {
+      return '<span class="aud-unknown" title="' + this.esc(why) + '">NOT INSTRUMENTED</span>';
+    },
+    cell(r, c) {
+      const v = r[c.key];
+      if (c.key === "category") {
+        return '<span class="aud-badge aud-cat-' + this.esc(v) + '">' + this.esc(v) + "</span>";
+      }
+      if (c.key === "status") {
+        if (!v) return this.gap("this record type has no success/failure outcome to report");
+        return '<span class="aud-badge aud-st-' + this.esc(v) + '">' + this.esc(v) + "</span>";
+      }
+      if (c.key === "user") {
+        if (!v) return this.gap(((this.data.gaps || {}).user || {}).reason || "not recorded");
+        return '<span>' + this.esc(v) + '</span><span class="aud-proc">process</span>';
+      }
+      if (c.key === "source") {
+        if (!v) return this.gap(((this.data.gaps || {}).source || {}).reason || "not recorded");
+        return '<span>' + this.esc(v) + "</span>";
+      }
+      if (c.key === "ref_id") return '<span class="mono aud-ref">' + this.esc(v) + "</span>";
+      if (c.key === "time") return '<span class="mono">' + this.esc(v || "—") + "</span>";
+      return this.esc(v === null || v === undefined ? "—" : v);
+    },
+    pick(r) { this.sel = r; },
+    pickRef(ref) {
+      const hit = this.rows().find(r => r.ref_id === ref);
+      if (hit) this.sel = hit;
+    },
+
+    /* ── detail ────────────────────────────────────────────────────────────── */
+    detailRows() {
+      const s = this.sel; if (!s) return [];
+      const g = this.data.gaps || {};
+      const badge = (cls, v) => '<span class="aud-badge ' + cls + this.esc(v) + '">' + this.esc(v) + "</span>";
+      return [
+        { k: "Action",       v: this.esc(s.action) },
+        { k: "Category",     v: badge("aud-cat-", s.category) },
+        { k: "Module",       v: this.esc(s.module) },
+        { k: "User",         v: s.user
+              ? this.esc(s.user) + '<span class="aud-proc">process</span>'
+              : this.gap((g.user || {}).reason || "") },
+        { k: "Status",       v: s.status ? badge("aud-st-", s.status)
+              : this.gap("this record type has no success/failure outcome") },
+        { k: "Source",       v: s.source ? this.esc(s.source)
+              : this.gap((g.source || {}).reason || "") },
+        { k: "Reference ID", v: '<span class="mono aud-ref">' + this.esc(s.ref_id) + "</span>" },
+        { k: "Date & Time",  v: '<span class="mono">' + this.esc(this.tsFull(s.ts)) + "</span>" },
+        { k: "Detail",       v: s.detail ? this.esc(s.detail) : "—" },
+      ];
+    },
+    /* Only `Applied` is real; the other three stages are not instrumented and
+       must never be drawn as completed. */
+    timeline() {
+      const s = this.sel; if (!s) return [];
+      return (this.data.timeline_stages || []).map(stage => ({
+        stage: stage,
+        ts: stage === "Applied" ? s.ts : null,
+        measured: stage === "Applied" && !!s.ts,
+        /* Short per stage — the full reason is stated ONCE under the list, so
+           the panel does not repeat the same sentence three times. */
+        note: stage === "Applied" ? "the moment the change took effect"
+                                  : "no timestamp recorded for this stage",
+      }));
+    },
+    timelineWhy() {
+      return ((this.data.gaps || {}).timeline || {}).reason || "";
+    },
+
+    /* ── critical changes ──────────────────────────────────────────────────── */
+    critTone(c) {
+      if (c.status === "Failed") return "neg";
+      if (c.category === "Risk") return "neg";
+      if (c.category === "Capital") return "warn";
+      if (c.category === "Control") return "warn";
+      return "info";
+    },
+    critLine(c) {
+      if (c.field && c.old_value !== null && c.new_value !== null) {
+        return c.field + ": " + c.old_value + " → " + c.new_value;
+      }
+      return c.detail || (c.category + " · " + (c.date || ""));
+    },
+    txt(tone) {
+      return { pos: "num-pos", neg: "num-neg", warn: "num-warn",
+               info: "aud-info" }[tone] || "aud-info";
+    },
+
+    /* ── donut. r=15.9155 ⇒ circumference 100, so pct IS the dash length. ──── */
+    donutMarkup() {
+      const sl = (this.data.distribution || {}).slices || [];
+      let off = 25, out = "";     /* 25 = start at 12 o'clock */
+      sl.forEach(s => {
+        const p = Math.max(0, s.pct);
+        out += '<circle class="aud-arc aud-arc-' + this.esc(s.category) + '" cx="21" cy="21"'
+             + ' r="15.9155" fill="none" stroke-width="6"'
+             + ' stroke-dasharray="' + p.toFixed(3) + ' ' + (100 - p).toFixed(3) + '"'
+             + ' stroke-dashoffset="' + off.toFixed(3) + '"></circle>';
+        off = (off - p + 100) % 100;
+      });
+      return out;
+    },
+
+    /* ── events over time ──────────────────────────────────────────────────── */
+    lineMarkup() {
+      const pts = ((this.data.over_time || {}).points) || [];
+      /* R is the RIGHT margin. At 8px the last x-label (a centred 5-char date)
+         overflowed the viewport edge and rendered as "08-1". */
+      const W = this.otW, H = 200, L = 36, R = 24, T = 12, B = 26;
+      if (!pts.length) return "";
+      const max = Math.max(1, ...pts.map(p => p.count));
+      const x = i => L + (pts.length === 1 ? (W - L - R) / 2
+                          : (i * (W - L - R)) / (pts.length - 1));
+      const y = v => T + (H - T - B) * (1 - v / max);
+      let out = "";
+      /* gridlines + y labels */
+      for (let g = 0; g <= 4; g++) {
+        const v = (max * g) / 4, yy = y(v);
+        out += '<line class="aud-gl" x1="' + L + '" y1="' + yy.toFixed(1)
+             + '" x2="' + (W - R) + '" y2="' + yy.toFixed(1) + '"></line>';
+        out += '<text class="aud-ax" x="' + (L - 6) + '" y="' + (yy + 3.5).toFixed(1)
+             + '" text-anchor="end">' + this.short(v) + "</text>";
+      }
+      /* the line */
+      out += '<polyline class="aud-pl" fill="none" points="'
+           + pts.map((p, i) => x(i).toFixed(1) + "," + y(p.count).toFixed(1)).join(" ")
+           + '"></polyline>';
+      /* points + x labels (thinned so they cannot overlap) */
+      const step = Math.max(1, Math.ceil(pts.length / 8));
+      pts.forEach((p, i) => {
+        out += '<circle class="aud-pt" cx="' + x(i).toFixed(1) + '" cy="'
+             + y(p.count).toFixed(1) + '" r="2.4"></circle>';
+        if (i % step === 0 || i === pts.length - 1) {
+          out += '<text class="aud-ax" x="' + x(i).toFixed(1) + '" y="' + (H - 8)
+               + '" text-anchor="middle">' + this.esc(p.day.slice(5)) + "</text>";
+        }
+      });
+      return out;
+    },
+    short(v) {
+      if (v >= 1000) return (v / 1000).toFixed(v % 1000 ? 1 : 0) + "K";
+      return String(Math.round(v));
+    },
+
+    /* ── retention ─────────────────────────────────────────────────────────── */
+    spanCell() {
+      const r = this.data.retention || {};
+      if (r.span_days === null || r.span_days === undefined) {
+        return this.gap("fewer than two records, so no span can be measured");
+      }
+      return '<span class="mono">' + r.span_days + " days</span>";
+    },
+    /* ⛔ No audit retention policy exists. Showing signal_retention_days here
+       would attribute a policy to audit that nobody wrote. */
+    retentionCell() {
+      const g = ((this.data.retention || {}).retention_period || {});
+      return this.gap(g.reason || "no audit retention policy exists");
+    },
+
+    /* ── formatting ────────────────────────────────────────────────────────── */
+    fmt(n) { return (n === null || n === undefined) ? "—" : Number(n).toLocaleString("en-IN"); },
+    hhmmss(ts) { return ts ? String(ts).replace("T", " ").slice(11, 19) : ""; },
+    tsFull(ts) { return ts ? String(ts).replace("T", " ").slice(0, 19) : "—"; },
+
+    /* ── column order: the Screens 04/05/07/11/12 convention, reused ───────── */
+    initCols() {
+      this.cols = this.DEFAULT_COLS.slice();
+      let saved = null;
+      try { saved = JSON.parse(window.localStorage.getItem(this.COLS_KEY) || "null"); }
+      catch (e) { saved = null; }
+      if (!Array.isArray(saved) || !saved.length) return;
+      const byKey = {};
+      this.DEFAULT_COLS.forEach(c => { byKey[c.key] = c; });
+      const next = [];
+      saved.forEach(k => { if (byKey[k] && next.indexOf(byKey[k]) === -1) next.push(byKey[k]); });
+      this.DEFAULT_COLS.forEach(c => { if (next.indexOf(c) === -1) next.push(c); });
+      if (next.length === this.DEFAULT_COLS.length) this.cols = next;
+    },
+    saveCols() {
+      try { window.localStorage.setItem(this.COLS_KEY, JSON.stringify(this.cols.map(c => c.key))); }
+      catch (e) {}
+    },
+    isDefaultOrder() {
+      return this.cols.length === this.DEFAULT_COLS.length
+             && this.cols.every((c, i) => c.key === this.DEFAULT_COLS[i].key);
+    },
+    resetCols() {
+      this.cols = this.DEFAULT_COLS.slice();
+      try { window.localStorage.removeItem(this.COLS_KEY); } catch (e) {}
+    },
+    headClick(key) {
+      if (Date.now() - this._dragEndAt < 250) return;   /* drag, not a sort click */
+      this.tSort(key);
+    },
   });
 }
 </script>

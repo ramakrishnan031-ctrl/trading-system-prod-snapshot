@@ -23,12 +23,13 @@
             <span class="kc-ic" :class="'ic-' + k.tone" x-html="kpiIcon(k.key)"></span>
             <span class="kc-label" x-text="k.label"></span>
           </div>
-          <span class="kc-val num" x-text="k.val"></span>
+          <span class="kc-val num" :class="valSize(k.val)" x-text="k.val"></span>
           <div class="kc-foot">
             <span class="kc-sub" x-text="k.sub"></span>
-            <svg x-show="k.spark && sparkPoints()" x-cloak class="kc-spark" viewBox="0 0 80 22"
+            <svg x-show="k.spark && sparkOf(k.spark)" x-cloak class="kc-spark"
+                 :class="'spark-' + k.spark" viewBox="0 0 80 22"
                  preserveAspectRatio="none" aria-hidden="true">
-              <polyline :points="sparkPoints(80, 22)" fill="none" class="spark-line"/>
+              <polyline :points="sparkOf(k.spark, 80, 22)" fill="none" class="spark-line"/>
             </svg>
           </div>
         </a>
@@ -119,7 +120,9 @@
               </td>
               <td><span class="svc-badge" :class="svcOk(u.state) ? 'svb-active' : (svcDown(u.state) ? 'svb-inactive' : 'svb-idle')"
                         x-text="svcLabel(u.state)"></span></td>
-              <td class="rt svc-upd num" x-text="svcTime(u.state)"></td>
+              <td class="rt svc-upd num" :class="svcStamp(u) === 'UNAVAILABLE' ? 'svc-unavail' : ''"
+                  :title="u.last_change_at || 'no state-change stamp reported by systemd'"
+                  x-text="svcStamp(u)"></td>
             </tr>
           </template>
           <tr x-show="!service_health || service_health.length === 0" x-cloak>
@@ -137,19 +140,20 @@
         <a class="mc-link" href="/live-activity">View all</a>
       </div>
       <ul class="ev-list">
-        <template x-for="(ev, i) in (events || [])" :key="i">
+        <template x-for="(ev, i) in (events || [])" :key="ev.ref_id || i">
           <li class="ev-row">
-            <span class="ev-time num" x-text="clockOf(ev.timestamp)"></span>
-            <span class="ev-ic" :class="'evc-' + evCat(ev.event_type).cls" x-html="evIcon(evCat(ev.event_type).cls)"></span>
+            <span class="ev-time num" x-text="ev.time || '—'"></span>
+            <span class="ev-ic" :class="'evc-' + evCls(ev)" x-html="evIcon(evCls(ev))"></span>
             <span class="ev-name">
-              <span x-text="ev.event_type"></span>
-              <span class="ev-det" x-show="ev.scenario || ev.details" x-cloak
-                    x-text="ev.scenario ? ('(' + ev.scenario + ')') : (ev.details ? ('(' + ev.details + ')') : '')"></span>
+              <span x-text="ev.event"></span>
+              <span class="ev-det" x-show="ev.note" x-cloak x-text="'(' + ev.note + ')'"></span>
             </span>
-            <span class="ev-tag" :class="'evt-' + evCat(ev.event_type).cls" x-text="evCat(ev.event_type).label"></span>
+            <span class="ev-tag" :class="'evt-' + evCls(ev)" x-text="ev.badge"></span>
           </li>
         </template>
-        <li x-show="!events || events.length === 0" x-cloak class="ev-empty">No recent events.</li>
+        <li x-show="!events || events.length === 0" x-cloak class="ev-empty">
+          No trading events today yet.
+        </li>
       </ul>
     </section>
   </div>
@@ -254,28 +258,58 @@ function dashPage() {
       const w = this.wins(), l = this.losses();
       const sub = (p) => (p === null) ? 'Today' : (p + '% of received');
       const subC = (p) => (p === null) ? 'Today' : (p + '% of created');
+      // ⭐ THE TONE IS THE ARTWORK'S, CARD BY CARD. Four differ from the first
+      // build and each was read off the approved PNG at 5x: Open Trades,
+      // Closed Trades and Profit Factor are drawn NEUTRAL (grey border, blue
+      // icon), and Win Rate is drawn BLUE — ⛔ not green. The tone colours the
+      // border and the icon chip only; ⛔ the VALUE is white on all twelve.
       return [
-        { key: 'received',  label: 'Signals Received', val: this.fmtInt(rec), sub: 'Today', tone: 'info', href: '/signals', spark: false },
+        { key: 'received',  label: 'Signals Received', val: this.fmtInt(rec), sub: 'Today', tone: 'info', href: '/signals', spark: 'signals' },
         { key: 'accepted',  label: 'Signals Accepted', val: this.fmtInt(acc), sub: sub(this.pctOf(acc, rec)), tone: 'pos', href: '/signals' },
         { key: 'rejected',  label: 'Signals Rejected', val: this.fmtInt(rej), sub: sub(this.pctOf(rej, rec)), tone: 'neg', href: '/signals' },
         { key: 'orders_created', label: 'Orders Created', val: this.fmtInt(oc), sub: 'Today', tone: 'info', href: '/orders' },
         { key: 'orders_filled',  label: 'Orders Filled',  val: this.fmtInt(of), sub: subC(this.pctOf(of, oc)), tone: 'pos', href: '/orders' },
-        { key: 'open',      label: 'Open Trades',   val: this.fmtInt(open),   sub: 'Active now', tone: 'info', href: '/positions' },
-        { key: 'closed',    label: 'Closed Trades', val: this.fmtInt(closed), sub: 'Today', tone: 'info', href: '/pnl' },
+        { key: 'open',      label: 'Open Trades',   val: this.fmtInt(open),   sub: 'Active now', tone: 'neutral', href: '/positions' },
+        { key: 'closed',    label: 'Closed Trades', val: this.fmtInt(closed), sub: 'Today', tone: 'neutral', href: '/pnl' },
         { key: 'wins',      label: 'Wins',   val: this.fmtInt(w), sub: 'Today', tone: 'pos', href: '/statistics' },
         { key: 'losses',    label: 'Losses', val: this.fmtInt(l), sub: 'Today', tone: 'neg', href: '/statistics' },
-        { key: 'winrate',   label: 'Win Rate', val: this.winRate(), sub: 'Today', tone: 'pos', href: '/statistics' },
-        { key: 'pf',        label: 'Profit Factor', val: this.profitFactor(), sub: 'Today', tone: 'info', href: '/statistics' },
+        { key: 'winrate',   label: 'Win Rate', val: this.winRate(), sub: 'Today', tone: 'info', href: '/statistics' },
+        { key: 'pf',        label: 'Profit Factor', val: this.profitFactor(), sub: 'Today', tone: 'neutral', href: '/statistics' },
         { key: 'pnl',       label: "Today's P&L", val: this.money(this.pnlNet()), sub: 'Net',
-          tone: (Number(this.pnlNet()) < 0 ? 'neg' : 'pos'), href: '/pnl', spark: true },
+          tone: (Number(this.pnlNet()) < 0 ? 'neg' : 'pos'), href: '/pnl', spark: 'pnl' },
       ];
     },
     kpiIcon(key) { return DASH_ICONS[key] || DASH_ICONS._dot; },
 
-    // ── P&L sparkline (real equity curve only; drawn on the P&L card) ──────
-    sparkPoints(w, h) {
+    // ⛔ A VALUE MAY NOT ESCAPE ITS CARD. The deck is twelve across at the
+    // artwork's own width, which leaves ~100px of inner card; "₹2,395.00"
+    // overflowed the card AND the panel at 29px. The steps below are keyed to
+    // the rendered length, so a short value keeps the artwork's 29px exactly
+    // and only a long one steps down — never below 17px, which stays inside
+    // the spec's "Critical Metrics: 16-18px".
+    valSize(v) {
+      const n = String(v == null ? '' : v).length;
+      if (n <= 7) return '';
+      if (n <= 8) return 'kc-val-md';
+      if (n <= 10) return 'kc-val-sm';
+      return 'kc-val-xs';
+    },
+
+    // ── the artwork's TWO sparklines, each from a real series ─────────────
+    // `pnl`  → the stored equity curve.  `signals` → the SAME per-minute rows
+    // Screen 18's market pulse reads. ⛔ Neither is synthesised, and a series
+    // with nothing in it draws NO line rather than a flat one along the axis.
+    sparkSeries(which) {
+      if (which === 'pnl') return (this.pnl.equity_curve || []).map(p => p.cum_pnl);
+      if (which === 'signals') {
+        const s = this.dashData.signals_spark;
+        return (s && s.available) ? (s.points || []) : [];
+      }
+      return [];
+    },
+    sparkOf(which, w, h) {
       w = w || 80; h = h || 22;
-      const pts = (this.pnl.equity_curve || []).map(p => p.cum_pnl);
+      const pts = this.sparkSeries(which);
       if (pts.length < 2) return "";
       let min = Math.min(0, ...pts), max = Math.max(0, ...pts);
       if (min === max) { min -= 1; max += 1; }
@@ -297,20 +331,32 @@ function dashPage() {
       if (t === 'failed') return 'FAILED';
       if (t === 'unavailable') return 'UNAVAIL';
       return String(s).toUpperCase(); },
-    svcTime(s) {
-      const ref = this.dashData.summary ? this.dashData.summary.ist_now : null;
-      return (this.svcOk(s) && ref) ? this.clockOf(ref) : '—';
+    // ⛔ NEVER THE DASHBOARD'S OWN CLOCK. This column used to print `ist_now`
+    // for any ACTIVE unit, so every healthy row showed the same number — the
+    // current time — which reads as a measurement and is not one. Measured on
+    // production 18-Aug: token-watcher last changed state 21 DAYS earlier while
+    // this column said "now". The stamp is the unit's real
+    // `StateChangeTimestamp`; where systemd reports none, the cell says so.
+    svcStamp(u) {
+      const raw = u && u.last_change_at;
+      if (!raw) return 'UNAVAILABLE';
+      // systemd prints "Tue 2026-08-18 08:15:31 IST" — show the clock, and the
+      // DATE too when the transition was not today, so a three-week-old stamp
+      // can never read as this morning.
+      const m = String(raw).match(/(\d{4})-(\d{2})-(\d{2})\s+(\d{2}:\d{2}:\d{2})/);
+      if (!m) return String(raw);
+      const [, y, mo, d, clock] = m;
+      const todayIso = (this.dashData && this.dashData.today) || '';
+      return (todayIso === (y + '-' + mo + '-' + d)) ? clock : (d + '-' + MON3[+mo - 1] + ' ' + clock);
     },
 
-    // ── recent-event category → badge (derived from event_type text) ──────
-    evCat(type) {
-      const t = String(type || '').toLowerCase();
-      if (t.includes('risk') || (t.includes('reject') && !t.includes('order')) || t.includes('capital')) return { label: 'RISK', cls: 'risk' };
-      if (t.includes('sl') || t.includes('tgt') || t.includes('target') || t.includes('exit') || t.includes('closed')) return { label: 'EXIT', cls: 'exit' };
-      if (t.includes('order') || t.includes('fill') || t.includes('placed')) return { label: 'ORDER', cls: 'order' };
-      if (t.includes('signal') || t.includes('valid') || t.includes('received')) return { label: 'SIGNAL', cls: 'signal' };
-      return { label: 'SYS', cls: 'sys' };
-    },
+    // ── recent-event styling key, from the row's STRUCTURED category ──────
+    // ⛔ THE OLD `evCat()` IS GONE. It substring-matched the event TEXT to guess
+    // a category, and against the only source that panel could read every row
+    // fell through to one bucket — four of its five branches were unreachable.
+    // The badge is now decided server-side by the builder that KNOWS the
+    // category; this maps it to a CSS class and nothing else.
+    evCls(ev) { return EV_CLASS[ev && ev.category] || 'sys'; },
     evIcon(cls) { return EV_ICONS[cls] || EV_ICONS.sys; },
 
     // ── strategy summary ──────────────────────────────────────────────────
@@ -351,6 +397,25 @@ const DASH_ICONS = {
   pnl:            `<svg viewBox="0 0 24 24" ${_S}><path d="M8 6h8M8 10h8M14 6a4 4 0 0 1 0 8H9l6 5"/></svg>`,
   _dot:           `<svg viewBox="0 0 24 24" ${_S}><circle cx="12" cy="12" r="8"/></svg>`,
 };
+//: Short month names for a service stamp that is NOT from today.
+const MON3 = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+//: STRUCTURED category → the row's styling class. ⭐ The keys are exactly
+//: live_activity.CATEGORIES, so a category the feed can emit always has a class
+//: and ⛔ none is folded into a near-enough one. The artwork draws SIGNAL /
+//: ORDER / RISK / EXIT; `Trade` maps to `exit` because those rows ARE the exits.
+const EV_CLASS = {
+  Signal: 'signal', Order: 'order', Position: 'order', Trade: 'exit',
+  Risk: 'risk', Capital: 'sys', System: 'sys', Alert: 'risk',
+};
+//: ⛔ `Capital` IS NOT `risk`. Found by rendering the digest: routine
+//: `Capital Reserved` / `Capital Released` rows came out RED under a warning
+//: triangle, and red is the loudest signal on this page. The binding spec's own
+//: vocabulary (KPI COLORS) reserves red for losses/rejections and orange for
+//: warnings; a ledger reservation is neither, so it takes the existing neutral
+//: informational treatment. ⛔ No new colour token is introduced.
+//: `Alert` KEEPS the risk treatment: a telegram alert is raised precisely
+//: because something needs attention.
 const EV_ICONS = {
   signal: `<svg viewBox="0 0 24 24" ${_S}><path d="M4 11a9 9 0 0 1 9-9"/><path d="M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1.6" fill="currentColor" stroke="none"/></svg>`,
   risk:   `<svg viewBox="0 0 24 24" ${_S}><path d="M12 3l9 16H3z"/><path d="M12 10v4M12 17.5v.5"/></svg>`,

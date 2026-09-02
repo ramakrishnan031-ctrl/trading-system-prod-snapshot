@@ -7,15 +7,61 @@ routes and never touch any existing endpoint):
   GET /api/trades               ?period&from&to&strategy&direction&symbol   (Trade Explorer)
   GET /api/trade-story/<trade_id>
   GET /api/analytics/pnl        ?period&from&to        (distinct from today-scoped /api/pnl)
+  GET /api/analytics/slippage   ?period&from&to&…      (distinct from today-scoped /api/slippage)
+  GET /api/export/slippage      ?period&from&to&…      XLSX of the SAME filtered set
+  GET /api/analytics/execution  ?period&from&to&…      (distinct from today-scoped /api/execution)
+  GET /api/export/execution     ?period&from&to&…      XLSX of the SAME filtered set
+  GET /api/system-health        ?status&kind          live snapshot (⛔ no period)
+  GET /api/export/system-health ?status&kind          XLSX of the SAME view
+  GET /api/live-activity/screen ?category              the live wall (⛔ no period)
+  GET /api/strategy-ranking/screen ?period&trade_type&direction&mode  (Screen 19)
+  GET /api/export/strategy-ranking same args           XLSX of the SAME ranking
+  GET /api/strategy-health/screen  ?state&trade_type   live snapshot (⛔ no period)
+  GET /api/export/strategy-health  same args           XLSX of the SAME view
+  GET /api/export/live-activity ?category              XLSX of the SAME feed
+  GET /api/scanner-attribution/screen ?health&trade_type  (Screen 21, ⛔ no period)
+  GET /api/export/scanner-attribution same args        XLSX of the SAME view
+  GET /api/holdings/screen ?symbol&product&status&source&trade_type (Screen 22)
+  GET /api/export/holdings         same args           XLSX of the SAME view
 Every builder is read-only over db_reader.*_range (mode=ro); NO schema. The
-existing /api/pnl, /api/strategies, /api/slippage, Reports stay UNTOUCHED.
+existing /api/pnl, /api/strategies, /api/slippage, /api/execution, Reports stay
+UNTOUCHED.
 """
 from __future__ import annotations
 
-from flask import Blueprint, current_app, jsonify, request
+import io
+
+from flask import Blueprint, current_app, jsonify, request, send_file
 
 from ..auth import login_required
-from ..services import analytics_period
+from ..services import (audit, analytics_period, execution_analytics,
+                        holdings, live_activity, scanner_attribution,
+                        slippage_analytics, strategy_health,
+                        strategy_ranking, system_health, system_logs,
+                        trade_logs)
+
+
+def _xlsx(sheets: list, download_name: str):
+    """Write [(title, header, rows)] to a workbook and send it. Shared by the
+    Screen-10 and Screen-11 exports so the two cannot drift in shape."""
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    wb.remove(wb.active)
+    for title, header, rows in sheets:
+        ws = wb.create_sheet(title=title)
+        ws.append(header)
+        for row in rows:
+            ws.append(row)
+        ws.freeze_panes = "A2"
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return send_file(
+        buf, as_attachment=True, download_name=download_name,
+        mimetype=("application/vnd.openxmlformats-officedocument"
+                  ".spreadsheetml.sheet"),
+    )
 
 analytics2_api = Blueprint("analytics2_api", __name__)
 
@@ -81,6 +127,564 @@ def get_trade_story(trade_id: str):
 @analytics2_api.route("/api/analytics/pnl", methods=["GET"])
 @login_required
 def get_analytics_pnl():
+    """Screen 09. Read-only; every filter is optional and narrows ONE population
+    that all panels share. ⛔ No scanner filter — strategy IS the scanner identity
+    in this system (Rama, 14-Aug), so exposing both duplicated the same fact."""
     cfg = current_app.config["GUI_CONFIG"]
     p, frm, to = _period_args()
-    return jsonify(analytics_period.build_pnl_analytics(cfg, p, frm, to))
+
+    def _arg(name, upper=False):
+        v = (request.args.get(name) or "").strip()
+        return (v.upper() if upper else v) or None
+
+    return jsonify(analytics_period.build_pnl_analytics(
+        cfg, p, frm, to,
+        strategy=_arg("strategy"),
+        symbol=_arg("symbol", upper=True),
+        trade_type=_arg("trade_type", upper=True),
+        direction=_arg("direction", upper=True),
+        attribution_dim=(_arg("attr") or "strategy"),
+        compare=_arg("compare"),
+    ))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Screen-10 Slippage Analytics (15-Aug-2026). ADDITIVE — the existing today-
+# scoped `/api/slippage` in api/analytics.py is UNTOUCHED and still serves its
+# own contract, exactly as `/api/pnl` survived `/api/analytics/pnl`.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _slippage_kwargs() -> dict:
+    """The screen's filter set, parsed once so the JSON endpoint and the XLSX
+    export cannot drift apart. ⛔ No scanner filter — strategy IS the scanner
+    identity in this system (Rama, 14-Aug)."""
+    def _arg(name, upper=False):
+        v = (request.args.get(name) or "").strip()
+        return (v.upper() if upper else v) or None
+
+    return {
+        "strategy": _arg("strategy"),
+        "symbol": _arg("symbol", upper=True),
+        "trade_type": _arg("trade_type", upper=True),
+        "direction": _arg("direction", upper=True),
+        "price_bucket": _arg("price_bucket"),
+        "status": _arg("status", upper=True),
+    }
+
+
+@analytics2_api.route("/api/analytics/slippage", methods=["GET"])
+@login_required
+def get_analytics_slippage():
+    """Screen 10. Read-only; every filter is optional and narrows ONE population
+    that all panels share."""
+    cfg = current_app.config["GUI_CONFIG"]
+    p, frm, to = _period_args()
+    return jsonify(slippage_analytics.build_slippage_analytics(
+        cfg, p, frm, to, **_slippage_kwargs()))
+
+
+@analytics2_api.route("/api/export/slippage", methods=["GET"])
+@login_required
+def export_slippage():
+    """XLSX of the FILTERED Screen-10 result set — details, price buckets, both
+    rankings and a summary, each on its own sheet.
+
+    ⭐ It calls the SAME builder the screen calls, with the SAME arguments, and
+    writes what that ONE payload returned — so no sheet can disagree with the
+    table, or with another sheet, about what "filtered" means. ⛔ Not a second
+    query with its own filter code, which is exactly how an export starts
+    telling a different story from the screen.
+    """
+    cfg = current_app.config["GUI_CONFIG"]
+    p, frm, to = _period_args()
+    payload = slippage_analytics.build_slippage_analytics(
+        cfg, p, frm, to, **_slippage_kwargs())
+    return _xlsx(slippage_analytics.export_sheets(payload),
+                 "slippage_%s_to_%s.xlsx" % (payload["from"], payload["to"]))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Screen-11 Execution Analytics (15-Aug-2026). ADDITIVE — the existing today-
+# scoped `/api/execution` in api/analytics.py is UNTOUCHED and still serves its
+# own contract, exactly as `/api/slippage` survived `/api/analytics/slippage`.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _execution_kwargs() -> dict:
+    """The screen's filter set, parsed once so the JSON endpoint and the XLSX
+    export cannot drift apart. ⛔ No scanner filter — strategy IS the scanner
+    identity in this system (Rama, 14-Aug)."""
+    def _arg(name, upper=False):
+        v = (request.args.get(name) or "").strip()
+        return (v.upper() if upper else v) or None
+
+    return {
+        "strategy": _arg("strategy"),
+        "symbol": _arg("symbol", upper=True),
+        "trade_type": _arg("trade_type", upper=True),
+        "direction": _arg("direction", upper=True),
+        "status": _arg("status", upper=True),
+        # Lifecycle position (CLOSED/OPEN/PENDING/REJECTED/UNKNOWN) - a DIFFERENT
+        # axis from `status`, which is the delay band.
+        "trade_state": _arg("trade_state", upper=True),
+    }
+
+
+@analytics2_api.route("/api/analytics/execution", methods=["GET"])
+@login_required
+def get_analytics_execution():
+    """Screen 11. Read-only; every filter is optional and narrows ONE population
+    that all panels share."""
+    cfg = current_app.config["GUI_CONFIG"]
+    p, frm, to = _period_args()
+    return jsonify(execution_analytics.build_execution_analytics(
+        cfg, p, frm, to, **_execution_kwargs()))
+
+
+@analytics2_api.route("/api/export/execution", methods=["GET"])
+@login_required
+def export_execution():
+    """XLSX of the FILTERED Screen-11 result set — executions, delay summary,
+    both rankings, the distribution and an overview.
+
+    ⭐ It calls the SAME builder the screen calls, with the SAME arguments, so no
+    sheet can disagree with the table or with another sheet. ⭐ The Delay Summary
+    sheet carries the NOT-INSTRUMENTED rows verbatim: a spreadsheet that quietly
+    omitted them would let a reader total the measured stages and believe they
+    account for the whole lifecycle.
+    """
+    cfg = current_app.config["GUI_CONFIG"]
+    p, frm, to = _period_args()
+    payload = execution_analytics.build_execution_analytics(
+        cfg, p, frm, to, **_execution_kwargs())
+    return _xlsx(execution_analytics.export_sheets(payload),
+                 "execution_%s_to_%s.xlsx" % (payload["from"], payload["to"]))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Screen-12 System Health (15-Aug-2026). ADDITIVE — the existing `/api/services`
+# and `/api/vm` in api/system.py are UNTOUCHED and keep their own contracts.
+#
+# ⚠️ NOT under /api/analytics/: this screen is a LIVE OPERATIONAL SNAPSHOT, not a
+# period-scoped analytic. It takes no `period`, and giving it one would invite a
+# reader to believe the health of an hour ago is retrievable — it is not.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _health_kwargs() -> dict:
+    def _arg(name, upper=False):
+        v = (request.args.get(name) or "").strip()
+        return (v.upper() if upper else v) or None
+
+    return {"status_filter": _arg("status", upper=True), "kind_filter": _arg("kind")}
+
+
+@analytics2_api.route("/api/system-health", methods=["GET"])
+@login_required
+def get_system_health():
+    """Screen 12. Read-only; a live snapshot of infrastructure health."""
+    cfg = current_app.config["GUI_CONFIG"]
+    return jsonify(system_health.build_system_health(cfg, **_health_kwargs()))
+
+
+@analytics2_api.route("/api/export/system-health", methods=["GET"])
+@login_required
+def export_system_health():
+    """XLSX of the CURRENT view — services, readiness, dependencies, alerts,
+    auto-recovery, events and a summary.
+
+    ⭐ Same builder, same arguments, so the Services sheet carries exactly the
+    rows the table shows under the current filter. ⭐ The Summary sheet spells
+    out `NOT INSTRUMENTED` for CPU / RAM / Network with their reasons: a sheet
+    that left them blank would let a reader assume the value was simply zero.
+    """
+    cfg = current_app.config["GUI_CONFIG"]
+    payload = system_health.build_system_health(cfg, **_health_kwargs())
+    return _xlsx(system_health.export_sheets(payload),
+                 "system_health_%s.xlsx" % payload["today"])
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SCREEN 13 — AUDIT
+# ⛔ The pre-existing `/api/audit` (system.py) is left UNTOUCHED — it is a
+# today-only 4-field feed with its own callers and its own tests. This is an
+# ADDITIVE endpoint for the approved Audit screen.
+# ─────────────────────────────────────────────────────────────────────────────
+def _audit_kwargs() -> dict:
+    def _arg(name):
+        return (request.args.get(name) or "").strip() or None
+
+    return {"start": _arg("start"), "end": _arg("end"),
+            "category": _arg("category"), "action": _arg("action"),
+            "status": _arg("status"), "module": _arg("module"),
+            "user": _arg("user"), "q": _arg("q"),
+            "bucket": _arg("bucket") or "7d"}
+
+
+@analytics2_api.route("/api/audit-screen", methods=["GET"])
+@login_required
+def get_audit_screen():
+    """Screen 13. Read-only. ONE filtered population feeds the KPIs, the table,
+    the donut, the line chart, Top Actors, Critical Changes and the export."""
+    cfg = current_app.config["GUI_CONFIG"]
+    return jsonify(audit.build_audit(cfg, **_audit_kwargs()))
+
+
+@analytics2_api.route("/api/audit-detail", methods=["GET"])
+@login_required
+def get_audit_detail():
+    """The approved Audit Details panel for ONE record, with its timeline.
+
+    ⭐ Resolved from the SAME filtered build as the table, so a Reference ID
+    always addresses the row the operator actually clicked.
+    """
+    cfg = current_app.config["GUI_CONFIG"]
+    ref = (request.args.get("ref_id") or "").strip()
+    payload = audit.build_audit(cfg, **_audit_kwargs())
+    rec = audit.record_detail(payload, ref)
+    if rec is None:
+        return jsonify({"error": "unknown reference id", "ref_id": ref}), 404
+    return jsonify(rec)
+
+
+@analytics2_api.route("/api/export/audit-screen", methods=["GET"])
+@login_required
+def export_audit_screen():
+    """XLSX of the FILTERED view only (approved: "Export filtered results only").
+
+    ⭐ Same builder, same arguments ⇒ the exported rows are the table's rows.
+    ⛔ Unrecorded fields export as NOT INSTRUMENTED, never as a blank cell.
+    """
+    cfg = current_app.config["GUI_CONFIG"]
+    payload = audit.build_audit(cfg, **_audit_kwargs())
+    return _xlsx(audit.export_sheets(payload),
+                 "audit_%s_%s.xlsx" % (payload["range"]["start"],
+                                       payload["range"]["end"]))
+
+
+# ── SCREEN 14 — TRADE LOGS ───────────────────────────────────────────────────
+# ⭐ ADDITIVE: the G5d `/api/trade-logs` endpoint is deliberately UNTOUCHED and
+# its contract test still passes. Screen 14 gets its own routes, exactly as
+# Screen 07 added `/api/trades/screen` beside the existing `/api/trades`.
+def _tradelog_kwargs() -> dict:
+    def _arg(name):
+        return (request.args.get(name) or "").strip() or None
+
+    return {"start": _arg("start"), "end": _arg("end"),
+            "trade_id": _arg("trade_id"), "order_id": _arg("order_id"),
+            "symbol": _arg("symbol"), "strategy": _arg("strategy"),
+            "trade_type": _arg("trade_type"), "direction": _arg("direction"),
+            "event_type": _arg("event_type"), "status": _arg("status"),
+            "q": _arg("q")}
+
+
+@analytics2_api.route("/api/trade-logs/screen", methods=["GET"])
+@login_required
+def get_trade_logs_screen():
+    """Screen 14. Read-only. ONE filtered population feeds the KPI deck, the
+    event table, the event-type and severity panels, the chart, Recent Errors
+    and the export — so no panel can describe a different set from the table
+    beside it."""
+    cfg = current_app.config["GUI_CONFIG"]
+    return jsonify(trade_logs.build_trade_logs_screen(cfg, **_tradelog_kwargs()))
+
+
+@analytics2_api.route("/api/trade-logs/detail", methods=["GET"])
+@login_required
+def get_trade_logs_detail():
+    """TRADE TIMELINE · REQUEST/DECISION/OUTPUT · REPLAY for one trade.
+
+    ⛔ Stages this system does not time come back unavailable WITH their reason;
+    the replay reconstructs the real lifecycle rather than simulating one.
+    """
+    cfg = current_app.config["GUI_CONFIG"]
+    trade_id = (request.args.get("trade_id") or "").strip() or None
+    signal_id = (request.args.get("signal_id") or "").strip() or None
+    rec = trade_logs.trade_detail(cfg, trade_id=trade_id, signal_id=signal_id)
+    if not rec.get("found"):
+        return jsonify({"error": "unknown trade or signal id",
+                        "trade_id": trade_id, "signal_id": signal_id}), 404
+    return jsonify(rec)
+
+
+@analytics2_api.route("/api/export/trade-logs", methods=["GET"])
+@login_required
+def export_trade_logs_screen():
+    """XLSX of the FILTERED view only (approved: "Export filtered results only").
+
+    ⭐ Same builder, same arguments ⇒ the exported rows ARE the table's rows.
+    ⛔ No Scanner column — a test asserts its absence in the generated file.
+    """
+    cfg = current_app.config["GUI_CONFIG"]
+    payload = trade_logs.build_trade_logs_screen(cfg, **_tradelog_kwargs())
+    rows = trade_logs.export_rows(payload)
+    return _xlsx([("Trade Log Events", rows[0], rows[1:])],
+                 "trade_logs_%s_%s.xlsx" % (payload["from"], payload["to"]))
+
+
+# ── SCREEN 15 — SYSTEM LOGS ──────────────────────────────────────────────────
+# ⭐ ADDITIVE: the M13 `/api/logs` raw-tail endpoint is deliberately UNTOUCHED —
+# it is the hardened file access this screen reads THROUGH, and its own contract
+# test still passes.
+def _syslog_kwargs() -> dict:
+    def _arg(name):
+        return (request.args.get(name) or "").strip() or None
+
+    return {"start": _arg("start"), "end": _arg("end"),
+            # FILTERS (exact — they are dropdowns)
+            "service": _arg("service"), "module": _arg("module"),
+            "severity": _arg("severity"), "event_type": _arg("event_type"),
+            "status": _arg("status"), "q": _arg("q"),
+            # the approved SEARCH panel (contains — it is free text)
+            "service_q": _arg("service_q"), "module_q": _arg("module_q"),
+            "message_q": _arg("message_q"), "ref_q": _arg("ref_q")}
+
+
+@analytics2_api.route("/api/system-logs/screen", methods=["GET"])
+@login_required
+def get_system_logs_screen():
+    """Screen 15. Read-only. ONE filtered population feeds the KPI deck, the
+    event table, the severity donut, the event-type panel and the export."""
+    cfg = current_app.config["GUI_CONFIG"]
+    return jsonify(system_logs.build_system_logs(cfg, **_syslog_kwargs()))
+
+
+@analytics2_api.route("/api/system-logs/detail", methods=["GET"])
+@login_required
+def get_system_logs_detail():
+    """COMPONENT TIMELINE · ERROR INVESTIGATION · RECOVERY TRACKING · REPLAY.
+
+    ⛔ Stages this system does not stamp come back unavailable WITH a reason;
+    the replay shows the RECORDED sequence rather than a simulated lifecycle.
+    """
+    cfg = current_app.config["GUI_CONFIG"]
+    ref = (request.args.get("ref_id") or "").strip()
+    payload = system_logs.build_system_logs(cfg, **_syslog_kwargs())
+    rec = system_logs.event_detail(payload, ref)
+    if rec is None:
+        return jsonify({"error": "unknown reference id", "ref_id": ref}), 404
+    rec["replay"] = system_logs.replay(payload, ref)
+    return jsonify(rec)
+
+
+@analytics2_api.route("/api/export/system-logs", methods=["GET"])
+@login_required
+def export_system_logs_screen():
+    """XLSX of the FILTERED view only (approved: "Export filtered results only").
+
+    ⛔ Unrecorded fields export as NOT INSTRUMENTED, never as a blank cell.
+    """
+    cfg = current_app.config["GUI_CONFIG"]
+    payload = system_logs.build_system_logs(cfg, **_syslog_kwargs())
+    rows = system_logs.export_rows(payload)
+    return _xlsx([("System Log Events", rows[0], rows[1:])],
+                 "system_logs_%s_%s.xlsx" % (payload["from"], payload["to"]))
+
+
+# ── SCREEN 18 — LIVE ACTIVITY ────────────────────────────────────────────────
+# ⭐ ADDITIVE: the G5d `/api/activity` merged-attention feed is deliberately
+# UNTOUCHED and its contract test still passes. Screen 18 gets its own routes,
+# exactly as Screen 15 added `/api/system-logs/screen` beside `/api/logs`.
+#
+# ⚠️ NOT period-scoped: this is a LIVE WALL. Giving it a `period` would invite a
+# reader to believe the wall of an hour ago is retrievable — it is not.
+def _activity_kwargs() -> dict:
+    """⛔ CATEGORY ONLY. It is the only filter the approved design draws — the
+    nine toolbar chips and the eight FEED FILTERS tiles both select a category —
+    so a status filter or a search parameter would be an invention."""
+    return {"category": (request.args.get("category") or "").strip() or None}
+
+
+@analytics2_api.route("/api/live-activity/screen", methods=["GET"])
+@login_required
+def get_live_activity_screen():
+    """Screen 18. Read-only. The FEED FILTER narrows the FEED — which is what
+    the approved design calls it — while the KPI strip, the pipeline, the
+    strategy table, the pulse and the capital ring describe THE DAY and each
+    carries its own base in the payload."""
+    cfg = current_app.config["GUI_CONFIG"]
+    return jsonify(live_activity.build_live_activity(cfg, **_activity_kwargs()))
+
+
+@analytics2_api.route("/api/export/live-activity", methods=["GET"])
+@login_required
+def export_live_activity():
+    """XLSX of the FILTERED feed only.
+
+    ⭐ Same builder, same arguments ⇒ the exported rows ARE the feed's rows.
+    ⛔ No Scanner column — a test asserts its absence in the generated file.
+    """
+    cfg = current_app.config["GUI_CONFIG"]
+    payload = live_activity.build_live_activity(cfg, **_activity_kwargs())
+    rows = live_activity.export_rows(payload)
+    return _xlsx([("Live Activity", rows[0], rows[1:])],
+                 "live_activity_%s.xlsx" % payload["today"])
+
+
+# ── SCREEN 19 — STRATEGY RANKING ─────────────────────────────────────────────
+# ⭐ ADDITIVE: the G5c `/api/strategy-ranking` endpoint is deliberately UNTOUCHED
+# and its contract test still passes. Screen 19 gets its own routes, exactly as
+# Screen 18 added `/api/live-activity/screen` beside `/api/activity`.
+def _ranking_kwargs() -> dict:
+    """⭐ TRADE TYPE HERE IS THE STRATEGY'S OWN `intent` from its YAML — the same
+    value the table column shows. ⛔ NOT the order product (MIS/CNC), which is a
+    different quantity owned by `analytics_period._trade_type`."""
+    def _arg(name):
+        return (request.args.get(name) or "").strip() or None
+
+    p, frm, to = _period_args()
+    return {"period": p, "from_date": frm, "to_date": to,
+            "trade_type": _arg("trade_type"), "direction": _arg("direction"),
+            "mode": (_arg("mode") or "net_pnl")}
+
+
+@analytics2_api.route("/api/strategy-ranking/screen", methods=["GET"])
+@login_required
+def get_strategy_ranking_screen():
+    """Screen 19. Read-only. ONE filtered population feeds the KPI strip, the
+    ranking table, the score breakdown, the trend summary, the winners/losers,
+    the insights and the export."""
+    cfg = current_app.config["GUI_CONFIG"]
+    return jsonify(strategy_ranking.build_strategy_ranking_screen(
+        cfg, **_ranking_kwargs()))
+
+
+@analytics2_api.route("/api/export/strategy-ranking", methods=["GET"])
+@login_required
+def export_strategy_ranking():
+    """XLSX of the FILTERED, RANKED view only.
+
+    ⭐ Same builder, same arguments ⇒ the exported rows ARE the table's rows, in
+    the table's order. ⛔ TRADE TYPE sits immediately after Strategy, exactly as
+    instructed, and no other approved column moved.
+    """
+    cfg = current_app.config["GUI_CONFIG"]
+    payload = strategy_ranking.build_strategy_ranking_screen(cfg, **_ranking_kwargs())
+    rows = strategy_ranking.export_rows(payload)
+    return _xlsx([("Strategy Ranking", rows[0], rows[1:])],
+                 "strategy_ranking_%s_%s.xlsx" % (payload["from"], payload["to"]))
+
+
+# ── SCREEN 20 — STRATEGY HEALTH ──────────────────────────────────────────────
+# ⭐ ADDITIVE: the G5c `/api/strategy-health` endpoint is UNTOUCHED and keeps its
+# own contract (including its 5-value state score, which this screen does NOT
+# use — Screen 20 computes the design's weighted composite instead).
+#
+# ⚠️ NOT period-scoped: this is a LIVE OPERATIONAL SNAPSHOT of today, exactly as
+# Screen 12 is. The sparklines carry their own stated history window.
+def _health_kwargs2() -> dict:
+    def _arg(name):
+        return (request.args.get(name) or "").strip() or None
+
+    # ⭐ `silent_min` is the SILENT DETECTION selection — a READ-TIME VIEW.
+    # ⛔ It writes nothing: the builder applies it to its own copy of the config
+    # and ignores any value that is not one of the CONFIGURED thresholds.
+    return {"state": _arg("state"), "trade_type": _arg("trade_type"),
+            "silent_min": _arg("silent_min")}
+
+
+@analytics2_api.route("/api/strategy-health/screen", methods=["GET"])
+@login_required
+def get_strategy_health_screen():
+    """Screen 20. Read-only. ONE tower build feeds every panel, so they all
+    describe the same strategies at the same instant."""
+    cfg = current_app.config["GUI_CONFIG"]
+    return jsonify(strategy_health.build_strategy_health_screen(
+        cfg, **_health_kwargs2()))
+
+
+@analytics2_api.route("/api/export/strategy-health", methods=["GET"])
+@login_required
+def export_strategy_health():
+    """XLSX of the FILTERED view only.
+
+    ⛔ An unmeasured field exports as NOT INSTRUMENTED, never as a blank cell —
+    a blank would read as zero.
+    """
+    cfg = current_app.config["GUI_CONFIG"]
+    payload = strategy_health.build_strategy_health_screen(cfg, **_health_kwargs2())
+    rows = strategy_health.export_rows(payload)
+    return _xlsx([("Strategy Health", rows[0], rows[1:])],
+                 "strategy_health_%s.xlsx" % payload["today"])
+
+
+# ── SCREEN 21 — SCANNER ATTRIBUTION ──────────────────────────────────────────
+# ⭐ ADDITIVE: the G5c `/api/scanner-attribution` endpoint is deliberately
+# UNTOUCHED and its contract test still passes — including its own three-factor
+# `quality_score`, which this screen does NOT use (Screen 21 computes the
+# artwork's four-component composite instead, exactly as Screen 20 left the
+# legacy 5-value health score alone).
+#
+# ⚠️ NOT period-scoped: the artwork labels the funnel, the rejection donut and
+# the profitability panel "(TODAY)" and draws no date filter. ACTIVITY METRICS
+# carries its own explicit second window.
+def _scanner_kwargs() -> dict:
+    def _arg(name):
+        return (request.args.get(name) or "").strip() or None
+
+    return {"health": _arg("health"), "trade_type": _arg("trade_type")}
+
+
+@analytics2_api.route("/api/scanner-attribution/screen", methods=["GET"])
+@login_required
+def get_scanner_attribution_screen():
+    """Screen 21. Read-only. ONE tower build feeds the KPI strip, the table, the
+    funnel, the rejection donut, the rankings, the quality gauge and the export,
+    so no panel can describe a different set from the table beside it."""
+    cfg = current_app.config["GUI_CONFIG"]
+    return jsonify(scanner_attribution.build_scanner_attribution_screen(
+        cfg, **_scanner_kwargs()))
+
+
+@analytics2_api.route("/api/export/scanner-attribution", methods=["GET"])
+@login_required
+def export_scanner_attribution():
+    """XLSX of the FILTERED, RANKED view only (approved: "Export filtered
+    results only").
+
+    ⛔ NO SCANNER COLUMN in the main sheet — the same removal the screen makes,
+    and a test asserts its absence in the generated file. ⭐ The scanner identity
+    is on the SCANNER MAPPING sheet, which is where it belongs.
+    """
+    cfg = current_app.config["GUI_CONFIG"]
+    payload = scanner_attribution.build_scanner_attribution_screen(
+        cfg, **_scanner_kwargs())
+    return _xlsx(scanner_attribution.export_sheets(payload),
+                 "scanner_attribution_%s.xlsx" % payload["today"])
+
+
+# ── SCREEN 22 — HOLDINGS ─────────────────────────────────────────────────────
+# ⭐ ADDITIVE: the G5d `/api/holdings` gtt_state-mirror endpoint is deliberately
+# UNTOUCHED and its contract test still passes.
+#
+# ⚠️ NOT period-scoped: holdings are a LIVE POSITION STATE, and the broker side
+# is whatever the most recent 15:45 reconciliation run measured.
+def _holdings_kwargs() -> dict:
+    def _arg(name):
+        return (request.args.get(name) or "").strip() or None
+
+    return {"symbol": _arg("symbol"), "product": _arg("product"),
+            "status": _arg("status"), "source": _arg("source"),
+            "trade_type": _arg("trade_type")}
+
+
+@analytics2_api.route("/api/holdings/screen", methods=["GET"])
+@login_required
+def get_holdings_screen():
+    """Screen 22. Read-only. Broker is the final source of truth, the system is
+    the expected state and Delta is the difference — all three from ONE system
+    read and ONE reconciliation run, so the panels describe the same instant."""
+    cfg = current_app.config["GUI_CONFIG"]
+    return jsonify(holdings.build_holdings_screen(cfg, **_holdings_kwargs()))
+
+
+@analytics2_api.route("/api/export/holdings", methods=["GET"])
+@login_required
+def export_holdings_screen():
+    """XLSX of the FILTERED view only (approved: "Export filtered results only").
+
+    ⛔ Current Price, Market Value and Unrealized P&L export as NOT INSTRUMENTED
+    on every row — never blank, which a spreadsheet reader would total as zero.
+    """
+    cfg = current_app.config["GUI_CONFIG"]
+    payload = holdings.build_holdings_screen(cfg, **_holdings_kwargs())
+    return _xlsx(holdings.export_sheets(payload),
+                 "holdings_%s.xlsx" % payload["today"])

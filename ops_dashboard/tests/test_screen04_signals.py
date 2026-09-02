@@ -208,3 +208,58 @@ def test_existing_signals_contract_fields_survive(client):
     if d["rows"]:
         assert {"signal_id", "received_at", "scanner", "strategy", "symbol",
                 "status", "family", "rejection_reason"} <= set(d["rows"][0])
+
+
+# ── Rama, 20-Aug: the ten centred headings + the clipping fix ────────────────
+# These are VISUAL decisions, so no API test can see them regress. They are
+# pinned here against the template/CSS themselves, which is the only surface
+# that carries them.
+_HC_EXPECTED = {
+    "trade_type", "direction", "system_score", "score_threshold", "status_label",
+    "rejection_reason", "reject_score", "required_score", "trade_result",
+    "trade_duration_sec",
+}
+_HC_LEFT = {"date", "time", "strategy", "symbol"}
+
+
+def _signals_template() -> str:
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(here, "frontend", "templates", "signals.html"),
+              encoding="utf-8") as fh:
+        return fh.read()
+
+
+def test_exactly_the_ten_ruled_headings_are_centred():
+    """`hc` marks Trade Type -> Trade Duration and NOTHING else.
+
+    It rides on the column DEFINITION, never on a position, because the columns
+    are drag-reorderable — a positional rule would centre the wrong heading
+    after a drag.
+    """
+    import re
+    src = _signals_template()
+    block = src[src.index("DEFAULT_COLS: ["):src.index("cols: [],")]
+    got = {m.group(1) for m in
+           re.finditer(r'\{\s*key:\s*"([a-z_]+)"[^}]*\bhc:\s*true', block)}
+    assert got == _HC_EXPECTED, "centred set drifted: %s" % (got ^ _HC_EXPECTED)
+    for key in _HC_LEFT:
+        row = re.search(r'\{\s*key:\s*"%s".*?\}' % key, block, re.S).group(0)
+        assert "hc:" not in row, "%s must stay left-aligned" % key
+    assert "c.hc ? 'hc' : ''" in src, "the hc class is not bound onto the <th>"
+
+
+def test_numeric_headings_are_not_width_capped_into_clipping():
+    """The `max-width` that clipped SCORE THRESHOLD / TRADE DURATION is gone.
+
+    A single word cannot wrap, so a cap narrower than the longest word made the
+    heading overflow into its neighbour. Measured 20-Aug: content 91px in a 69px
+    cell at 1896w. The floor replaces the cap.
+    """
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(here, "frontend", "static", "style.css"),
+              encoding="utf-8") as fh:
+        css = fh.read()
+    assert ".sig-page .st-tbl th.rt { max-width:" not in css, \
+        "the width cap that caused the header clipping is back"
+    assert ".sig-page .st-tbl th.rt { min-width:" in css
+    assert ".sig-page .st-tbl th.hc { text-align: center; }" in css

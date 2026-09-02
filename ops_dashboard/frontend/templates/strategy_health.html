@@ -1,60 +1,779 @@
 {% extends "base.html" %}
-{% from "components.html" import kpi_row, kpi_card, period_selector, export_button, events_alerts_panel %}
 {% block title %}AlgoCore Systems — Strategy Health{% endblock %}
 {% block nav_strategy_health %}active{% endblock %}
 {% block content %}
-{# G5c: operational health. States (mapped from the G2b scorecard badge + silence,
-   documented in analytics_period.py): Healthy/Quiet/Warning/Silent/Disabled. Health
-   Score only (L8). Silence colored only inside expected-activity windows (freshness). #}
-<div x-data="healthPage()" x-init="load(); loadAlerts(); $watch('pPeriod', () => load())" @ops-refresh.window="load()">
-  <h2 class="panel-title">Strategy Health <span class="panel-sub" x-text="data.today || ''"></span></h2>
+{#  SCREEN 20 — STRATEGY HEALTH.  `gui/20. Strategy_Health.png` + `.txt` are
+    BINDING.  Measured off the PNG: six KPI cards; a LEFT column (health table →
+    HEALTH STATUS GUIDE · HEALTH SCORE BREAKDOWN · TREND ANALYSIS · HEALTH
+    TIMELINE → STRATEGY DRILLDOWN QUICK ACCESS · RECENT HEALTH EVENTS) beside a
+    FULL-HEIGHT RIGHT RAIL (SILENT DETECTION SETTINGS · REJECTION MONITORING ·
+    SIGNAL ACTIVITY · TRADE ACTIVITY · WARNINGS SUMMARY · EXPORT).
 
-  {% call kpi_row() %}
-    {{ kpi_card("Healthy", "cnt('Healthy')", tone="pos") }}
-    {{ kpi_card("Quiet", "cnt('Quiet')", tone="info") }}
-    {{ kpi_card("Warning", "cnt('Warning')", tone="warn") }}
-    {{ kpi_card("Silent", "cnt('Silent')", tone="neg") }}
-    {{ kpi_card("Disabled", "cnt('Disabled')", tone="info") }}
-  {% endcall %}
+    ⭐ HEALTH SCORE is the REAL weighted composite the artwork specifies —
+       Activity 30 · Signal Quality 25 · Acceptance Rate 20 · Trade Activity 15 ·
+       Errors 10 — computed in `services/strategy_health.py` from measured
+       counters. ⛔ It is NOT the old five-value health lookup.
+    ⚠️ "Scanner Offline" keeps the APPROVED ARTWORK LABEL exactly (Rama, 16-Aug).
+       ⛔ Not renamed, and its count is DERIVED from `webhook_audit`.
+    ⛔⛔ HEALTH TIMELINE and RECENT HEALTH EVENTS have NO source in this system —
+       nothing stores a per-strategy state history. The artwork marks the
+       timeline "(Example)", so those example values are ⛔ NOT rendered as
+       production data. Both panels keep their APPROVED FOOTPRINT and state the
+       gap.
+    ⭐ SILENT DETECTION's threshold is a REAL SELECT in the application's own
+       dropdown language, and its choices come from `gui_config.silence` — the
+       only boundaries `strategy_score.silence_tier` applies. ⛔ SELECTING IS NOT
+       WRITING: the choice re-evaluates THIS READ only, the deployed config is
+       untouched, and the panel names the configured rule whenever the selection
+       differs from it.
+    ⛔ An Alpine x-for TEMPLATE inside an SVG renders NOTHING — repeated SVG
+       children go through `x-html` on a group node.  #}
+<div class="sh-page" x-data="healthPage()" x-init="init()"
+     @ops-refresh.window="load()">
 
-  {{ period_selector() }}
-  <div class="filters">{{ export_button("Export Health") }}
-    <span class="panel-sub">period drives the signals-trend column; state/silence are as-of-now</span></div>
-
-  <div class="tbl-scroll">
-    <table class="cap-table">
-      <thead><tr><th>Strategy</th><th>State</th><th>Health</th><th>Last Signal</th><th>Last Trade</th>
-        <th>Signals (today)</th><th>Signals (period)</th><th>Orders</th><th>Trades</th><th>Rejections (R/C/O/D/E)</th></tr></thead>
-      <tbody>
-        <template x-for="r in data.rows || []" :key="r.strategy">
-          <tr>
-            <td x-text="r.display_name"></td>
-            <td><span class="status-chip" :class="stateClass(r.state)" x-text="r.state"></span></td>
-            <td class="cap-num" x-text="r.health_score !== null ? r.health_score : '—'"></td>
-            <td class="ev-ts" x-text="tstr(r.last_signal)"></td>
-            <td class="ev-ts" x-text="tstr(r.last_trade)"></td>
-            <td class="cap-num" x-text="r.signals_today"></td>
-            <td class="cap-num" x-text="r.signals_period"></td>
-            <td class="cap-num" x-text="r.orders_today"></td>
-            <td class="cap-num" x-text="r.trades_today"></td>
-            <td class="mono" x-text="r.rejections.risk+'/'+r.rejections.capital+'/'+r.rejections.order+'/'+r.rejections.duplicate+'/'+r.rejections.expired"></td>
-          </tr>
-        </template>
-      </tbody>
-    </table>
+  <div class="sh-head">
+    <div>
+      <h1 class="sh-title">STRATEGY HEALTH</h1>
+      <div class="sh-sub">Monitor operational health of strategies in real time</div>
+    </div>
+    <span class="sh-lastcheck">
+      <span class="sh-lc-l">LAST CHECK</span>
+      <span class="sh-lc-v mono" x-text="hhmmss(data.generated_at) || '—'"></span>
+    </span>
   </div>
 
-  {{ events_alerts_panel(events_expr="[]", alerts_expr="alerts", title="Warnings & Alerts") }}
+  {# ── the six approved KPI cards, in the approved order ─────────────────── #}
+  <div class="sh-kpis">
+    <template x-for="k in KPIS" :key="k.key">
+      <section class="panel sh-kpi" :class="isOn(k) ? 'is-on' : ''"
+               :role="k.state ? 'button' : null" :tabindex="k.state ? 0 : null"
+               :title="k.hint"
+               @click="toggleState(k.state)" @keyup.enter="toggleState(k.state)">
+        <span class="sh-kpi-ico" :class="'sh-ico-' + k.tone" x-html="k.ico"></span>
+        <span class="sh-kpi-body">
+          <span class="sh-kpi-l" x-text="k.label"></span>
+          <b class="sh-kpi-v" x-text="fmt(kpi(k.key))"></b>
+          <span class="sh-kpi-s" :class="'sh-v-' + k.tone" x-text="kpiPct(k.key)"></span>
+        </span>
+      </section>
+    </template>
+  </div>
+
+  <div class="sh-main">
+    <div class="sh-left">
+
+      {# ── STRATEGY HEALTH TABLE ─────────────────────────────────────────── #}
+      <section class="panel sh-tablep">
+        <div class="sh-panel-head">
+          <h3 class="panel-title">STRATEGY HEALTH TABLE</h3>
+        </div>
+        {# ⭐ THE ESTABLISHED FILTER LANGUAGE, ⛔ not the cramped 32px boxed row
+           this screen carried before: the same `.flt-row` / `.flt-field` /
+           `.flt-k` / `.flt-actions` geometry and the same `.sel` control that
+           Screens 03/04/05/13/14/15 use, so this panel cannot read as a
+           different application. #}
+        <div class="flt-row sh-flt">
+          <label class="flt-field">
+            <span class="flt-k">Status</span>
+            <select class="sel" x-model="f.state" @change="load()">
+              <option value="">All Statuses</option>
+              <template x-for="s in states()" :key="s">
+                <option :value="s" x-text="s"></option>
+              </template>
+            </select>
+          </label>
+          <label class="flt-field">
+            {# ⭐ the STRATEGY's YAML intent — the SAME value Screen 19 uses #}
+            <span class="flt-k">Trade Type</span>
+            <select class="sel" x-model="f.trade_type" @change="load()">
+              <option value="">All Types</option>
+              <template x-for="t in ttOptions()" :key="t">
+                <option :value="t" x-text="t"></option>
+              </template>
+            </select>
+          </label>
+          <div class="flt-actions">
+            <button class="btn-ghost" type="button" @click="resetFilters()">↻ Reset Filters</button>
+          </div>
+        </div>
+
+        <div class="sh-tbl-wrap tbl-freeze">
+          <table class="cap-table sh-tbl">
+            <thead><tr>
+              <template x-for="c in cols" :key="c.key">
+                <th class="lbl sh-th"
+                    :class="[dragKey === c.key ? 'is-drag' : '',
+                             overKey === c.key ? 'is-over' : '', c.ctr ? 'ctr' : '']"
+                    :style="c.w ? ('width:' + c.w) : ''"
+                    draggable="true" role="button" tabindex="0"
+                    :title="c.nosort ? (c.label + ' · row number of the current sort · drag to reorder')
+                                     : (c.label + ' · click to sort, drag to reorder')"
+                    @dragstart="onDragStart(c.key, $event)"
+                    @dragover.prevent="overKey = c.key"
+                    @dragleave="overKey === c.key && (overKey = '')"
+                    @drop.prevent="onDrop(c.key)"
+                    @dragend="onDragEnd()"
+                    @click="!c.nosort && headClick(c.key)"
+                    @keyup.enter="!c.nosort && tSort(c.key)">
+                  {# ⭐ The binding artwork draws PLAIN headings; the drag glyph
+                     was my own addition and it cost 12px on EVERY column, which
+                     is what pushed the three "… Today" headings into a wrap that
+                     read as a column of repeated TODAY. ⛔ The affordance is NOT
+                     removed — the <th> is still draggable and still says so. #}
+                  <span x-text="c.label"></span><span
+                        class="sh-arrow" x-show="tSortKey === c.key"
+                        x-text="tArrow(c.key)"></span>
+                </th>
+              </template>
+            </tr></thead>
+            <tbody>
+              {# ⭐ `(r, i)` — the serial column needs the row's INDEX IN THE
+                 CURRENTLY SORTED SET, which is exactly what this loop yields.
+                 ⛔ It is NOT read from the row and ⛔ NOT stored: re-sorting or
+                 filtering renumbers 1..n on the spot, which is what a serial
+                 column means. 👤 Rama, 01-Sep-2026: "presentation-only; do not
+                 create or alter a business/data identifier." #}
+              <template x-for="(r, i) in tSorted(rows())" :key="r.strategy">
+                <tr>
+                  <template x-for="c in cols" :key="c.key">
+                    <td :class="[c.ctr ? 'ctr' : '', c.num ? 'mono' : '']">
+                      <template x-if="c.key === 'serial'">
+                        <span class="sh-serial" x-text="i + 1"></span>
+                      </template>
+                      <template x-if="c.key === 'display_name'">
+                        {# a long name ellipsises; the full one stays reachable #}
+                        <span class="sh-nm" :title="r.display_name"
+                              x-text="r.display_name"></span>
+                      </template>
+                      {# ⭐ TRADE TYPE IS ITS OWN COLUMN, IMMEDIATELY AFTER
+                         STRATEGY (Rama, 16-Aug) — ⛔ no longer a badge tucked
+                         inside the Strategy cell, where its heading could not be
+                         read. Same strategy-level YAML value as Screen 19. #}
+                      <template x-if="c.key === 'trade_type'">
+                        <span>
+                          <span x-show="r.trade_type" class="sh-tt"
+                                :class="'sh-tt-' + (r.trade_type || '').toLowerCase()"
+                                x-text="r.trade_type"></span>
+                          <span x-show="!r.trade_type" class="sh-ni"
+                                title="this strategy's YAML declares no intent">n/a</span>
+                        </span>
+                      </template>
+                      <template x-if="c.key === 'state'">
+                        <span class="sh-badge" :class="'sh-st-' + r.state.toLowerCase()">
+                          <i class="dot"></i><span x-text="r.state"></span></span>
+                      </template>
+                      <template x-if="c.key === 'last_signal'">
+                        <span :class="r.state === 'Silent' ? 'sh-neg' : ''"
+                              :title="silTip(r)" x-text="hhmm(r.last_signal)"></span>
+                      </template>
+                      <template x-if="c.key === 'rejections_today'">
+                        <span :class="r.rejections_today > 0 ? 'sh-neg' : ''"
+                              :title="rejTip(r)" x-text="rejCell(r)"></span>
+                      </template>
+                      {# ⛔ AN x-if TEMPLATE MUST HAVE EXACTLY ONE ROOT ELEMENT —
+                         with two siblings Alpine renders only the first, which
+                         silently blanks every "no value" cell. #}
+                      <template x-if="c.key === 'health_score'">
+                        <span>
+                          <span x-show="r.health_score !== null" class="sh-score"
+                                :class="scoreClass(r.health_score)" :title="scoreTip(r)"
+                                x-text="r.health_score + ' / 100'"></span>
+                          <span x-show="r.health_score === null" class="sh-ni"
+                                :title="r.score_reason">n/a</span>
+                        </span>
+                      </template>
+                      <template x-if="c.key === 'trend'">
+                        <span>
+                          <span x-show="r.trend" class="sh-trend"
+                                :class="'sh-tr-' + (r.trend || '').toLowerCase()">
+                            <span x-text="trendIcon(r.trend)"></span><span x-text="r.trend"></span>
+                          </span>
+                          <span x-show="!r.trend" class="sh-ni"
+                                title="no earlier daily signal history for this strategy">—</span>
+                        </span>
+                      </template>
+                      <template x-if="!SPECIAL.includes(c.key)">
+                        <span x-text="cell(r, c)"></span>
+                      </template>
+                    </td>
+                  </template>
+                </tr>
+              </template>
+              <tr x-show="!rows().length" x-cloak>
+                <td :colspan="cols.length" class="sh-empty">
+                  No strategies match the current filters.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="sh-tfoot">
+          <span class="sh-showing" x-text="showing()"></span>
+          <a class="sh-drilllink" href="/strategies">View Strategy Drilldown <span>→</span></a>
+        </div>
+      </section>
+
+      {# ── GUIDE · SCORE BREAKDOWN · TREND ANALYSIS · TIMELINE ───────────── #}
+      <div class="sh-row4">
+        <section class="panel sh-guide">
+          <h3 class="panel-title">HEALTH STATUS GUIDE</h3>
+          <ul class="sh-guide-list">
+            <template x-for="g in guide()" :key="g.state">
+              <li>
+                <i class="dot" :class="'sh-d-' + g.state.toLowerCase()"></i>
+                <span class="sh-g-s" :class="'sh-c-' + g.state.toLowerCase()"
+                      x-text="g.state"></span>
+                <span class="sh-g-t" x-text="g.text"></span>
+              </li>
+            </template>
+          </ul>
+        </section>
+
+        <section class="panel sh-break">
+          <h3 class="panel-title">HEALTH SCORE BREAKDOWN</h3>
+          <div class="sh-donut-body">
+            {# ⛔ The ROTATION belongs to the ARC GROUP, not the whole <svg> — a
+               rotated svg drags the centre labels with it, and undoing that per
+               <text> rotates each line about its OWN centre, stacking them. #}
+            <svg class="sh-donut" viewBox="0 0 42 42" aria-hidden="true">
+              <circle class="sh-donut-bg" cx="21" cy="21" r="15.9155" fill="none" stroke-width="4"></circle>
+              <g transform="rotate(-90 21 21)" x-html="scoreMarkup()"></g>
+              {# ⚠️ The caption sits INSIDE a circle, so the usable width shrinks
+                 with distance from the centre — both lines are held close to it,
+                 and the ring is 4 units so the widest word clears the hole at the
+                 13px readability floor. ⛔ The artwork's words are unchanged. #}
+              <text class="sh-donut-t1" x="21" y="19.7" text-anchor="middle">Health Score</text>
+              <text class="sh-donut-t2" x="21" y="24.3" text-anchor="middle">Components</text>
+            </svg>
+            <ul class="sh-legend">
+              <template x-for="w in weights()" :key="w.key">
+                <li>
+                  <i class="dot" :class="'sh-arc-' + w.key"></i>
+                  <span class="sh-lg-c" x-text="w.label"></span>
+                  <span class="sh-lg-n mono" x-text="w.pct + '%'"></span>
+                </li>
+              </template>
+            </ul>
+          </div>
+        </section>
+
+        <section class="panel sh-trend">
+          <h3 class="panel-title">TREND ANALYSIS</h3>
+          <ul class="sh-trend-list">
+            <template x-for="t in trendRows()" :key="t.trend">
+              <li>
+                <span class="sh-tr-ico" :class="'sh-tr-' + t.trend.toLowerCase()"
+                      x-text="trendIcon(t.trend)"></span>
+                <span class="sh-tr-b">
+                  <b class="sh-tr-n" :class="'sh-tr-' + t.trend.toLowerCase()"
+                     x-text="t.trend"></b>
+                  <span class="sh-tr-t" x-text="t.text"></span>
+                </span>
+              </li>
+            </template>
+          </ul>
+          {# ⭐ the BASE lives on the tooltip and in the page footer — printed
+             inside this narrow panel it wraps to six lines and stretches the
+             whole row into a dead band. #}
+          <p class="sh-mini sh-mini-1" :title="trendBase()"
+             x-text="trendShort()"></p>
+        </section>
+
+        {# ⛔⛔ The artwork marks this panel "(Example)". Nothing in this system
+           stores a state history, so the panel keeps its APPROVED FOOTPRINT and
+           states the gap — the example values are NOT rendered as data. #}
+        <section class="panel sh-timeline">
+          <h3 class="panel-title">HEALTH TIMELINE <span class="panel-sub">(Example)</span></h3>
+          <div class="sh-gap sh-gap-tall" :title="gap('health_timeline')">
+            <span class="sh-gap-b">NOT INSTRUMENTED</span>
+            <p class="sh-gap-t" x-text="gapShort('health_timeline')"></p>
+          </div>
+        </section>
+      </div>
+
+      {# ── DRILLDOWN + RECENT HEALTH EVENTS ─────────────────────────────── #}
+      <div class="sh-row2">
+        <section class="panel sh-drill">
+          <h3 class="panel-title">STRATEGY DRILLDOWN QUICK ACCESS</h3>
+          <div class="sh-drill-grid">
+            <template x-for="(d, i) in drill()" :key="d.label">
+              <a class="sh-tile" :class="i === 0 ? 'is-on' : ''" :href="d.href">
+                <span class="sh-tile-ico" x-html="tileIco(d.label)"></span>
+                <span class="sh-tile-l" x-text="d.label"></span>
+              </a>
+            </template>
+          </div>
+        </section>
+
+        <section class="panel sh-events">
+          <h3 class="panel-title">RECENT HEALTH EVENTS</h3>
+          {# the approved column head is kept so the panel keeps its shape #}
+          <table class="cap-table sh-ev-tbl">
+            <thead><tr>
+              <th class="lbl">Time</th><th class="lbl">Strategy</th>
+              <th class="lbl">Event</th><th class="lbl">Status</th>
+              <th class="lbl">Details</th>
+            </tr></thead>
+            <tbody><tr><td colspan="5">
+              <div class="sh-gap" :title="gap('health_events')">
+                <span class="sh-gap-b">NOT INSTRUMENTED</span>
+                <p class="sh-gap-t" x-text="gapShort('health_events')"></p>
+              </div>
+            </td></tr></tbody>
+          </table>
+        </section>
+      </div>
+    </div>
+
+    {# ── the right rail, in the approved order ───────────────────────────── #}
+    <div class="sh-rail">
+      <section class="panel sh-silent">
+        <h3 class="panel-title">SILENT DETECTION SETTINGS</h3>
+        {# ⭐ A REAL SELECT, in the application's own dropdown language (Rama,
+           16-Aug) — the same `.sel` control every other filter on the site uses.
+           ⭐ ITS CHOICES COME FROM THE CONFIGURATION CONTRACT: `gui_config.
+           silence` defines exactly the boundaries `strategy_score.silence_tier`
+           applies, and those are the only values offered. ⛔ No arbitrary ladder
+           was invented.
+           ⛔ SELECTING IS NOT WRITING: the choice re-evaluates THIS READ only —
+           the deployed config is untouched (L4) — and whenever the selection is
+           not the configured rule the panel says so, so a what-if can never be
+           mistaken for what the trading system is actually enforcing. #}
+        <div class="sh-sil-body">
+          <label class="flt-field">
+            <span class="flt-k">Silent if no signal for more than</span>
+            {# ⛔ NEITHER `x-model` NOR `:value` ON THE SELECT: the options are
+               rendered by an x-for, so a value bound on the <select> is applied
+               before they exist, silently falls back to the FIRST option, and the
+               panel then states a threshold the data is not using. The selected
+               state is bound on the OPTION, which cannot be evaluated too early. #}
+            <select class="sel"
+                    @change="f.silent_min = $event.target.value; load()"
+                    :title="'view only · source: ' + (sil().source || '')">
+              <template x-for="o in silOptions()" :key="o.minutes">
+                <option :value="String(o.minutes)"
+                        :selected="o.minutes === sil().selected"
+                        x-text="o.label"></option>
+              </template>
+            </select>
+          </label>
+          <span class="sh-sil-s">Status =
+            <b class="sh-c-silent" x-text="sil().status || 'Silent'"></b></span>
+          <span class="sh-sil-note" x-show="sil().is_configured === false" x-cloak
+                x-text="'Viewing at ' + sil().label + '. The configured rule is '
+                        + sil().configured_label + ' — this selection changes what is '
+                        + 'shown, not what the system enforces.'"></span>
+        </div>
+      </section>
+
+      <section class="panel sh-rej">
+        <h3 class="panel-title">REJECTION MONITORING <span class="panel-sub">(TODAY)</span></h3>
+        <div class="sh-rej-body">
+          <svg class="sh-donut sh-donut-sm" viewBox="0 0 42 42" aria-hidden="true">
+            <circle class="sh-donut-bg" cx="21" cy="21" r="15.9155" fill="none" stroke-width="7"></circle>
+            <g transform="rotate(-90 21 21)" x-html="rejMarkup()"></g>
+          </svg>
+          <ul class="sh-rej-list">
+            <li><i class="dot sh-d-total"></i><span class="sh-rl">Total Signals</span>
+                <b class="mono" x-text="fmt(rej().total_signals)"></b></li>
+            <li><i class="dot sh-d-ok"></i><span class="sh-rl">Accepted</span>
+                <b class="mono sh-pos" x-text="pair(rej().accepted, rej().accepted_pct)"></b></li>
+            <li><i class="dot sh-d-bad"></i><span class="sh-rl">Rejected</span>
+                <b class="mono sh-neg" x-text="pair(rej().rejected, rej().rejected_pct)"></b></li>
+            {# ⭐ shown only when it EXISTS — a stored signal can also be a
+               duplicate or expired, and folding that into either side is what
+               makes two shares add up to more than 100%. #}
+            <li x-show="rej().other" x-cloak>
+                <i class="dot sh-d-other"></i><span class="sh-rl">Duplicate / expired</span>
+                <b class="mono sh-mute" x-text="pair(rej().other, rej().other_pct)"></b></li>
+            <li><span class="sh-rl sh-rl-ind">Rejection %</span>
+                <b class="mono sh-neg"
+                   x-text="rej().available ? (num(rej().rejected_pct) + '%') : '—'"></b></li>
+          </ul>
+        </div>
+        <p class="sh-mini" x-show="!rej().available" x-cloak>
+          No signals stored today, so there is no rejection rate to compute.</p>
+      </section>
+
+      <section class="panel sh-act">
+        <h3 class="panel-title">SIGNAL ACTIVITY</h3>
+        <div class="sh-act-grid">
+          <div class="sh-act-c">
+            <span class="sh-al">Last Hour</span>
+            <b class="sh-av" x-text="fmt(sig().last_hour)"></b>
+            <svg class="sh-spark" viewBox="0 0 96 22" preserveAspectRatio="none" aria-hidden="true">
+              <g x-html="lineMarkup(sig().spark_hour)"></g></svg>
+          </div>
+          <div class="sh-act-c">
+            <span class="sh-al">Today</span>
+            <b class="sh-av" x-text="fmt(sig().today)"></b>
+            <svg class="sh-spark" viewBox="0 0 96 22" preserveAspectRatio="none" aria-hidden="true">
+              <g x-html="lineMarkup(sig().spark_today)"></g></svg>
+          </div>
+          <div class="sh-act-c">
+            <span class="sh-al">This Week</span>
+            <b class="sh-av" x-text="fmt(sig().week)"></b>
+            <svg class="sh-spark" viewBox="0 0 96 22" preserveAspectRatio="none" aria-hidden="true">
+              <g x-html="lineMarkup(sig().spark_days)"></g></svg>
+          </div>
+        </div>
+        <p class="sh-mini sh-mini-1"
+           x-text="'Trailing 60 min  |  today  |  last ' + (sig().week_days || 7) + ' days'"></p>
+      </section>
+
+      <section class="panel sh-act">
+        <h3 class="panel-title">TRADE ACTIVITY</h3>
+        <div class="sh-act-grid">
+          <div class="sh-act-c">
+            <span class="sh-al">Trades Today</span>
+            <b class="sh-av" x-text="fmt(trd().today)"></b>
+            <svg class="sh-spark" viewBox="0 0 96 22" preserveAspectRatio="none" aria-hidden="true">
+              <g x-html="lineMarkup(trd().spark_today)"></g></svg>
+          </div>
+          <div class="sh-act-c">
+            <span class="sh-al">This Week</span>
+            <b class="sh-av" x-text="fmt(trd().week)"></b>
+            <svg class="sh-spark" viewBox="0 0 96 22" preserveAspectRatio="none" aria-hidden="true">
+              <g x-html="lineMarkup(trd().spark_days)"></g></svg>
+          </div>
+          <div class="sh-act-c">
+            <span class="sh-al">Last Trade Time</span>
+            <b class="sh-av sh-av-t" x-text="hhmm(trd().last_trade)"></b>
+            <span class="sh-ad" x-text="trd().last_trade ? String(trd().last_trade).slice(0, 10) : (trd().today_date || '')"></span>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel sh-warn">
+        <h3 class="panel-title">WARNINGS SUMMARY</h3>
+        <ul class="sh-warn-list">
+          <template x-for="w in warnRows()" :key="w.label">
+            <li :class="w.count > 0 ? 'is-hit' : ''">
+              <span class="sh-w-ico" :class="w.count > 0 ? 'sh-w-on' : 'sh-w-off'"
+                    x-html="warnIco(w.label)"></span>
+              <span class="sh-wl" x-text="w.label"></span>
+              <b class="mono" :class="w.count > 0 ? 'sh-neg' : 'sh-mute'"
+                 x-text="fmt(w.count)"></b>
+            </li>
+          </template>
+        </ul>
+        {# ⭐ the honest note the approved label needs: outside the market window
+           a scanner that has posted nothing is closed, not offline. #}
+        <p class="sh-mini" x-show="!warnMeasured()" x-cloak
+           x-text="'Scanner Offline is counted only while signal activity is expected. It is not being measured now.'"></p>
+      </section>
+
+      <section class="panel sh-export">
+        <h3 class="panel-title">EXPORT</h3>
+        <span class="sh-exp-s">Export filtered strategy health data.</span>
+        <a class="sh-exp" :href="exportUrl()">
+          <span class="sh-exp-i" aria-hidden="true">▤</span>
+          <span x-text="'Export to XLSX (' + fmt(data.count) + ')'"></span>
+        </a>
+      </section>
+    </div>
+  </div>
+
+  <div class="sh-foot-note">
+    <span class="sh-i">ⓘ</span>
+    <span x-text="footNote()"></span>
+    <span class="sh-conn"><i class="dot sh-d-ok"></i>Live data connected</span>
+  </div>
 </div>
+
 <script>
 function healthPage() {
-  return Object.assign(pageBase("/api/strategy-health"), periodMixin("week"), {
-    alerts: [],
-    qs() { return this.pQuery(); },
-    async loadAlerts() { try { const r = await fetch("/api/alerts",{credentials:"same-origin"}); const d = await r.json(); this.alerts = (d&&d.alerts)||[]; } catch(e){} },
-    cnt(s) { return (this.data.counts || {})[s] || 0; },
-    stateClass(s) { return {Healthy:"sil-GREEN",Quiet:"sil-plain",Warning:"sil-YELLOW",Silent:"sil-RED",Disabled:"sil-plain"}[s] || "sil-plain"; },
-    tstr(ts) { return ts ? String(ts).replace("T"," ").slice(5,19) : "—"; },
+  return Object.assign(
+    colDragMixin(),pageBase("/api/strategy-health/screen"),
+    (typeof tableMixin === "function" ? tableMixin({defaultSize: 100, pageSizes: [100]}) : {}), {
+
+    /* the six approved KPI cards, in the approved order and with the approved
+       labels. Each carries the STATE it filters to — a click is a FILTER and
+       never a write. */
+    KPIS: [
+      { key: "active", state: "Healthy", label: "ACTIVE STRATEGIES", tone: "pos",
+        hint: "Operating normally — click to filter",
+        ico: '<svg viewBox="0 0 16 16" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1.5 8.4h3l1.8-4 2.6 8 1.8-4h3.8"/></svg>' },
+      { key: "quiet", state: "Quiet", label: "QUIET STRATEGIES", tone: "warn",
+        hint: "Low activity — click to filter",
+        ico: '<svg viewBox="0 0 16 16" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4.2a1.7 1.7 0 0 1 1.7-1.7h8.6A1.7 1.7 0 0 1 14 4.2v5a1.7 1.7 0 0 1-1.7 1.7H6.4L3.4 13.4v-2.5H3.7A1.7 1.7 0 0 1 2 9.2z"/><path d="M5.4 6.8h.01M8 6.8h.01M10.6 6.8h.01"/></svg>' },
+      { key: "silent", state: "Silent", label: "SILENT STRATEGIES", tone: "neg",
+        hint: "No signals for the configured duration — click to filter",
+        ico: '<svg viewBox="0 0 16 16" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8.6 3.1L5.2 6H2.6v4h2.6l3.4 2.9z"/><path d="M11 6.2l3.2 3.6M14.2 6.2L11 9.8"/></svg>' },
+      { key: "disabled", state: "Disabled", label: "DISABLED STRATEGIES", tone: "mute",
+        hint: "Disabled in config — click to filter",
+        ico: '<svg viewBox="0 0 16 16" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="5.8"/><path d="M3.9 3.9l8.2 8.2"/></svg>' },
+      { key: "with_warnings", state: "Warning", label: "STRATEGIES WITH WARNINGS", tone: "warn",
+        hint: "Issues detected — click to filter to Warning",
+        ico: '<svg viewBox="0 0 16 16" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 2.2l6 11.2H2z"/><path d="M8 6.4v3.2M8 11.4v.6"/></svg>' },
+      { key: "with_errors", state: "", label: "STRATEGIES WITH ERRORS", tone: "neg",
+        hint: "Strategies with rejected orders today",
+        ico: '<svg viewBox="0 0 16 16" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="5.8"/><path d="M5.9 5.9l4.2 4.2M10.1 5.9l-4.2 4.2"/></svg>' },
+    ],
+
+    /* ⭐ THE APPROVED COLUMN ORDER (design §STRATEGY HEALTH TABLE).
+       ⛔ No Scanner column. Widths bind to the COLUMN KEY, not a position, so a
+       drag can never hand one column's width to another. */
+    /* ⭐ Widths are sized so EVERY approved heading fits on ONE LINE — the fix
+       for the headers reading as a repeated "TODAY" (Rama, 16-Aug). ⛔ No column
+       was deleted and no data model changed; the table keeps a min-width and
+       scrolls inside its own container when the viewport is narrower. */
+    DEFAULT_COLS: [
+      /* ⭐ 👤 Rama, 01-Sep-2026: a serial column FIRST. It is presentation-only —
+         the index in the current sort, ⛔ never a stored identifier — so it
+         carries `nosort`: sorting BY a row number would sort by the display
+         order that the sort itself produces, which means nothing. ⭐ It stays
+         DRAGGABLE, so the column-order interaction is unchanged. */
+      { key: "serial",           label: "#",    ctr: true, nosort: true, w: "44px" },
+      { key: "display_name",     label: "Strategy",                    w: "132px" },
+      { key: "trade_type",       label: "Trade Type",       ctr: true, w: "94px" },
+      { key: "state",            label: "Status",           ctr: true, w: "108px" },
+      { key: "last_signal",      label: "Last Signal",      ctr: true, num: true, w: "98px" },
+      { key: "last_trade",       label: "Last Trade",       ctr: true, num: true, w: "94px" },
+      { key: "signals_today",    label: "Signals Today",    ctr: true, num: true, w: "118px" },
+      { key: "orders_today",     label: "Orders Today",     ctr: true, num: true, w: "114px" },
+      { key: "trades_today",     label: "Trades Today",     ctr: true, num: true, w: "113px" },
+      { key: "rejections_today", label: "Rejections Today", ctr: true, num: true, w: "141px" },
+      { key: "health_score",     label: "Health Score",     ctr: true, w: "110px" },
+      { key: "trend",            label: "Trend",            ctr: true, w: "92px" },
+    ],
+    SPECIAL: ["serial", "display_name", "trade_type", "state", "last_signal",
+              "rejections_today", "health_score", "trend"],
+    cols: [],
+    /* v2: the column SET changed (Trade Type added after Strategy). A stored
+       v1 order would have appended it LAST - the Screen-14 lesson.
+       ⭐ v3, 01-Sep-2026: the SET changed again (the serial column). ⛔ THE BUMP
+       IS NOT COSMETIC — a stored v2 order lists eleven keys, and `initCols`
+       appends anything missing from it, so a returning operator would have got
+       the new "#" column at the FAR RIGHT instead of first. The very lesson the
+       v2 note records, one screen later. */
+    COLS_KEY: "screen20.health.colOrder.v3",
+
+    f: { state: "", trade_type: "", silent_min: "" },
+
+    init() { this.initCols(); this.load(); },
+
+    qs() {
+      const p = new URLSearchParams();
+      if (this.f.state) p.set("state", this.f.state);
+      if (this.f.trade_type) p.set("trade_type", this.f.trade_type);
+      if (this.f.silent_min) p.set("silent_min", this.f.silent_min);
+      const s = p.toString();
+      return s ? "?" + s : "";
+    },
+    exportUrl() { return "/api/export/strategy-health" + this.qs(); },
+    resetFilters() {
+      /* ⭐ Reset returns the silence view to the CONFIGURED rule, not to a
+         blank - the screen must never sit on a what-if by default. */
+      this.f = { state: "", trade_type: "", silent_min: "" };
+      this.tSortKey = ""; this.load();
+    },
+    toggleState(state) {
+      if (!state) return;                      /* WITH ERRORS is not a state */
+      this.f.state = (this.f.state === state) ? "" : state;
+      this.load();
+    },
+    isOn(k) { return !!k.state && this.f.state === k.state; },
+
+    /* ── payload accessors ───────────────────────────────────────────────── */
+    rows() { return this.data.rows || []; },
+    states() { return this.data.states || []; },
+    ttOptions() { return ((this.data.filters || {}).trade_type) || []; },
+    guide() { return this.data.state_guide || []; },
+    kpi(k) { return ((this.data.kpi || {})[k]); },
+    sil() { return this.data.silent_detection || {}; },
+    silOptions() { return (this.sil().options) || []; },
+    rej() { return this.data.rejection_monitoring || {}; },
+    sig() { return this.data.signal_activity || {}; },
+    trd() { return this.data.trade_activity || {}; },
+    warnRows() { return ((this.data.warnings || {}).rows) || []; },
+    warnMeasured() { return !!((this.data.warnings || {}).scanner_offline_measured); },
+    trendRows() { return ((this.data.trend_analysis || {}).rows) || []; },
+    weights() { return this.data.score_weights || []; },
+    drill() { return this.data.drilldown || []; },
+    gap(k) { return (((this.data.gaps || {})[k]) || {}).reason || ""; },
+    gapShort(k) { const g = ((this.data.gaps || {})[k]) || {};
+                  return g.short || g.reason || ""; },
+
+    /* ── formatting ──────────────────────────────────────────────────────── */
+    fmt(n) { return (n === null || n === undefined) ? "—" : Number(n).toLocaleString("en-IN"); },
+    num(v, dp) {
+      if (v === null || v === undefined || v === "") return "—";
+      const d = (dp === undefined) ? 2 : dp;
+      return Number(v).toLocaleString("en-IN", {minimumFractionDigits: d, maximumFractionDigits: d});
+    },
+    pair(n, pct) {
+      if (n === null || n === undefined) return "—";
+      if (pct === null || pct === undefined) return this.fmt(n);
+      return this.fmt(n) + " (" + this.num(pct) + "%)";
+    },
+    hhmmss(ts) { return ts ? String(ts).replace("T", " ").slice(11, 19) : ""; },
+    hhmm(ts) { return ts ? String(ts).replace("T", " ").slice(11, 16) : "—"; },
+    cell(r, c) {
+      const v = r[c.key];
+      if (v === null || v === undefined || v === "") return "—";
+      if (c.key === "last_trade") return this.hhmm(v);
+      return this.fmt(v);
+    },
+    rejCell(r) {
+      const n = r.rejections_today;
+      if (r.rejections_pct === null || r.rejections_pct === undefined) return this.fmt(n);
+      return this.fmt(n) + " (" + this.num(r.rejections_pct) + "%)";
+    },
+    kpiPct(k) {
+      const p = (this.data.kpi || {})[k + "_pct"];
+      if (p === null || p === undefined) return "of 0 strategies";
+      return this.num(p) + "% of total";
+    },
+    scoreClass(s) {
+      if (s === null || s === undefined) return "";
+      if (s >= 75) return "sh-sc-hi";
+      if (s >= 50) return "sh-sc-mid";
+      return "sh-sc-lo";
+    },
+    scoreTip(r) {
+      const p = r.score_parts || {};
+      return this.weights().map(w => {
+        const v = p[w.key];
+        return w.label + " " + w.pct + "%: " + (v === null || v === undefined ? "n/a" : this.num(v));
+      }).join("  ·  ");
+    },
+    /* ⚠️ TWO different quantities, kept apart and each labelled with its own
+       base: signal outcomes share STORED, the failure strip does not. */
+    rejTip(r) {
+      const o = r.signal_outcomes || {}, f = r.failure_strip || {};
+      const sig = ["accepted", "rejected", "duplicated", "expired"]
+        .filter(k => o[k]).map(k => k + " " + o[k]).join(", ");
+      const strip = Object.keys(f).filter(k => f[k]).map(k => k + " " + f[k]).join(", ");
+      const out = [];
+      out.push("of " + (o.stored || 0) + " signals stored today"
+               + (sig ? ": " + sig : ""));
+      if (strip) out.push("order/pipeline failures: " + strip);
+      return out.join(" — ");
+    },
+    silTip(r) {
+      if (r.silence_age_min === null || r.silence_age_min === undefined) return "";
+      return "no signal for " + r.silence_age_min + " min";
+    },
+    trendIcon(t) { return {Improving: "↗", Stable: "→", Declining: "↘"}[t] || ""; },
+    trendBase() {
+      const t = this.data.trend_analysis || {};
+      let s = t.base ? ("Compares " + t.base + ".") : "";
+      if (t.unavailable) s += " " + t.unavailable + " strategy(ies) have no earlier history.";
+      return s;
+    },
+    /* the one-line form the narrow panel prints; the full base is its tooltip
+       and is repeated in the page footer, so nothing is hidden. */
+    trendShort() {
+      const t = this.data.trend_analysis || {};
+      const n = t.unavailable || 0;
+      return n ? (n + " with no earlier history") : "vs each strategy's own 7-day average";
+    },
+    showing() {
+      const d = this.data;
+      if (d.count === undefined) return "";
+      if (!d.count) return "Showing 0 of " + this.fmt(d.total) + " strategies";
+      return "Showing 1 to " + this.fmt(d.count) + " of " + this.fmt(d.total) + " strategies";
+    },
+    footNote() {
+      const ms = (this.data.poll_interval_ms || 0);
+      const every = ms ? (" and auto-updated every " + Math.round(ms / 1000) + " seconds") : "";
+      const base = ((this.data.trend_analysis || {}).base) || "";
+      return "All times are in IST (Asia/Kolkata)" + every + ". Health Score is the "
+           + "weighted composite of Activity 30%, Signal Quality 25%, Acceptance "
+           + "Rate 20%, Trade Activity 15% and Errors 10%."
+           + (base ? (" Trend compares " + base + ".") : "");
+    },
+
+    /* ── SVG builders (x-html, never x-for inside <svg>) ──────────────────── */
+    rejMarkup() {
+      const r = this.rej();
+      if (!r.available) return "";
+      const acc = Math.max(0, Math.min(100, Number(r.accepted_pct) || 0));
+      const rej = Math.max(0, Math.min(100 - acc, Number(r.rejected_pct) || 0));
+      /* ⛔ the three arcs are three outcomes of ONE base (signals stored), so
+         they total exactly 100 - they are never two overlapping ratios. */
+      let out = "", off = 25;
+      [["ok", acc], ["bad", rej], ["other", Math.max(0, 100 - acc - rej)]].forEach(seg => {
+        const cls = seg[0], p = seg[1];
+        out += '<circle class="sh-arc sh-arc-' + cls + '" cx="21" cy="21" r="15.9155"'
+             + ' fill="none" stroke-width="7" stroke-dasharray="' + p.toFixed(3) + ' '
+             + (100 - p).toFixed(3) + '" stroke-dashoffset="' + off.toFixed(3) + '"></circle>';
+        off = (off - p + 100) % 100;
+      });
+      return out;
+    },
+    scoreMarkup() {
+      const w = this.weights();
+      if (!w.length) return "";
+      let out = "", off = 25;
+      w.forEach(seg => {
+        const p = Math.max(0, Number(seg.pct) || 0);
+        out += '<circle class="sh-arc sh-arc-' + String(seg.key).replace(/[^a-z_]/g, "")
+             + '" cx="21" cy="21" r="15.9155" fill="none" stroke-width="4"'
+             + ' stroke-dasharray="' + p.toFixed(3) + ' ' + (100 - p).toFixed(3) + '"'
+             + ' stroke-dashoffset="' + off.toFixed(3) + '"></circle>';
+        off = (off - p + 100) % 100;
+      });
+      return out;
+    },
+    /* A real sparkline over a real series. ⛔ An empty or all-zero series draws
+       a flat baseline — it is never padded to look like activity. */
+    lineMarkup(series) {
+      const a = (series || []).map(v => Number(v) || 0);
+      if (a.length < 2) return '<line class="sh-spark-flat" x1="0" y1="20" x2="96" y2="20"></line>';
+      const max = Math.max.apply(null, a), n = a.length;
+      const y = v => (max <= 0) ? 20 : (20 - 17 * (v / max));
+      const pts = a.map((v, i) => (i * 96 / (n - 1)).toFixed(2) + "," + y(v).toFixed(2)).join(" ");
+      return '<polyline class="sh-spark-l" fill="none" points="' + pts + '"></polyline>';
+    },
+    warnIco(label) {
+      const err = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="5.8"/><path d="M5.9 5.9l4.2 4.2M10.1 5.9l-4.2 4.2"/></svg>';
+      const tri = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 2.4l5.8 10.8H2.2z"/><path d="M8 6.4v3.1M8 11.2v.6"/></svg>';
+      return (label === "Strategy Errors") ? err : tri;
+    },
+    tileIco(label) {
+      const I = {
+        Overview: '<svg viewBox="0 0 16 16" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2.5" width="5" height="5"/><rect x="9" y="2.5" width="5" height="5"/><rect x="2" y="9" width="5" height="4.5"/><rect x="9" y="9" width="5" height="4.5"/></svg>',
+        Signals: '<svg viewBox="0 0 16 16" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1.5 9h3l2-5 3 9 2-5.5h3"/></svg>',
+        Orders: '<svg viewBox="0 0 16 16" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3.5 1.8h9v12.4H3.5z"/><path d="M5.6 5h4.8M5.6 7.6h4.8M5.6 10.2h3"/></svg>',
+        Trades: '<svg viewBox="0 0 16 16" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 11.5l3.5-4 2.5 2.5 5-6"/><path d="M13 4v3.5M13 4H9.5"/></svg>',
+        Health: '<svg viewBox="0 0 16 16" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 13.5S2 10 2 6.2A3.2 3.2 0 0 1 8 4.6a3.2 3.2 0 0 1 6 1.6c0 3.8-6 7.3-6 7.3z"/></svg>',
+        Warnings: '<svg viewBox="0 0 16 16" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 2l6 11H2z"/><path d="M8 6.2v3.2M8 11.2v.6"/></svg>',
+      };
+      return I[label] || "";
+    },
+
+    /* ── column order: the established convention, reused ─────────────────── */
+    initCols() {
+      this.cols = this.DEFAULT_COLS.slice();
+      let saved = null;
+      try { saved = JSON.parse(window.localStorage.getItem(this.COLS_KEY) || "null"); }
+      catch (e) { saved = null; }
+      if (!Array.isArray(saved) || !saved.length) return;
+      const byKey = {};
+      this.DEFAULT_COLS.forEach(c => { byKey[c.key] = c; });
+      const next = [];
+      saved.forEach(k => { if (byKey[k] && next.indexOf(byKey[k]) === -1) next.push(byKey[k]); });
+      this.DEFAULT_COLS.forEach(c => { if (next.indexOf(c) === -1) next.push(c); });
+      if (next.length === this.DEFAULT_COLS.length) this.cols = next;
+    },
+    saveCols() {
+      try { window.localStorage.setItem(this.COLS_KEY, JSON.stringify(this.cols.map(c => c.key))); }
+      catch (e) {}
+    },
+    isDefaultOrder() {
+      return this.cols.length === this.DEFAULT_COLS.length
+             && this.cols.every((c, i) => c.key === this.DEFAULT_COLS[i].key);
+    },
+    resetCols() {
+      this.cols = this.DEFAULT_COLS.slice();
+      try { window.localStorage.removeItem(this.COLS_KEY); } catch (e) {}
+    },
+    headClick(key) {
+      if (Date.now() - this._dragEndAt < 250) return;
+      this.tSort(key);
+    },
   });
 }
 </script>

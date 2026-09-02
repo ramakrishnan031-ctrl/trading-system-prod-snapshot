@@ -108,7 +108,16 @@ def test_capital_risk_consolidates_but_old_routes_live(client):
 def test_honest_gap_strings_rendered(client):
     assert "not captured" in client.get("/config").get_data(as_text=True).lower()
     assert "not captured" in client.get("/audit").get_data(as_text=True).lower()
-    assert "not tracked" in client.get("/logs").get_data(as_text=True).lower()
+    # ⚠️ PHRASE UPDATED, PROPERTY UNCHANGED. The G5b logs viewer said
+    # "resolution status not tracked (G-5)". Screen 15 replaced that screen and
+    # says the same thing in the vocabulary Screens 12-15 all use: Resolution
+    # Status renders NOT INSTRUMENTED and the payload carries a `resolution` gap
+    # with its reason. ⛔ The assertion was NOT relaxed to make a change pass —
+    # the honesty it guards was verified on the new screen first, and it is now
+    # stated in more places than before.
+    logs_html = client.get("/logs").get_data(as_text=True)
+    assert "Resolution Status" in logs_html
+    assert "NOT INSTRUMENTED" in logs_html
     assert "Pending Broker Source" in client.get("/capital-risk").get_data(as_text=True)
 
 
