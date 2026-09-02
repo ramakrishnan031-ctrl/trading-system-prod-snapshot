@@ -3106,3 +3106,83 @@ over a read-only config extract, ⛔ never on the VM.
 **1.44× vs the artwork's implied ~1.19×**; 1440 runs **2666px**; and the rail's
 6-column History is the tightest panel on the page — ⏸ moving it to the main
 column would fix it and cost ~180px of height, 👤 Rama's call.
+
+### Entry 34 — S06 POSITIONS: THE CORRECTED RENDER WAS SIGHTED AND APPROVED. ⛔ NOT PUSHED
+
+**Date/time:** 02-Sep-2026, approved ~14:4x IST · **Branch:** `feat/screen10-slippage-analytics`
+**Build:** ⭐ **`b47e148` (20-Aug) — UNCHANGED** · **Code changed: NO** · **Pushed: NO · Deployed: NO**
+
+⭐ **THIS ENTRY CLOSES A DEBT, ⛔ IT DOES NOT RECORD A CHANGE.** 👤 Rama's card:
+*"This is a VISUAL RE-APPROVAL task only … If the existing corrected screenshot is
+still available, show it rather than changing code."*
+🔬 `git status --porcelain` = **0** before and after. ⛔ No commit of code, ⛔ no new
+test, ⛔ no CSS. ⭐ The only artefact is this record.
+
+#### ⭐ WHAT WAS OWED, AND WHY
+
+📄 Entry 21 (19-Aug) recorded S06 as ⏳ **QUALIFIED**: *"approved on the
+PRE-correction render; the correction (`b47e148`) is verified and re-rendered but
+⛔ never seen."* ⇒ ⭐ the debt was a **SIGHTING**, ⛔ never a rebuild.
+⭐ **Entry 21's STATE table is left EXACTLY as written** — 📄 it was true on 19-Aug.
+⛔ **This entry SUPERSEDES it; it does not rewrite it.**
+
+#### 🔬 THE CORRECTION, RE-MEASURED ON THE LIVE RENDER
+
+📄 `b47e148`, quoting 👤 Rama in its own message: *"one minor change … some very
+minor correction to improve viewability of Grouped colums"*.
+
+🔬 **THE DEFECT (measured 20-Aug):** the four grouped bands were **exactly
+adjacent, zero gap** — `QTY` ended at **x=1159** where `ENTRY` began at **1159**;
+`ENTRY` **1272** = `SL` **1272**; `SL` **1392** = `TGT` **1392**. ⇒ ⚠️ eight
+`SYSTEM|BROKER` sub-headings read as **one undifferentiated run** and an operator
+could not see where a band ended.
+
+⭐ **THE FIX:** a **1px rule at every band BOUNDARY**, on **all three levels** — the
+group row, the sub-heading row AND the body — so a band stays traceable down the
+rows. ⭐ Reuses the group underline's own `--card-bd` token ⇒ ⛔ no new colour, ⛔ no
+new visual concept, ⛔ no extra width.
+⭐ `sep` is computed from the **CURRENT column order** (`groups()` / `isSep()` keyed
+by `c.key`), ⛔ **never `nth-child`** — 🔴 these columns are REORDERABLE, so a drag
+carries the separator with its band.
+
+🔬 **VERIFIED LIVE 02-Sep, at both viewports: 5 separators on EACH of 10 rows**
+(group + sub-heading + 8 body) — ⭐ uniform, ⛔ no row missing one.
+
+#### Gate
+
+🔬 **@1920×1080 (TRUE, via an iframe — ⚠️ the host window is dpr 0.75 ⇒ 2549 CSS px):**
+page **1377px (1.275×)** · ⛔ **0 page horizontal overflow** · ⛔ **0 clipped header
+or data cells** · ⭐ 5×10 separators.
+🔬 **@1440×900:** **1624px (1.804×)** · ⛔ 0 page overflow · ⛔ 0 clipped cells ·
+⭐ 5×10 separators. ⭐ KPI strip reflows 6-across → **3+3**, filters to two rows, and
+the wide table scrolls **INSIDE its own panel** — ⭐ **PRE-EXISTING** S06 behaviour,
+⛔ not introduced here.
+🔬 **Focused S06: 81 passed, 0 failed** — ⭐ including
+`test_grouped_bands_are_separated_by_a_rule_at_every_boundary`, 📄 the guard
+`b47e148` added for exactly this correction (⭐ proven non-vacuous then by **5**
+plants, all red).
+⛔ **NO environment-only failure in this run** — 📄 the `kiteconnect` isolation
+artifact lives in `test_isolation.py`, ⛔ which is not in the S06 set.
+
+⭐ **FILLED FOR REVIEW, ⛔ not a screen of dashes:** **8** position rows across
+**all seven** statuses (Open 4 · SL Hit 1 · TGT Hit 1 · Manual Exit 1 · Expired 1),
+so density, alignment and badge contrast were all judgeable.
+
+#### ⚠️ REPORTED BEFORE APPROVAL, ⛔ NOT A DEFECT OF THE CORRECTION
+
+⭐ The **MTM PERFORMANCE** panel states *"MTM is not available to this screen"* and
+explains that an intraday MTM curve needs a **live price** while the dashboard
+reads only the local DB. ⇒ ⭐ that is the screen being **HONEST about an
+instrumentation gap**, ⛔ not a rendering fault, and ⛔ it is untouched by `b47e148`.
+
+#### ⛔ WHAT THE APPROVAL DOES NOT MEAN
+
+🔴 **S06 IS NOT `VERIFIED LIVE`** — 🟢 VISUALLY APPROVED on a local review render
+over the fixture DB, ⛔ never on the VM.
+
+#### ⏸ THE STANDING NOW
+
+🟢 **21 of 22 fully approved.** ⏸ **S07 Trade Explorer is the LAST qualified screen**
+— 📄 approved 14-Aug under the PREVIOUS ledger; `66fc82e` landed after it, unseen;
+⭐ the 13px-floor decision makes it a **RE-approval**. ⇒ ⭐ same render-only path.
+⏸ **The global table rule is DUE** — it was deferred *until all 22 are done*.
