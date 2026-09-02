@@ -3541,3 +3541,50 @@ commits are docs-only and its tip's subject appears ⛔ nowhere on `origin/main`
 did ⛔ not use it: the refspec was the explicit `686df1c:refs/heads/main`. ⚠️ **A plain
 `git push origin main` from that worktree would have pushed `3dff752`.** ⏸ Left for a
 deliberate pass.
+
+---
+
+## 🗿 THE ROLLBACK TREE — 02-Sep-2026 close
+
+🔴 **THE TREE REMAINS `39292d3`.** ⛔ `7d4970a` is **DEPLOYED BUT UNBOOTED**.
+⭐ **A PUSH IS ⛔ NOT A BOOT.** `39292d3` became the TREE on 31-Aug 👤 on Rama's typed
+line, on the strength of that SHA **starting**; `7d4970a` has never started.
+⇒ ⏸ **Advancing the TREE is tomorrow's decision**, after the **03-Sep 08:15** boot, and
+then only as a separate numbered, reversible act.
+⛔ **Do not advance it** on a clean merge, on Δ0 suites, or on three agreeing SHAs.
+
+⭐ **What makes tomorrow's advance nearly free, and ⛔ why it is still not automatic:**
+🔬 the engine executes **byte-identical** code — the push touched only `ops_dashboard/`
+(88 files), `docs/` (50), `PATHS.md`, `UNPUSHED_LEDGER.md`. ⇒ ⭐ tomorrow's boot proves
+`7d4970a` **starts**; ⛔ it proves nothing new about trading, because trading did not
+change. ⭐ That is what makes the advance safe — ⛔ not a reason to skip the boot.
+
+## ⚠️ A LIVE HAZARD, ⛔ NOT AN OBSERVATION — the stale local `main`
+
+🔬 `D:\Projects\trading-system-main` holds the local branch **`main`** at **`3dff752`**
+— **90 ahead / 94 behind** `origin/main`, diverging at `645728d` (07-Aug). Its 90 unique
+commits are docs-only; its tip's subject appears ⛔ nowhere on `origin/main`.
+
+⇒ 🔴 **`git push origin main` from that directory pushes `3dff752` OVER the deployed
+SHA.** ⚠️ That is the **DEFAULT FORM** of the command, in a directory **named `main`**.
+⭐ Only the explicit refspec `<sha>:refs/heads/main` avoided it tonight — both pushes
+used it.
+
+⇒ ⏸ **DUE, one command, ⛔ not tonight: RENAME that branch** so the default command has
+nothing to resolve. ⛔ **Do not delete the worktree** — those 90 commits are unexamined.
+⚠️ **Sibling trap, same root:** `D:\Projects\trading-system` is parked on
+`feat/delivery-config-split` with uncommitted work — 🔬 and it is what this session's
+inherited `PYTHONPATH` pointed at, producing 4 phantom failures.
+⇒ ⭐ **Two directories under `D:\Projects\` are now proven traps.**
+
+## 📄 `run_gate.sh` DOES NOT EXIST — a fourth path-that-isn't-there
+
+🔬 `run_gate.sh` was named as *"the project's own launcher"* in two consecutive
+instruction files, sourced from the register's **N20-19** entry. `git ls-files` finds it
+on ⛔ **no branch**. ⚠️ 🔴 **Following it naively had a live failure mode:** the only
+gate-shaped runner that DOES exist is **`run_tests.py`** — ⛔ the one §V2 forbids,
+because it collects the 44 never-gated `tests/crash_test/` tests that `load_dotenv()`
+the **real `.env`**. ⭐ The documented gate is the bare
+`pytest tests/unit tests/integration -q`, and that is what was run.
+⇒ ⭐ Third register line naming a non-existent path, after `~/doc/SYSTEM_MAP.md` and
+`docs/MASTER_REGISTER.md`. ⭐ **Measure a named path before obeying it.**
