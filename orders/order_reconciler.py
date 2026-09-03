@@ -80,7 +80,7 @@ from core.events import (
     EventBus,
     PositionClosed,  # BL-10b: out-of-band closure notification
 )
-from core.exceptions import BrokerAuthError, BrokerTimeoutError
+from core.exceptions import BrokerAuthError, BrokerTimeoutError, OrderRejectedError
 from core.logger import bind_trade, log_exception
 from core.market_windows import is_market_day, is_within_market_hours
 from core.state_store import StateStore
@@ -338,6 +338,12 @@ class OrderReconciler:
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._auth_error_count = 0   # RC12: consecutive BrokerAuthError counter
+
+        # T2 (03-Sep-2026): trades whose emergency exit hit a TERMINAL or
+        # STATE_UNKNOWN broker error, so it must NOT be retried blindly.
+        # trade_id -> verdict. In-memory and per-process by design: a restart
+        # re-reads real broker state, so it should start clean.
+        self._emergency_exit_blocked: Dict[str, str] = {}
 
         # FIX-038: exponential backoff for repeated alerts
         self._poll_count: int = 0
@@ -2703,6 +2709,68 @@ class OrderReconciler:
 
     # ── CHECK 9: MISSING_EXITS (FIX-002) ─────────────────────────────────────
 
+    # ── T2 (03-Sep-2026): classify a broker error before retrying it ─────────
+    #
+    # On 03-Sep the emergency exit was attempted EIGHT times in 111.4 s
+    # (15:10:17.585 -> 15:12:09.406) and rejected identically every time:
+    #   "Market orders without market protection are not allowed via API."
+    # That is a VALIDATION rejection. It is deterministic -- attempt 9 fails the
+    # same way. In the two minutes that mattered the system repeated a doomed
+    # call instead of escalating once, unmistakably.
+    #
+    # Why FIX-155's existing pending-guard could not stop it: it queries for an
+    # orders row (leg='EOD' AND order_type='MARKET' AND status IN PENDING/
+    # SUBMITTED/OPEN), and a REJECTED order returns no order_id, so it persists
+    # NO row. The guard had nothing to find. (That is also why
+    # `orders WHERE order_type='MARKET'` is 0 of 1315 despite 8 attempts.)
+    #
+    # CONSERVATIVE BY CONSTRUCTION. A wrongly-TERMINAL verdict loses a real
+    # exit, which is far worse than a wasted retry, so:
+    #   * TERMINAL needs BOTH the translated type AND a MEASURED message match;
+    #   * the allow-list holds only what has actually been observed;
+    #   * anything unrecognised stays RETRYABLE.
+    # The list is deliberately one entry long. Do not add to it from reasoning
+    # -- add from a rejection someone has actually seen.
+    _TERMINAL_REJECTION_PATTERNS: tuple[str, ...] = (
+        "market orders without market protection",
+    )
+
+    #: verdicts
+    _BROKER_TERMINAL = "TERMINAL"
+    _BROKER_RETRYABLE = "RETRYABLE"
+    _BROKER_STATE_UNKNOWN = "STATE_UNKNOWN"
+
+    @classmethod
+    def _classify_broker_error(cls, exc: BaseException) -> str:
+        """Classify a broker failure for RETRY purposes only.
+
+        TERMINAL      -- deterministic; retrying cannot succeed. Stop, escalate.
+        STATE_UNKNOWN -- the submission may or may not have reached the broker.
+                         Retrying BLIND risks a double sell, so it is not
+                         retried here either. Proper handling (re-read broker
+                         state, then decide) belongs with the pre-submit
+                         position check, not with this commit.
+        RETRYABLE     -- default for everything else, including unrecognised
+                         errors. Never widen TERMINAL by default.
+        """
+        msg = str(exc).lower()
+
+        # Auth / permission cannot heal inside a retry loop.
+        if isinstance(exc, BrokerAuthError):
+            return cls._BROKER_TERMINAL
+
+        # A rejection is terminal only when we have MEASURED it to be.
+        if isinstance(exc, OrderRejectedError) and any(
+            p in msg for p in cls._TERMINAL_REJECTION_PATTERNS
+        ):
+            return cls._BROKER_TERMINAL
+
+        # A timeout on a PLACEMENT is ambiguous: the order may have landed.
+        if isinstance(exc, BrokerTimeoutError):
+            return cls._BROKER_STATE_UNKNOWN
+
+        return cls._BROKER_RETRYABLE
+
     def _check9_missing_exits(
         self, local_trades: list
     ) -> List[ReconciliationAction]:
@@ -2828,6 +2896,21 @@ class OrderReconciler:
                         trade_id,
                     )
                     emergency_result = "skipped(already_pending)"
+                elif trade_id in self._emergency_exit_blocked:
+                    # T2: a TERMINAL/STATE_UNKNOWN broker error already told us
+                    # retrying cannot help. FIX-155's row-based guard cannot
+                    # catch this because a rejected order persists no row, so
+                    # without this branch the same doomed call repeats every
+                    # cycle -- 8 times in 111 s on 03-Sep. The escalation was
+                    # already sent once, at classification time.
+                    verdict = self._emergency_exit_blocked[trade_id]
+                    log.warning(
+                        "check9: emergency exit NOT retried for trade_id=%s "
+                        "(%s already recorded) -- position may still be open; "
+                        "manual intervention required",
+                        trade_id, verdict,
+                    )
+                    emergency_result = f"skipped({verdict.lower()})"
                 else:
                     emergency_result = self._emergency_market_close(trade, log)
 
@@ -3025,9 +3108,50 @@ class OrderReconciler:
 
             return f"placed({placed.broker_order_id})"
         except Exception as exc:
+            # T2: classify before the caller is allowed to try again.
+            verdict = self._classify_broker_error(exc)
             log.critical(
-                "check9: EMERGENCY MARKET EXIT FAILED for %s: %s", symbol, exc,
+                "check9: EMERGENCY MARKET EXIT FAILED for %s [%s]: %s",
+                symbol, verdict, exc,
             )
+            if verdict in (self._BROKER_TERMINAL, self._BROKER_STATE_UNKNOWN):
+                # Block further attempts for this trade and escalate ONCE.
+                # In-memory and per-process on purpose: it must not outlive a
+                # restart, because a restart re-reads real broker state.
+                already = trade_id in self._emergency_exit_blocked
+                self._emergency_exit_blocked[trade_id] = verdict
+                if not already:
+                    log.critical(
+                        "check9: EMERGENCY EXIT WILL NOT BE RETRIED for %s "
+                        "(%s) -- MANUAL INTERVENTION REQUIRED. reason=%s",
+                        symbol, verdict, exc,
+                    )
+                    if self._notifier is not None:
+                        try:
+                            self._notifier.send(
+                                severity="CRITICAL",
+                                title=(
+                                    "[RECONCILER] EMERGENCY EXIT "
+                                    f"{verdict} - MANUAL ACTION REQUIRED"
+                                ),
+                                body=(
+                                    f"Symbol: {symbol}\n"
+                                    f"Trade: {trade_id}\n"
+                                    f"Verdict: {verdict} (will NOT be retried)\n"
+                                    f"Broker said: {exc}\n"
+                                    "The automated exit cannot succeed by "
+                                    "retrying. Check the broker position book "
+                                    "and flatten manually if the position is "
+                                    "still open."
+                                ),
+                                source_module="order_reconciler",
+                            )
+                        except Exception as nexc:  # noqa: BLE001
+                            log.error(
+                                "check9: terminal-exit escalation alert failed: %s",
+                                nexc,
+                            )
+                return f"failed_{verdict.lower()}({exc})"
             return f"failed({exc})"
 
     # ── G5b: CRASH_RECOVERY_SL ───────────────────────────────────────────────
