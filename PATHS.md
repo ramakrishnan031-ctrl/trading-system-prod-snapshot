@@ -630,3 +630,26 @@ Detail: `docs/SYSTEM_MAP.md` (Deploy + Cron Jobs + Systemd) · memory `cron_fram
 | Activation | A-2 + B-1 at Mon 06-Jul 08:15 boot · P1 first shadow EOD Mon 06-Jul 15:58 · crontab `@15:58` on push |
 | Cutover (earliest) | B-1 enforce ≈ Mon 13-Jul · P1 authoritative + retire `eod_verify`/`reconcile_pnl` ≈ Mon 20-Jul (≥2 clean shadow weeks + ledger-dimension deepening + demonstrated UNVERIFIED) |
 | Deferred (not in batch) | C-1 history-purge · optional api_key rotate · C-2 network Phase-3 · P1 ledger-deepening · T2 full-repair · W10 double-cost |
+
+---
+
+## 🔴 WHICH LOCAL TREE IS ON WHICH BRANCH — read before ANY commit (03-Sep-2026)
+
+⚠️ **The path this file elsewhere calls "Local repo" is NOT the deployed line.**
+On 03-Sep a docs commit was nearly made on a feature branch while believing it was
+main; only an explicit branch check caught it.
+
+| directory | branch | is it the deployed line? |
+|---|---|---|
+| `D:\Projects	rading-system` | **`feat/delivery-config-split`** (F2-SIZING, ~98 dirty files) | 🔴 **NO** — never build, gate or commit here |
+| `D:\Projects	rading-system-gui09` | tracks the deployed tip (`ce7cea7` at time of writing) | ✅ **YES** — the working line |
+| `D:\Projects	rading-system-main` | local `main` @ `3dff752`, **90 ahead / 94 behind** | 🔴 **NO** — a plain `git push origin main` here pushes OVER the deployed SHA |
+
+**SESSION-START AND PRE-COMMIT CHECK — one command, always:**
+```
+git rev-parse --abbrev-ref HEAD && git rev-parse --short HEAD && git status --short | wc -l
+```
+Do not commit until that prints the branch you intend. A directory named `main`
+is not `main`; the default working directory is not the deployed branch.
+
+Push only with an explicit refspec: `git push origin <sha>:refs/heads/main`.
