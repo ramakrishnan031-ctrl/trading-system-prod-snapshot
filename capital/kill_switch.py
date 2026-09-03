@@ -141,6 +141,33 @@ def _is_scheduled_reason(reason: str) -> bool:
     return reason in SCHEDULED_KILL_REASONS
 
 
+# The one reason for which "positions are managed to SL/TGT/EOD" is FALSE BY
+# CONSTRUCTION: order_reconciler's CHECK9 trips this kill precisely BECAUSE the
+# protective orders are gone from the broker.
+#
+# 03-Sep-2026, ANANTRAJ (docs/incident/2026-09-03_naked_position_ANANTRAJ.md):
+# the MIS squareoff cancelled the SL and TGT and then declined to submit an exit;
+# the emergency fallback was rejected 8 times; and THIS alert told the operator
+# "Intraday positions: managed to SL/TGT/EOD". It was false when it was sent,
+# and the position was flattened by hand 2 minutes later.
+#
+# The shared-body reasoning in test_kill_alerts_delivery_carveout.py -- "it holds
+# for both because SOFT_KILL never flattens, it blocks entries and lets exits
+# run" -- is sound only while exits EXIST. MISSING_EXITS is the measured
+# exception, so it gets its own body.
+MISSING_EXITS_REASON_PREFIX = "MISSING_EXITS"
+
+
+def _is_missing_exits_reason(reason: str) -> bool:
+    """True if this kill was tripped by a naked position (CHECK9 MISSING_EXITS).
+
+    Matched on the prefix order_reconciler actually emits (:2836) --
+    "MISSING_EXITS: naked position <SYM> trade_id=... sl_order=..." -- so a
+    reworded suffix cannot silently reintroduce the false reassurance.
+    """
+    return (reason or "").startswith(MISSING_EXITS_REASON_PREFIX)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Types
 # ─────────────────────────────────────────────────────────────────────────────
@@ -625,10 +652,35 @@ class KillSwitch:
                     # test_kill_alerts_delivery_carveout.py, which asserts the
                     # SAME property here and at main.py's force-close alert —
                     # the two arrive together at 15:15 and must not disagree.
+                    # T1 (03-Sep-2026): MISSING_EXITS gets its own body. The
+                    # shared wording below is true whenever exits exist; this
+                    # kill fires BECAUSE they do not. See
+                    # _is_missing_exits_reason and the ANANTRAJ incident.
+                    # Both bodies keep the same delivery carve-out property
+                    # (no "all positions"; intraday scoped; CNC + delivery
+                    # named), so test_kill_alerts_delivery_carveout holds for
+                    # this branch too.
                     body=(
-                        f"Reason: {reason}\n"
-                        "New signals: BLOCKED | Intraday positions: managed to SL/TGT/EOD\n"
-                        "Delivery (CNC) is carried by design (EOD6) — not squared off."
+                        (
+                            # ASCII-safe punctuation only (plus the em dash the
+                            # sibling body already uses): this string is echoed
+                            # into pytest failure messages, and a cp1252 console
+                            # dies mid-report on characters outside it.
+                            f"Reason: {reason}\n"
+                            "New signals: BLOCKED | NO EXIT ORDER AT THE BROKER "
+                            "for this intraday position — it is NOT managed to "
+                            "SL/TGT.\n"
+                            "MANUAL FLATTENING MAY BE REQUIRED NOW: the automated "
+                            "emergency exit may have failed. Check the broker order "
+                            "book and position book before relying on any automation.\n"
+                            "Delivery (CNC) is carried by design (EOD6) — not squared off."
+                        )
+                        if _is_missing_exits_reason(reason)
+                        else (
+                            f"Reason: {reason}\n"
+                            "New signals: BLOCKED | Intraday positions: managed to SL/TGT/EOD\n"
+                            "Delivery (CNC) is carried by design (EOD6) — not squared off."
+                        )
                     ),
                     source_module="kill_switch",
                 )

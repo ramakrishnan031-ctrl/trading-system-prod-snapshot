@@ -28,6 +28,16 @@ body back to the universal claim must fail HERE, not in production.
 ⚠️ The kill_switch body is SHARED by the scheduled (WARNING) and emergency (CRITICAL)
 paths, so the property is asserted on both. It holds for both because SOFT_KILL never
 flattens -- it blocks entries and lets exits run.
+
+>> CORRECTED 03-Sep-2026 (T1). That last sentence is sound only while exits EXIST.
+   MISSING_EXITS is the measured exception: order_reconciler's CHECK9 trips that kill
+   precisely BECAUSE the protective orders are gone from the broker. On 03-Sep the
+   ANANTRAJ body told the operator "Intraday positions: managed to SL/TGT/EOD" while
+   the position had no exit order at all and the emergency fallback had been rejected
+   8 times; it was flattened by hand 2 minutes later.
+   (docs/incident/2026-09-03_naked_position_ANANTRAJ.md)
+   So MISSING_EXITS now gets its OWN body -- and it must keep the SAME delivery
+   carve-out property, which is asserted below alongside the shared one.
 """
 from __future__ import annotations
 
@@ -50,6 +60,11 @@ _UNIVERSAL_CLAIM = "all positions"
 _SCHEDULED_REASON = "circuit_breaker_force_close_15:15"
 #   an EMERGENCY reason -- must not equal a SCHEDULED_KILL_REASONS literal
 _EMERGENCY_REASON = "Auto-trip: 3 consecutive API failures (threshold=3)"
+#   a MISSING_EXITS reason -- the literal prefix order_reconciler emits (:2836)
+_MISSING_EXITS_REASON = (
+    "MISSING_EXITS: naked position ANANTRAJ trade_id=trd_b7d0f9ce3b31 "
+    "sl_order=260903171147099"
+)
 
 
 def _assert_delivery_carveout(body: str, where: str) -> None:
@@ -160,3 +175,78 @@ def test_force_close_alert_still_says_pending_entries_were_cancelled() -> None:
     assert "cancelled" in body, (
         f"the force-close body must still say pending entry orders were cancelled:\n{body}"
     )
+
+
+# ── T1 (03-Sep-2026): the one kill for which "managed to SL/TGT" is false ───────
+
+def test_missing_exits_body_does_not_claim_the_position_is_managed(tmp_path: Path) -> None:
+    """RED before T1: the MISSING_EXITS kill sent
+    "Intraday positions: managed to SL/TGT/EOD" -- while the position had NO exit
+    order at the broker. That is false BY CONSTRUCTION for this reason: CHECK9
+    trips the kill because the exits are missing."""
+    body = _soft_kill_body(tmp_path, _MISSING_EXITS_REASON).lower()
+
+    # A bare "managed to sl/tgt" substring check is the WRONG instrument: the
+    # corrected body contains the phrase inside "it is NOT managed to SL/TGT",
+    # so that check goes RED on a correct body. Assert the AFFIRMATIVE claim is
+    # gone and the negation is present -- both directions can fail.
+    assert "positions: managed to sl/tgt" not in body, (
+        "the MISSING_EXITS body still makes the AFFIRMATIVE claim that intraday "
+        "positions are managed to SL/TGT. This kill fires BECAUSE the exits are "
+        "gone -- the reassurance is false when it is sent, and it invites the "
+        f"operator to stand down. body was: {body}"
+    )
+    assert "not managed to sl/tgt" in body, (
+        "the MISSING_EXITS body must say plainly that the position is NOT managed "
+        f"to SL/TGT -- silence reads as the old reassurance. body was: {body}"
+    )
+
+
+def test_missing_exits_body_tells_the_operator_manual_action_may_be_needed(
+    tmp_path: Path,
+) -> None:
+    """The operationally load-bearing half. On 03-Sep the automated exit was
+    rejected 8 times and a human was the only thing that closed the position; the
+    alert must say so rather than imply automation has it."""
+    body = _soft_kill_body(tmp_path, _MISSING_EXITS_REASON).lower()
+    assert "manual" in body, (
+        f"the MISSING_EXITS body must tell the operator manual action may be "
+        f"required: {body}"
+    )
+    assert "no exit order" in body, (
+        f"the MISSING_EXITS body must state the measured fact -- there is no exit "
+        f"order at the broker: {body}"
+    )
+
+
+def test_missing_exits_body_keeps_the_delivery_carveout(tmp_path: Path) -> None:
+    """A second body is a second place for the ledger-#8 failure mode to hide.
+    The carve-out property must hold here exactly as it does on the shared body."""
+    _assert_delivery_carveout(
+        _soft_kill_body(tmp_path, _MISSING_EXITS_REASON),
+        f"soft_kill({_MISSING_EXITS_REASON!r})",
+    )
+
+
+def test_missing_exits_body_still_carries_reason_and_blocked(tmp_path: Path) -> None:
+    """The new branch must not drop what the shared body is pinned on."""
+    body = _soft_kill_body(tmp_path, _MISSING_EXITS_REASON)
+    assert _MISSING_EXITS_REASON in body, "the MISSING_EXITS body must name the reason"
+    assert "BLOCKED" in body, "the MISSING_EXITS body must still say entries are BLOCKED"
+
+
+def test_the_shared_body_is_unchanged_for_every_other_reason(tmp_path: Path) -> None:
+    """T1 is a NEW branch, not a rewrite. Non-MISSING_EXITS kills must still get the
+    original reassurance -- it is true for them, and silently removing it would lose
+    information on every ordinary halt."""
+    for i, reason in enumerate((_SCHEDULED_REASON, _EMERGENCY_REASON)):
+        # A fresh store PER reason: a KillSwitch whose store already holds
+        # SOFT_KILL is already-active, so the second soft_kill() is a no-op and
+        # sends NO alert. Re-using one tmp_path silently measures nothing.
+        d = tmp_path / f"shared{i}"
+        d.mkdir()
+        body = _soft_kill_body(d, reason).lower()
+        assert "managed to sl/tgt/eod" in body, (
+            f"soft_kill({reason!r}) lost the shared body's managed-set statement; "
+            f"T1 must add a branch, not replace the wording. {body}"
+        )
