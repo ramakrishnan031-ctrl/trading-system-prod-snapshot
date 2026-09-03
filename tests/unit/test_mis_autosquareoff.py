@@ -85,6 +85,8 @@ class FakeAdapter:
         self.verify_status = verify_status
         self.placed = []
         self.cancelled = []
+        # F1: broker-side orders the restore's idempotency check sees.
+        self.open_orders = []
 
     def get_positions(self):
         if self.fail_positions:
@@ -107,18 +109,28 @@ class FakeAdapter:
         self.placed.append(kw)
         return Res()
 
+    # F1 (03-Sep-2026): the restore path reads these two.
+    def get_open_orders(self):
+        return list(self.open_orders)
+
 
 class FakeStore:
-    def __init__(self, resting=None, raises=False):
+    def __init__(self, resting=None, raises=False, orders_for_trade=None):
         self._resting = resting or {}
         self.raises = raises
         self.queried = []
+        self.orders_for_trade = orders_for_trade or []
 
     def get_open_mis_exit_orders_for_symbol(self, symbol):
         if self.raises:
             raise RuntimeError("db down")
         self.queried.append(symbol)
         return self._resting.get(symbol, [])
+
+    # F1 (03-Sep-2026): the restore reads the ORIGINAL SL parameters back from
+    # the local orders row -- the resting row carries none of them.
+    def get_orders_for_trade(self, trade_id):
+        return list(self.orders_for_trade)
 
 
 class FakeLog:
@@ -164,10 +176,16 @@ def unit(adapter, store=None, log=None, now=None, **over):
 
 # ══ CONFIG — FAIL CLOSED ═════════════════════════════════════════════════════
 
-def test_config_derives_1507_and_1510():
+def test_offsets_are_subtracted_from_the_cutoff():
+    """ARITHMETIC only -- this test owns its inputs (`timing()` fixture) and is
+    deliberately independent of the shipped schedule. The shipped values are
+    asserted by test_shipped_config_satisfies_the_ordering_invariant, which is
+    where a schedule change must show up. Renamed 03-Sep-2026: the old name
+    (`..._derives_1507_and_1510`) baked the shipped times into a test that never
+    read them."""
     t = timing()
-    assert (t.check_1.hour, t.check_1.minute) == (15, 7)
-    assert (t.check_2.hour, t.check_2.minute) == (15, 10)
+    assert (t.check_1.hour, t.check_1.minute) == (15, 7)   # 15:12 - 5m
+    assert (t.check_2.hour, t.check_2.minute) == (15, 10)  # 15:12 - 2m
     assert (t.cutoff.hour, t.cutoff.minute) == (15, 12)
 
 
@@ -200,8 +218,8 @@ def test_shipped_config_satisfies_the_ordering_invariant():
         second_offset=th.mis_squareoff_second_offset,
         margin_sec=th.mis_squareoff_margin_sec, poll_interval_sec=5,
         entry_end=th.entry_end, eod_squareoff_time=th.eod_squareoff_time)
-    assert (t.check_1.hour, t.check_1.minute) == (15, 7)
-    assert (t.check_2.hour, t.check_2.minute) == (15, 10)
+    assert (t.check_1.hour, t.check_1.minute) == (15, 3)
+    assert (t.check_2.hour, t.check_2.minute) == (15, 6)
 
 
 # ══ PRODUCT BOUNDARY — every mutation must turn these RED ════════════════════
@@ -308,25 +326,64 @@ def test_cancel_precedes_exit_and_only_that_symbols_orders():
 
 
 def test_cancel_failure_blocks_the_exit_no_blind_submission():
-    """A double exit is worse than a late one: CANCEL_FAILED, and NO order."""
+    """A double exit is worse than a late one: CANCEL_FAILED, and NO EXIT order.
+
+    F1 (03-Sep-2026) STRENGTHENED THIS. Refusing to exit was always right; what
+    was wrong was returning with the protective orders already cancelled. The
+    property is now two-sided: no exit is submitted AND the stop is put back.
+    Asserting only `placed == []` would now pass a version that leaves the
+    position naked -- which is exactly what happened to ANANTRAJ."""
     a = FakeAdapter([Pos("S1", 1, "MIS")], cancel_ok=False)
-    st = FakeStore({"S1": [{"order_id": "SL1", "variety": "regular"}]})
+    st = FakeStore({"S1": [{"trade_id": "trd_aaaabbbbcccc", "symbol": "S1",
+                            "leg": "SL", "order_id": "SL1", "variety": "regular"}]},
+                   orders_for_trade=[{"order_id": "SL1", "trade_id": "trd_aaaabbbbcccc",
+                                      "leg": "SL", "transaction_type": "SELL",
+                                      "order_type": "SL", "qty_requested": 1,
+                                      "price": 100.0, "trigger_price": 101.0,
+                                      "variety": "regular"}])
     log = FakeLog()
     u = unit(a, store=st, log=log)
-    r = u._run_pass(PASS_2, at(15, 10), at(15, 10))
-    assert a.placed == [], "must NOT submit an exit after a failed cancel"
+    r = u._run_pass(PASS_2, at(15, 6), at(15, 6))
+
+    exits = [k for k in a.placed if str(k.get("order_type")) != "SL"]
+    assert exits == [], "must NOT submit an exit after a failed cancel"
     assert r.symbols[0].state == MisState.CANCEL_FAILED
     assert any(MisState.CANCEL_FAILED in c for c in log.criticals)
 
+    restores = [k for k in a.placed if str(k.get("order_type")) == "SL"]
+    assert len(restores) == 1, (
+        "F1: the stop must be put back. Cancelling protection and then declining "
+        "to exit is how the 03-Sep naked position was created."
+    )
+    assert restores[0]["trigger_price"] == 101.0, "restored with its OWN trigger"
 
-def test_unverified_cancellation_blocks_the_exit():
-    """'Cancel accepted' is not 'cancel effective'."""
+
+def test_unverified_cancellation_blocks_the_exit(monkeypatch):
+    """'Cancel accepted' is not 'cancel effective'.
+
+    F2 shrinks the settle window here so the test does not sit through the real
+    5 s production budget; F1 means the outcome is now CANCEL_FAILED *with the
+    stop restored*, not CANCEL_FAILED with the position naked."""
+    import orders.mis_autosquareoff as _m
+    monkeypatch.setattr(_m, "_CANCEL_SETTLE_DEADLINE_SEC", 0.05)
+    monkeypatch.setattr(_m, "_CANCEL_SETTLE_POLL_SEC", 0.01)
+
     a = FakeAdapter([Pos("S1", 1, "MIS")], verify_status="OPEN")
-    st = FakeStore({"S1": [{"order_id": "SL1", "variety": "regular"}]})
+    st = FakeStore({"S1": [{"trade_id": "trd_aaaabbbbcccc", "symbol": "S1",
+                            "leg": "SL", "order_id": "SL1", "variety": "regular"}]},
+                   orders_for_trade=[{"order_id": "SL1", "trade_id": "trd_aaaabbbbcccc",
+                                      "leg": "SL", "transaction_type": "SELL",
+                                      "order_type": "SL", "qty_requested": 1,
+                                      "price": 100.0, "trigger_price": 101.0,
+                                      "variety": "regular"}])
     u = unit(a, store=st)
-    r = u._run_pass(PASS_2, at(15, 10), at(15, 10))
-    assert a.placed == []
+    r = u._run_pass(PASS_2, at(15, 6), at(15, 6))
+
+    assert [k for k in a.placed if str(k.get("order_type")) != "SL"] == []
     assert r.symbols[0].state == MisState.CANCEL_FAILED
+    assert len([k for k in a.placed if str(k.get("order_type")) == "SL"]) == 1, (
+        "F1: an unverified cancel must still leave the position protected"
+    )
 
 
 def test_resting_order_lookup_failure_blocks_the_exit():
@@ -647,8 +704,8 @@ def test_wiring_matches_main_py_construction():
         inter_order_delay_sec=cfg.eod_squareoff.inter_order_delay_ms / 1000.0,
     )
     assert u.is_alive() is False, "no thread until start_polling"
-    assert (t.check_1.hour, t.check_1.minute) == (15, 7)
-    assert (t.check_2.hour, t.check_2.minute) == (15, 10)
+    assert (t.check_1.hour, t.check_1.minute) == (15, 3)
+    assert (t.check_2.hour, t.check_2.minute) == (15, 6)
 
 
 def test_eod_squareoff_general_settings_are_untouched():

@@ -7,7 +7,8 @@ TEST ASSUMPTIONS RECORDED HERE, so a future change cannot silently invalidate th
   contract module ................... core.mis_squareoff_timing
   shipped config .................... cutoff 15:12, offsets 5m/2m, margin 20s
   derived ........................... CHECK_1 15:07, CHECK_2 15:10
-  pre-pass lead ..................... 2 min  => PRE_PASS at 15:05
+  pre-pass lead ..................... 2 min  => PRE_PASS at 15:01
+                                       (03-Sep-2026: CHECK_1 moved 15:07 -> 15:03)
   PASS 2 measured-bound execution ... ~2s against a 120s budget (28-Aug)
     => a blocking send could BY ITSELF cause a DEADLINE_BREACH, so the
        non-blocking bound is MEASURED here, not asserted in prose.
@@ -78,7 +79,7 @@ def shipped_trading_hours():
 
 def build_f(email=None, telegram=None, log=None, now=None, **over):
     from alerts.mis_squareoff_notifier import MisSquareoffNotifier
-    holder = {"now": now or at(15, 5)}
+    holder = {"now": now or at(15, 1)}
     kw = dict(
         trading_hours=shipped_trading_hours(),
         poll_interval_sec=5,
@@ -134,7 +135,7 @@ f = MisSquareoffNotifier(
     boot_id="childboot",
 )
 out["present_after_construct"] = CANON in sys.modules
-out["pre_pass_at"] = f.pre_pass_at(datetime(2026, 8, 31, 15, 5)).strftime("%H:%M")
+out["pre_pass_at"] = f.pre_pass_at(datetime(2026, 8, 31, 15, 1)).strftime("%H:%M")
 
 rec = f.{fire}
 
@@ -176,7 +177,7 @@ def test_A_fires_with_the_orchestrator_module_absent_from_sys_modules():
     A defective implementation can construct cleanly and defer a forbidden lookup
     to the callback, so the module is checked AFTER the fire as well as before.
     """
-    r = _run_child("check_and_fire_pre_pass(datetime(2026, 8, 31, 15, 5))", 15, 5)
+    r = _run_child("check_and_fire_pre_pass(datetime(2026, 8, 31, 15, 1))", 15, 1)
     assert r["clean_at_start"] is True
     assert r["present_after_construct"] is False, (
         f"{CANON} was imported by F's CONSTRUCTION path"
@@ -189,7 +190,7 @@ def test_A_fires_with_the_orchestrator_module_absent_from_sys_modules():
     assert r["kind"] == "PRE_PASS"
     assert r["aggregate"] == "BOTH_ACCEPTED"
     assert r["email_calls"] == 1 and r["telegram_calls"] == 1
-    assert r["pre_pass_at"] == "15:05"
+    assert r["pre_pass_at"] == "15:01"
 
 
 def test_A2_boot_self_test_also_fires_with_no_orchestrator():
@@ -263,8 +264,12 @@ def test_B_f_and_orchestrator_never_share_a_timing_instance():
 
 def test_B2_f_builds_its_own_timing_from_config():
     f = build_f()
-    assert (f.timing.check_1.hour, f.timing.check_1.minute) == (15, 7)
-    assert (f.timing.check_2.hour, f.timing.check_2.minute) == (15, 10)
+    # 03-Sep-2026: the schedule moved (cutoff 15:12->15:09, offsets 5m/2m->
+    # 6m/3m), so CHECK_1 is 15:03 and F's pre-pass (CHECK_1 - lead) is 15:01.
+    # These values are DERIVED from the shipped config -- that is the point of
+    # this test, so they move with it.
+    assert (f.timing.check_1.hour, f.timing.check_1.minute) == (15, 3)
+    assert (f.timing.check_2.hour, f.timing.check_2.minute) == (15, 6)
 
 
 def test_B3_contract_module_owns_no_singleton():
@@ -382,9 +387,9 @@ def test_boot_self_test_fires_once_per_boot():
 def test_pre_pass_does_not_fire_before_its_time_and_only_once():
     email = Rec()
     f = build_f(email=email)
-    assert f.check_and_fire_pre_pass(at(15, 4, 59)) is None
-    assert f.check_and_fire_pre_pass(at(15, 5)) is not None
-    assert f.check_and_fire_pre_pass(at(15, 6)) is None
+    assert f.check_and_fire_pre_pass(at(15, 0, 59)) is None
+    assert f.check_and_fire_pre_pass(at(15, 1)) is not None
+    assert f.check_and_fire_pre_pass(at(15, 2)) is None
     assert len(email.calls) == 1
 
 
@@ -413,7 +418,10 @@ def test_pre_pass_trigger_moves_with_the_config_not_a_hardcoded_1505():
         eod_squareoff_time = "14:17"
 
     f = build_f(trading_hours=Shifted())
-    assert f.pre_pass_at(at(14, 0)).strftime("%H:%M") == "14:05"
+    # cutoff 14:12 with the SHIPPED 6m offset -> CHECK_1 14:06, minus the 2m
+    # lead -> 14:04. It was 14:05 while the shipped offset was 5m: the value
+    # tracks config, which is exactly what this test exists to prove.
+    assert f.pre_pass_at(at(14, 0)).strftime("%H:%M") == "14:04"
 
 
 def test_f_never_gates_alerting_on_recipient_confirmation():
@@ -446,7 +454,7 @@ def test_mutation_map_documents_what_must_break_this_file():
                                                  -> test_F2 / test_both_failed
       self-test becomes a latch                : stale 08:15 PASS reads as 15:07 cover
                                                  -> test_self_test_is_a_timestamped_event
-      pre-pass hardcoded to 15:05              : F drifts when the cutoff moves
+      pre-pass hardcoded to 15:05/15:01        : F drifts when the cutoff moves
                                                  -> test_pre_pass_trigger_moves_with_config
       a CRITICAL branch not wired to F         : that incident is invisible
                                                  -> test_E (four params)
@@ -465,20 +473,21 @@ def test_pre_pass_is_a_window_not_a_threshold():
     """
     email = Rec()
     f = build_f(email=email)
-    assert f.check_and_fire_pre_pass(at(15, 4, 59)) is None, "too early"
+    assert f.check_and_fire_pre_pass(at(15, 0, 59)) is None, "too early"
     assert f.check_and_fire_pre_pass(at(16, 0)) is None, (
         "fired after CHECK_1 had passed -- the announcement would be false"
     )
     assert f.check_and_fire_pre_pass(at(20, 0)) is None
     assert email.calls == []
-    # and it still fires inside the window
-    assert f.check_and_fire_pre_pass(at(15, 6)) is not None
+    # and it still fires inside the window (now [15:01, 15:03) -- CHECK_1 moved
+    # to 15:03 on 03-Sep-2026)
+    assert f.check_and_fire_pre_pass(at(15, 2)) is not None
     assert len(email.calls) == 1
 
 
 def test_pre_pass_does_not_fire_at_or_after_check_1():
     f = build_f()
-    assert f.check_and_fire_pre_pass(at(15, 7)) is None, "CHECK_1 itself is too late"
+    assert f.check_and_fire_pre_pass(at(15, 3)) is None, "CHECK_1 itself is too late"
 
 
 def test_boot_self_test_does_not_block_the_boot_path():

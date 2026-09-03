@@ -24,15 +24,37 @@ Rs 59.00 "Call and Trade charges (Auto Square Off)" debit = Rs 50 + 18% GST = ON
 order.
 
 ROLE LABELS — so nobody misreads the clocks later:
-  15:07 / 15:10  PRIMARY MIS SAFETY            (this unit)
-  15:12          configured protective cutoff  (config, broker-adjustable)
+  15:03 / 15:06  PRIMARY MIS SAFETY            (this unit)
+  15:09          configured protective cutoff  (config, broker-adjustable)
   15:15          SOFT_KILL — closes nothing
   15:17          EOD ACCOUNTING + EMERGENCY BACKSTOP — NOT the primary square-off
 
 THE TWO PASSES HAVE DIFFERENT PURPOSES
 --------------------------------------
-  PASS 1 @ cutoff - first_offset  (15:07) — PRICE. LIMIT_THEN_MARKET, grace capped.
-  PASS 2 @ cutoff - second_offset (15:10) — CERTAINTY. MARKET, NO GRACE, EVER.
+  PASS 1 @ cutoff - first_offset  (15:03) — PRICE. LIMIT_THEN_MARKET, grace capped.
+  PASS 2 @ cutoff - second_offset (15:06) — CERTAINTY. MARKET, NO GRACE, EVER.
+
+SCHEDULE MOVED 03-Sep-2026 (was 15:07 / 15:10, cutoff 15:12)
+------------------------------------------------------------
+Zerodha publishes TWO different CAS figures — the support page says 15:12, their
+03-Aug-2026 post says 15:10. Rule adopted: never design to the LATER of two
+conflicting broker deadlines. The cutoff moved to 15:09 so both passes AND the
+post-pass verification finish before the EARLIEST possible broker action. The old
+15:10 PASS_2 sat exactly ON that boundary.
+KNOWN COST, on the ledger: 15:09 is universal, so it gives up ~16 minutes of
+holding time on non-CAS names (broker cutoff 15:25). A per-symbol CAS/non-CAS
+deadline is the correct end state; it needs the F&O list and a lookup.
+
+WHAT 03-Sep-2026 CHANGED IN THE FAILURE PATH (F1/F2)
+----------------------------------------------------
+This unit cancels the protective orders FIRST and only then decides whether it can
+exit. Before 03-Sep, every failure after that point returned with the stop
+cancelled and no sell placed — there was no undo. Measured twice: 02-Sep
+COALINDIA and 03-Sep ANANTRAJ (which stayed naked until a human closed it).
+  F1  _restore_protection() re-places the SL leg on EVERY failure path.
+  F2  _verify_cancelled() now polls to a bounded deadline instead of once at
+      +27-53 ms; the same orders read terminal at +1.115 s.
+See docs/incident/2026-09-03_naked_position_ANANTRAJ.md.
 
 PASS 2 owns its protocol explicitly (PASS_2_EXIT_PROTOCOL). It is NOT reached by
 overriding a field on the generic EOD path, so a future maintainer changing the
@@ -69,6 +91,39 @@ MIS_PRODUCT: str = "MIS"
 # PASS 2's protocol is a CONSTANT of this unit, not a config knob and not a field
 # read from the generic EOD settings. Named so a mutation test can assert it.
 PASS_2_EXIT_PROTOCOL: str = "MARKET"
+
+# ── F2 (03-Sep-2026): the cancel-verification settle window ──────────────────
+# The broker accepts a cancel asynchronously; the order history lags it. Measured
+# on 03-Sep: the verification read at +27-53 ms saw a non-terminal status, and the
+# SAME orders read terminal at +1.115 s. The single immediate poll produced 3 of 3
+# CANCEL_FAILED across 02-Sep and 03-Sep -- each time AFTER the protective orders
+# had already been cancelled, i.e. it manufactured the naked position.
+#
+# 5 s is a budget, not a measurement (n=1 for the 1.115 s figure -- do NOT derive a
+# tolerance from it). It is chosen from the SCHEDULE: PASS_1 15:03, PASS_2 15:06,
+# verify/restore 15:08, internal cutoff 15:09 -- a 5 s worst case per pass is
+# comfortably inside every gap. Module-level so tests can shrink it.
+_CANCEL_SETTLE_DEADLINE_SEC: float = 5.0
+_CANCEL_SETTLE_POLL_SEC: float = 0.25
+
+
+
+def _row_get(row, key: str, default=None):
+    """Read one field from a dict / sqlite3.Row / attribute object.
+
+    F1 runs inside an ALREADY-FAILING path. A KeyError/IndexError here would
+    mask the original failure and skip the alert -- which is exactly the class
+    of defect F1 exists to remove. Missing field -> default, never an exception.
+    """
+    try:
+        if hasattr(row, key):
+            return getattr(row, key)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        return row[key]
+    except Exception:  # noqa: BLE001
+        return default
 
 
 class MisState:
@@ -112,6 +167,7 @@ _INCONCLUSIVE_STATES = frozenset({
 # a test asserts this module is absent from sys.modules when F fires, and this
 # re-export is precisely the line that would let a future "simplification" put it
 # back on F's import path. The re-export and that assertion are a matched pair.
+from core.ids import truncate_tag_for_broker
 from core.mis_squareoff_timing import (  # noqa: F401  (re-exported)
     MisSquareoffConfigError,
     MisSquareoffTiming,
@@ -530,9 +586,13 @@ class MisAutoSquareoff:
 
             if not cancel_ok:
                 # A double exit is worse than a late one. Do NOT submit blindly.
+                # F1: but the cancels may ALREADY have taken effect, so returning
+                # here is what left ANANTRAJ naked. Put the stop back first.
+                restored = self._restore_protection(sym, resting, which)
                 outcome.state = MisState.CANCEL_FAILED
                 self._emit(MisState.CANCEL_FAILED,
-                           f"{which} {sym}: {outcome.detail}; exit NOT submitted",
+                           f"{which} {sym}: {outcome.detail}; exit NOT submitted; "
+                           f"{restored}",
                            critical=True)
                 res.symbols.append(outcome)
                 continue
@@ -550,8 +610,12 @@ class MisAutoSquareoff:
                 outcome.broker_order_id = str(getattr(placed, "broker_order_id", ""))
                 outcome.state = MisState.EXIT_SUBMITTED
             except Exception as exc:  # noqa: BLE001
+                # F1: the protective orders were cancelled moments ago and the
+                # exit was refused by the broker. Without a restore this is the
+                # naked position, arrived at from the other direction.
+                restored = self._restore_protection(sym, resting, which)
                 outcome.state = MisState.EXIT_REJECTED
-                outcome.detail = f"place_order raised: {exc}"
+                outcome.detail = f"place_order raised: {exc}; {restored}"
                 self._emit(MisState.EXIT_REJECTED,
                            f"{which} {sym}: {outcome.detail}", critical=True)
 
@@ -562,20 +626,149 @@ class MisAutoSquareoff:
             if i < len(candidates) - 1 and self._inter_order_delay_sec > 0:
                 time.sleep(self._inter_order_delay_sec)
 
+    def _restore_protection(self, sym: str, resting, which: str) -> str:
+        """F1 (03-Sep-2026): put the stop back when the exit was NOT submitted.
+
+        THE DEFECT THIS EXISTS FOR. The routine cancels the protective orders
+        FIRST and only then decides whether it can exit. Every failure after that
+        point -- cancel not confirmed, no LTP, broker rejection, exception,
+        deadline -- previously returned with the stop cancelled and no sell
+        placed. There was no undo. Measured twice: 02-Sep COALINDIA and 03-Sep
+        ANANTRAJ, and on 03-Sep the position stayed naked until a human closed it.
+
+        This is the undo. It re-places the SL leg with the SAME parameters it had,
+        read from the local orders row, so nothing is recomputed and no new price
+        model is introduced. The TGT is deliberately NOT restored: it is upside,
+        not protection, and a second resting sell is a risk in its own right.
+
+        Returns a short detail string for the alert. Never raises -- see
+        _row_get: this runs inside an already-failing path, and an exception here
+        would mask the original failure and skip its alert.
+        """
+        try:
+            return self._restore_protection_inner(sym, resting, which)
+        except Exception as exc:  # noqa: BLE001 -- the contract is "never raises"
+            self._log.critical(
+                "mis_autosquareoff RESTORE raised for %s: %s -- POSITION MAY BE "
+                "UNPROTECTED, MANUAL ACTION REQUIRED", sym, exc,
+            )
+            return f"RESTORE ERRORED ({exc}) -- POSITION MAY BE UNPROTECTED"
+
+    def _restore_protection_inner(self, sym: str, resting, which: str) -> str:
+        """The body of _restore_protection. Called only through it."""
+        # (1) IDEMPOTENCY -- never stack a second protective order.
+        already: Optional[bool] = None
+        try:
+            for o in (self._adapter.get_open_orders() or []):
+                if str(o.get("symbol", "")) == sym and float(
+                        o.get("trigger_price") or 0) > 0:
+                    already = True
+                    break
+            else:
+                already = False
+        except Exception as exc:  # noqa: BLE001
+            self._log.warning(
+                "mis_autosquareoff: open-order read failed during restore for %s "
+                "(%s) -- proceeding", sym, exc,
+            )
+            already = None   # unknown
+
+        if already is True:
+            return "protection already resting at broker; no restore needed"
+
+        # `already is None` (unknown) -> PROCEED. Leaving a position genuinely
+        # unprotected is worse than a duplicate leg, and a duplicate is already
+        # caught downstream by the reconciler's one-live-SL invariant. This
+        # mirrors G5b's documented fail-safe for an unavailable snapshot.
+
+        # (2) Recover the ORIGINAL SL parameters. Not recomputed -- restored.
+        sl_row = None
+        for row in resting:
+            if str(_row_get(row, "leg", "")).upper() != "SL":
+                continue
+            trade_id = _row_get(row, "trade_id", "")
+            oid = str(_row_get(row, "order_id", ""))
+            try:
+                for o in (self._store.get_orders_for_trade(str(trade_id)) or []):
+                    if str(_row_get(o, "order_id", "")) == oid:
+                        sl_row = o
+                        break
+            except Exception as exc:  # noqa: BLE001
+                self._log.error(
+                    "mis_autosquareoff: could not read SL order %s for restore: %s",
+                    oid, exc,
+                )
+            if sl_row is not None:
+                break
+
+        if sl_row is None:
+            return "RESTORE FAILED: original SL parameters not found"
+
+        # (3) Re-place it, exactly as it was.
+        try:
+            qty = int(_row_get(sl_row, "qty_requested", 0) or 0)
+            placed = self._adapter.place_order(
+                symbol=sym,
+                side=str(_row_get(sl_row, "transaction_type", "")),
+                qty=qty,
+                price=float(_row_get(sl_row, "price", 0.0) or 0.0),
+                order_type=str(_row_get(sl_row, "order_type", "SL")),
+                intent="INTRADAY",
+                tag=truncate_tag_for_broker(str(_row_get(sl_row, "trade_id", ""))),
+                trigger_price=float(_row_get(sl_row, "trigger_price", 0.0) or 0.0),
+                variety=str(_row_get(sl_row, "variety", "regular") or "regular"),
+            )
+            bid = str(getattr(placed, "broker_order_id", ""))
+            self._log.critical(
+                "mis_autosquareoff RESTORE: %s %s re-placed protective SL "
+                "broker_order_id=%s after %s failed to submit an exit",
+                which, sym, bid, which,
+            )
+            return f"protection RESTORED (order {bid})"
+        except Exception as exc:  # noqa: BLE001
+            self._log.critical(
+                "mis_autosquareoff RESTORE FAILED for %s: %s -- POSITION IS "
+                "UNPROTECTED, MANUAL ACTION REQUIRED", sym, exc,
+            )
+            return f"RESTORE FAILED ({exc}) -- POSITION UNPROTECTED"
+
     def _verify_cancelled(self, resting) -> bool:
-        """Confirm at the broker. 'Cancel accepted' is not 'cancel effective'."""
+        """Confirm at the broker. 'Cancel accepted' is not 'cancel effective'.
+
+        F2 (03-Sep-2026): poll until terminal or a bounded deadline.
+
+        The mechanism here was never wrong -- it reads the BROKER's order history,
+        which is the right source of truth. The defect was TIMING: it polled ONCE,
+        27-53 ms after the cancel, and treated "not yet terminal" as failure. On
+        03-Sep the same orders read terminal 1.115 s later. Measured result of the
+        single poll: 3 of 3 CANCEL_FAILED, on 02-Sep (COALINDIA) and 03-Sep
+        (ANANTRAJ) -- and each time the protective orders had ALREADY been
+        cancelled, so the position was left naked.
+
+        A False return is now a real, settled negative rather than a race, and the
+        caller must RESTORE protection (F1) -- never proceed blind.
+        """
+        deadline = time.monotonic() + _CANCEL_SETTLE_DEADLINE_SEC
         for row in resting:
             oid = row["order_id"] if not hasattr(row, "order_id") else row.order_id
-            try:
-                hist = self._adapter.get_order_history(str(oid))
-            except Exception:  # noqa: BLE001
-                return False
-            if not hist:
-                return False
-            last = hist[-1]
-            status = str(getattr(last, "status", "")).upper()
-            if status not in ("CANCELLED", "REJECTED", "COMPLETE"):
-                return False
+            while True:
+                hist = None
+                try:
+                    hist = self._adapter.get_order_history(str(oid))
+                except Exception:  # noqa: BLE001
+                    hist = None   # a failed READ is not evidence; keep polling
+                if hist:
+                    status = str(getattr(hist[-1], "status", "")).upper()
+                    if status in ("CANCELLED", "REJECTED", "COMPLETE"):
+                        break     # this order is settled; on to the next
+                if time.monotonic() >= deadline:
+                    self._log.warning(
+                        "mis_autosquareoff: cancel of %s not confirmed terminal "
+                        "within %.1fs -- treating as NOT cancelled",
+                        oid, _CANCEL_SETTLE_DEADLINE_SEC,
+                    )
+                    return False
+                time.sleep(_CANCEL_SETTLE_POLL_SEC)
         return True
 
     def _verify_mis_positions_closed(

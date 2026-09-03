@@ -56,8 +56,27 @@ trading_hours:
                               # Zerodha's four published cutoffs (CAS 15:12 / non-CAS 15:25 /
                               # F&O 15:26 / MCX close-10m) and was untraceable to any source.
   # ── MIS AUTO-SQUAREOFF (28-Aug-2026) — PRIMARY MIS SAFETY ──────────────────
-  mis_squareoff_cutoff: "15:12"      # source: Zerodha intraday auto-square-off timing page
-                                     # (support.zerodha.com), checked_at: 2026-08-28.
+  mis_squareoff_cutoff: "15:09"      # OUR protective deadline -- deliberately EARLIER than
+                                     # any published broker cutoff. Was 15:12 until 03-Sep-2026.
+                                     # source: Zerodha intraday auto-square-off timing page
+                                     # (support.zerodha.com) + Zerodha's 03-Aug-2026 post,
+                                     # checked_at: 2026-09-03.
+                                     # WHY IT MOVED: the two Zerodha sources DISAGREE for CAS
+                                     # stocks -- the support page says 15:12, the 03-Aug post
+                                     # says 15:10. RULE: never design to the LATER of two
+                                     # conflicting broker deadlines. 15:09 is safe under both,
+                                     # and leaves 1 minute before the earliest possible broker
+                                     # action (Rama's stated objective: two complete checks
+                                     # finishing 1 min before Zerodha's auto-squareoff).
+                                     # Published set: CAS 15:10-15:12 / non-CAS 15:25 /
+                                     # F&O 15:26 / MCX close-10m. CAS also accepts NO orders
+                                     # 15:15-15:20. Broker charge if it acts: Rs50 + 18% GST
+                                     # PER ORDER.
+                                     # KNOWN COST (on the ledger, not fixed here): 15:09 is
+                                     # universal, so it gives up ~16 min of holding time on
+                                     # non-CAS names (15:25). The correct end state is a
+                                     # per-symbol CAS/non-CAS deadline; that needs the F&O
+                                     # list and a lookup.
                                      # rationale: earliest current EQUITY-STOCK cutoff (CAS =
                                      # SEBI Closing Auction Session, i.e. F&O-listed equities).
                                      # This is THIS SYSTEM'S configured protective cutoff for
@@ -68,8 +87,12 @@ trading_hours:
                                      # special_sessions moves eod_squareoff_time per date but
                                      # does NOT move this, and the ordering invariant will not
                                      # detect the divergence (15:12 < 19:12 is valid).
-  mis_squareoff_first_offset: "5m"   # CHECK 1 = cutoff - 5m = 15:07 (price-seeking pass)
-  mis_squareoff_second_offset: "2m"  # CHECK 2 = cutoff - 2m = 15:10 (certainty pass, MARKET)
+  mis_squareoff_first_offset: "6m"   # CHECK 1 = cutoff - 6m = 15:03 (price-seeking pass)
+  mis_squareoff_second_offset: "3m"  # CHECK 2 = cutoff - 3m = 15:06 (certainty pass)
+                                     # 03-Sep-2026: 5m/2m -> 6m/3m. Both passes AND the
+                                     # post-pass verify now complete before 15:09, i.e. before
+                                     # the earliest published broker action (15:10). The old
+                                     # 15:07/15:10 pair put PASS_2 exactly ON that boundary.
   mis_squareoff_margin_sec: 20       # DERIVED, not picked:
                                      #   poll_interval_sec 5  (PASS 2's instant is EVALUATED
                                      #     anywhere in [15:10:00, 15:10:05] -- real lateness)
