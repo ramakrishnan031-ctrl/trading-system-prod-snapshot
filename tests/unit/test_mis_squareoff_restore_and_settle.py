@@ -296,3 +296,100 @@ def test_f1_survives_a_row_object_without_the_field() -> None:
     detail = _bare(adapter=ad, store=st)._restore_protection(_SYM, [Bare()], "PASS_1")
     assert isinstance(detail, str) and detail
     ad.place_order.assert_not_called()
+
+
+# ── Divergence 2 (03-Sep-2026): the idempotency check must be SIDE-SCOPED ─────
+#
+# The first version matched `symbol + trigger_price > 0` only. An opposite-side
+# trigger order on the same symbol then read as "protection present" and the
+# restore was SKIPPED -- leaving the position with no stop, the exact ANANTRAJ
+# outcome F1 exists to prevent. It is reachable: the product-blind gates and the
+# absent trades.product column mean both pipelines can hold the same symbol.
+# This mirrors the June RAMCOIND fix (order_reconciler._already_has_live_sl),
+# which matches symbol + transaction_type + trigger_price > 0.
+
+def _short_sl_order_row():
+    """A SHORT's protective stop is a BUY."""
+    r = _sl_order_row()
+    r["transaction_type"] = "BUY"
+    return r
+
+
+def _short_resting_sl():
+    return _resting_sl()
+
+
+def _open_order(symbol, side, trigger):
+    return {"symbol": symbol, "order_id": "999", "status": "TRIGGER PENDING",
+            "transaction_type": side, "quantity": 1, "price": 0.0,
+            "trigger_price": trigger}
+
+
+def _run_restore(open_orders, sl_row, resting):
+    ad = MagicMock()
+    ad.get_open_orders.return_value = open_orders
+    ad.place_order.return_value = SimpleNamespace(broker_order_id="X1")
+    st = MagicMock()
+    st.get_orders_for_trade.return_value = [sl_row]
+    detail = _bare(adapter=ad, store=st)._restore_protection(_SYM, resting, "PASS_1")
+    return ad, detail
+
+
+def test_div2_long_with_a_resting_SELL_stop_is_protected() -> None:
+    """The true positive: a LONG's own SELL stop is still there -> do not stack."""
+    ad, detail = _run_restore([_open_order(_SYM, "SELL", 620.08)],
+                              _sl_order_row(), _resting_sl())
+    ad.place_order.assert_not_called()
+    assert "already resting" in detail, detail
+
+
+def test_div2_long_with_only_a_BUY_trigger_order_MUST_still_restore() -> None:
+    """RED before the fix. A BUY trigger order (a SHORT's stop on the same symbol)
+    is NOT protection for a LONG. Matching on trigger>0 alone read it as such and
+    skipped the restore -- leaving the long with no stop at all."""
+    ad, detail = _run_restore([_open_order(_SYM, "BUY", 640.00)],
+                              _sl_order_row(), _resting_sl())
+    ad.place_order.assert_called_once()
+    assert "RESTORED" in detail, detail
+    assert ad.place_order.call_args.kwargs["side"] == "SELL"
+
+
+def test_div2_short_with_a_resting_BUY_stop_is_protected() -> None:
+    """The mirror. A SHORT's own BUY stop counts as protection."""
+    ad, detail = _run_restore([_open_order(_SYM, "BUY", 640.00)],
+                              _short_sl_order_row(), _short_resting_sl())
+    ad.place_order.assert_not_called()
+    assert "already resting" in detail, detail
+
+
+def test_div2_short_with_only_a_SELL_trigger_order_MUST_still_restore() -> None:
+    """The mirror of the bug. A SELL trigger order is not protection for a SHORT."""
+    ad, detail = _run_restore([_open_order(_SYM, "SELL", 620.08)],
+                              _short_sl_order_row(), _short_resting_sl())
+    ad.place_order.assert_called_once()
+    assert "RESTORED" in detail, detail
+    assert ad.place_order.call_args.kwargs["side"] == "BUY"
+
+
+def test_div1_failed_read_logs_PROTECTION_UNKNOWN_and_still_restores(caplog) -> None:
+    """Divergence 1 is DEFERRED, not fixed: proceed-on-unknown stays, because a
+    duplicate stop is a bounded error and no stop is not. What is added is that
+    the state is now VISIBLE -- PROTECTION_UNKNOWN must not read as a clean
+    'no SL found'."""
+    import logging
+    ad = MagicMock()
+    ad.get_open_orders.side_effect = RuntimeError("broker unreachable")
+    ad.place_order.return_value = SimpleNamespace(broker_order_id="X1")
+    st = MagicMock()
+    st.get_orders_for_trade.return_value = [_sl_order_row()]
+    obj = _bare(adapter=ad, store=st)
+    obj._log = logging.getLogger("test_protection_unknown")
+    with caplog.at_level(logging.WARNING, logger="test_protection_unknown"):
+        detail = obj._restore_protection(_SYM, _resting_sl(), "PASS_1")
+    ad.place_order.assert_called_once()
+    assert "RESTORED" in detail, detail
+    assert any("PROTECTION_UNKNOWN" in r.getMessage() for r in caplog.records), (
+        "a failed broker read must be logged as PROTECTION_UNKNOWN, distinctly "
+        "from a clean 'no SL found' -- otherwise the record conflates 'we know "
+        "there is no stop' with 'we could not find out'"
+    )

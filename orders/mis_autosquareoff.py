@@ -655,33 +655,16 @@ class MisAutoSquareoff:
             return f"RESTORE ERRORED ({exc}) -- POSITION MAY BE UNPROTECTED"
 
     def _restore_protection_inner(self, sym: str, resting, which: str) -> str:
-        """The body of _restore_protection. Called only through it."""
-        # (1) IDEMPOTENCY -- never stack a second protective order.
-        already: Optional[bool] = None
-        try:
-            for o in (self._adapter.get_open_orders() or []):
-                if str(o.get("symbol", "")) == sym and float(
-                        o.get("trigger_price") or 0) > 0:
-                    already = True
-                    break
-            else:
-                already = False
-        except Exception as exc:  # noqa: BLE001
-            self._log.warning(
-                "mis_autosquareoff: open-order read failed during restore for %s "
-                "(%s) -- proceeding", sym, exc,
-            )
-            already = None   # unknown
+        """The body of _restore_protection. Called only through it.
 
-        if already is True:
-            return "protection already resting at broker; no restore needed"
-
-        # `already is None` (unknown) -> PROCEED. Leaving a position genuinely
-        # unprotected is worse than a duplicate leg, and a duplicate is already
-        # caught downstream by the reconciler's one-live-SL invariant. This
-        # mirrors G5b's documented fail-safe for an unavailable snapshot.
-
-        # (2) Recover the ORIGINAL SL parameters. Not recomputed -- restored.
+        ORDER OF OPERATIONS (changed 03-Sep-2026, Divergence 2): the SL row is
+        recovered FIRST, because its transaction_type IS the exit side, and the
+        idempotency check is side-scoped. Checking "is anything protecting this
+        symbol?" without a side reads an OPPOSITE-side trigger order as
+        protection and skips a genuine restore -- i.e. it produces the very
+        no-stop outcome F1 exists to prevent.
+        """
+        # (1) Recover the ORIGINAL SL parameters. Not recomputed -- restored.
         sl_row = None
         for row in resting:
             if str(_row_get(row, "leg", "")).upper() != "SL":
@@ -703,6 +686,60 @@ class MisAutoSquareoff:
 
         if sl_row is None:
             return "RESTORE FAILED: original SL parameters not found"
+
+        # (2) IDEMPOTENCY -- never stack a second protective order.
+        #
+        # SIDE-SCOPED (Divergence 2, 03-Sep-2026). The first version matched
+        # `symbol + trigger_price > 0` only. A trigger-bearing order on the same
+        # symbol on the OPPOSITE side then read as "protection present" and the
+        # restore was skipped -- leaving the position with no stop, which is the
+        # exact ANANTRAJ outcome. It is reachable: the product-blind gates and
+        # the absence of a trades.product column mean both pipelines can hold
+        # the same symbol, so a SHORT's BUY stop could suppress a LONG's restore.
+        #
+        # This mirrors the June RAMCOIND fix's authoritative check
+        # (order_reconciler._already_has_live_sl), which matches
+        # symbol + transaction_type + trigger_price > 0. Same predicate shape,
+        # deliberately -- not a parallel implementation.
+        #
+        # exit_side comes from the SL leg itself: SELL protects a LONG, BUY
+        # protects a SHORT. Side-symmetric by construction.
+        exit_side = str(_row_get(sl_row, "transaction_type", "")).upper()
+        already: Optional[bool] = None
+        try:
+            already = False
+            for o in (self._adapter.get_open_orders() or []):
+                if (str(_row_get(o, "symbol", "")) == sym
+                        and str(_row_get(o, "transaction_type", "")).upper() == exit_side
+                        and float(_row_get(o, "trigger_price", 0) or 0) > 0):
+                    already = True
+                    break
+        except Exception as exc:  # noqa: BLE001
+            # PROTECTION_UNKNOWN: the read failed, so we do NOT know whether a
+            # stop rests at the broker. Logged distinctly from a clean
+            # "no SL found" so the two are never conflated in the record.
+            self._log.warning(
+                "mis_autosquareoff PROTECTION_UNKNOWN: open-order read failed "
+                "during restore for %s (%s) -- proceeding to place, because a "
+                "duplicate stop is a bounded error and no stop is not",
+                sym, exc,
+            )
+            already = None
+
+        if already is True:
+            return (f"protection already resting at broker ({exit_side} stop); "
+                    f"no restore needed")
+
+        # `already is None` (PROTECTION_UNKNOWN) -> PROCEED. Deliberate, and NOT
+        # the same as the June fix, which consults order_placer._fill_map first.
+        # _fill_map is LOCAL state: it proves an attempt was recorded, not that
+        # the broker holds the order, so using it as a decision input would let a
+        # stale entry say "protected" and re-open the skipped-restore bug by
+        # another route. Weighing the two errors: a duplicate cost ~Rs13.50 on
+        # RAMCOIND and has a backstop behind it; a skipped restore costs the full
+        # tail. Admitting _fill_map as CORROBORATION -- broker-acknowledged
+        # order_id, same symbol AND side, bounded recency -- belongs with F3's
+        # PROTECTION_KNOWN_PRESENT / KNOWN_ABSENT / UNKNOWN contract.
 
         # (3) Re-place it, exactly as it was.
         try:
