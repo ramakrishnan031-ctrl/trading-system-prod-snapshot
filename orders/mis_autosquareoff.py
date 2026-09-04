@@ -106,6 +106,29 @@ PASS_2_EXIT_PROTOCOL: str = "MARKET"
 _CANCEL_SETTLE_DEADLINE_SEC: float = 5.0
 _CANCEL_SETTLE_POLL_SEC: float = 0.25
 
+# F1b (04-Sep-2026) -- the RESTORE-side mirror of the two constants above.
+# The arithmetic still fits: a restore only runs on a path that has ALREADY
+# failed, so the worst case per symbol is one cancel settle (5 s) plus one
+# restore settle (5 s) = 10 s. PASS_1 15:03 -> PASS_2 15:06 is 180 s and
+# PASS_2 -> cutoff 15:09 is another 180 s, so even a book of several symbols
+# stays comfortably inside every gap. Module-level so tests can shrink it,
+# exactly as F2's are.
+_RESTORE_SETTLE_DEADLINE_SEC: float = 5.0
+_RESTORE_SETTLE_POLL_SEC: float = 0.25
+
+# Broker states for a RESTORED protective order. A stop is protection only when
+# it is actually resting: Zerodha parks a live SL in "TRIGGER PENDING" and a
+# live LIMIT in "OPEN". "COMPLETE" means the stop already executed -- the
+# position is closed, which is protection FULFILLED rather than protection
+# failed, so it is reported distinctly and never as a failure. Everything else
+# ("PUT ORDER REQ RECEIVED", "VALIDATION PENDING", "OPEN PENDING") is transient
+# and must be POLLED, not judged -- treating "not yet live" as failure is the
+# exact defect F2 removed from the cancel path, and re-introducing it here would
+# make a healthy restore look like a naked position.
+_RESTORE_LIVE_STATES = frozenset({"TRIGGER PENDING", "OPEN"})
+_RESTORE_DEAD_STATES = frozenset({"REJECTED", "CANCELLED"})
+_RESTORE_FILLED_STATES = frozenset({"COMPLETE"})
+
 
 
 def _row_get(row, key: str, default=None):
@@ -146,6 +169,13 @@ class MisState:
     PASS_2_STARTED_LATE = "PASS_2_STARTED_LATE"
     PASS_1_ABANDONED_FOR_PASS_2 = "PASS_1_ABANDONED_FOR_PASS_2"
     PASS_1_DEGRADED_TO_MARKET = "PASS_1_DEGRADED_TO_MARKET"
+    # F1b (04-Sep-2026): the restore gets its OWN outcome vocabulary. Before
+    # this, "protection RESTORED" was returned on a SUBMITTED order with no
+    # verification of any kind, so a broker-side rejection read as success.
+    RESTORE_CONFIRMED = "RESTORE_CONFIRMED"
+    RESTORE_FAILED = "RESTORE_FAILED"
+    RESTORE_FILLED = "RESTORE_FILLED"
+    PROTECTION_UNKNOWN = "PROTECTION_UNKNOWN"
 
 
 PASS_1 = "PASS_1"
@@ -756,18 +786,135 @@ class MisAutoSquareoff:
                 variety=str(_row_get(sl_row, "variety", "regular") or "regular"),
             )
             bid = str(getattr(placed, "broker_order_id", ""))
-            self._log.critical(
-                "mis_autosquareoff RESTORE: %s %s re-placed protective SL "
-                "broker_order_id=%s after %s failed to submit an exit",
-                which, sym, bid, which,
-            )
-            return f"protection RESTORED (order {bid})"
         except Exception as exc:  # noqa: BLE001
             self._log.critical(
                 "mis_autosquareoff RESTORE FAILED for %s: %s -- POSITION IS "
                 "UNPROTECTED, MANUAL ACTION REQUIRED", sym, exc,
             )
             return f"RESTORE FAILED ({exc}) -- POSITION UNPROTECTED"
+
+        # (4) F1b (04-Sep-2026): SUBMITTED IS NOT PROTECTED.
+        #
+        # place_order returns a PlacedOrder on success and RAISES on a
+        # SYNCHRONOUS refusal. PlacedOrder has no success field at all
+        # (zerodha_adapter.py:141-153) -- it is constructed only on the success
+        # path with status="SUBMITTED", so the type CANNOT represent failure.
+        # A broker-side (RMS) rejection that arrives AFTER the order id was
+        # issued is therefore invisible at this call site, and the previous
+        # version returned "protection RESTORED" for it.
+        #
+        # That is worse than silence. The operator rule is "RESTORE FAILED ->
+        # flatten by hand", so a false RESTORED tells a human to STAND DOWN on
+        # the one failure that matters, next to a position with no stop.
+        #
+        # This is the THIRD instance of one root cause:
+        #   cancel accepted   != cancel effective  -> F2 (_verify_cancelled)
+        #   exit submitted    != exit accepted     -> the 03-Sep MARKET rejections
+        #   restore submitted != restore live      -> this
+        # so the cure is F2's, reused rather than reinvented: read the BROKER's
+        # order history, poll to a bounded budget, and never treat "not yet
+        # terminal" as failure.
+        if not bid:
+            # Every other production place_order call site guards the empty-id
+            # case (kill_switch.py:1895 at 18dd6cc among them, added as "Bug C
+            # (P0 2026-06-15)"); this one did not.
+            self._log.critical(
+                "mis_autosquareoff %s for %s: broker returned an EMPTY order id "
+                "-- POSITION IS UNPROTECTED, MANUAL ACTION REQUIRED",
+                MisState.RESTORE_FAILED, sym,
+            )
+            return ("RESTORE FAILED: broker returned an empty order id "
+                    "-- POSITION UNPROTECTED")
+
+        verdict, status = self._verify_restored(bid)
+
+        if verdict == MisState.RESTORE_CONFIRMED:
+            self._log.critical(
+                "mis_autosquareoff RESTORE: %s %s re-placed protective SL "
+                "broker_order_id=%s and CONFIRMED resting (%s) after %s failed "
+                "to submit an exit", which, sym, bid, status, which,
+            )
+            return (f"protection RESTORED and CONFIRMED resting at broker "
+                    f"(order {bid}, {status})")
+
+        if verdict == MisState.RESTORE_FILLED:
+            # The stop executed between placement and the read. The position is
+            # closed, so it is not naked -- reported distinctly because calling
+            # this a failure would send a human to flatten nothing.
+            self._log.critical(
+                "mis_autosquareoff RESTORE: %s %s restored SL %s already "
+                "EXECUTED (%s) -- position closed by the stop",
+                which, sym, bid, status,
+            )
+            return (f"restored stop already EXECUTED (order {bid}, {status}) "
+                    f"-- position closed by the stop, NOT naked")
+
+        if verdict == MisState.RESTORE_FAILED:
+            self._log.critical(
+                "mis_autosquareoff RESTORE FAILED for %s: the broker %s the "
+                "restored stop (order %s) -- POSITION IS UNPROTECTED, MANUAL "
+                "ACTION REQUIRED", sym, status, bid,
+            )
+            return (f"RESTORE FAILED: broker {status} the restored stop "
+                    f"(order {bid}) -- POSITION UNPROTECTED")
+
+        # PROTECTION_UNKNOWN. Deliberately NOT reported as success and NOT as
+        # failure: we could not find out. Same distinction the open-order read
+        # already draws -- "we know there is no stop" and "we could not find
+        # out" must never collapse into one record.
+        self._log.critical(
+            "mis_autosquareoff %s for %s: restored stop (order %s) not "
+            "confirmed resting within %.1fs (last seen: %s) -- VERIFY THE STOP "
+            "IN THE ORDER BOOK", MisState.PROTECTION_UNKNOWN, sym, bid,
+            _RESTORE_SETTLE_DEADLINE_SEC, status,
+        )
+        return (f"PROTECTION_UNKNOWN: restored stop (order {bid}) not confirmed "
+                f"resting within {_RESTORE_SETTLE_DEADLINE_SEC:.1f}s "
+                f"(last seen: {status}) -- VERIFY THE STOP IN THE ORDER BOOK")
+
+    def _verify_restored(self, bid: str) -> Tuple[str, str]:
+        """Confirm the restored stop is actually RESTING at the broker.
+
+        F1b (04-Sep-2026). "Restore submitted" is not "restore live", exactly as
+        "cancel accepted" was not "cancel effective". Deliberately the same
+        mechanism as _verify_cancelled -- the broker's own order history, polled
+        to a bounded budget -- because that mechanism was never the defect; only
+        its timing was.
+
+        Never raises: this runs inside an already-failing path, and an exception
+        here would mask the original failure and skip its alert.
+
+        Returns (verdict, last_status_seen). The verdict is one of
+        RESTORE_CONFIRMED / RESTORE_FILLED / RESTORE_FAILED / PROTECTION_UNKNOWN.
+        A read that never resolves is PROTECTION_UNKNOWN, never CONFIRMED: an
+        unverifiable stop must not be reported as a verified one.
+        """
+        deadline = time.monotonic() + _RESTORE_SETTLE_DEADLINE_SEC
+        last = "no status read"
+        while True:
+            try:
+                hist = self._adapter.get_order_history(str(bid))
+            except Exception as exc:  # noqa: BLE001
+                # A failed READ is not evidence either way -- keep polling.
+                hist = None
+                last = f"read failed: {exc}"
+            if hist:
+                try:
+                    status = str(getattr(hist[-1], "status", "")).upper()
+                except Exception:  # noqa: BLE001
+                    status = ""
+                if status:
+                    last = status
+                if status in _RESTORE_LIVE_STATES:
+                    return MisState.RESTORE_CONFIRMED, status
+                if status in _RESTORE_DEAD_STATES:
+                    return MisState.RESTORE_FAILED, status
+                if status in _RESTORE_FILLED_STATES:
+                    return MisState.RESTORE_FILLED, status
+                # Anything else is transient -- poll, do not judge.
+            if time.monotonic() >= deadline:
+                return MisState.PROTECTION_UNKNOWN, last
+            time.sleep(_RESTORE_SETTLE_POLL_SEC)
 
     def _verify_cancelled(self, resting) -> bool:
         """Confirm at the broker. 'Cancel accepted' is not 'cancel effective'.

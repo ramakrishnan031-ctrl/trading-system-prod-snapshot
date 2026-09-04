@@ -141,6 +141,7 @@ def test_f1_restores_the_sl_with_its_ORIGINAL_parameters() -> None:
     ad = MagicMock()
     ad.get_open_orders.return_value = []          # nothing resting
     ad.place_order.return_value = SimpleNamespace(broker_order_id="X1")
+    ad.get_order_history.return_value = _hist("TRIGGER PENDING")   # F1b: it rests
     st = MagicMock()
     st.get_orders_for_trade.return_value = [_sl_order_row()]
 
@@ -164,6 +165,7 @@ def test_f1_tag_identifies_the_trade_and_fits_the_broker_limit() -> None:
     ad = MagicMock()
     ad.get_open_orders.return_value = []
     ad.place_order.return_value = SimpleNamespace(broker_order_id="X1")
+    ad.get_order_history.return_value = _hist("TRIGGER PENDING")   # F1b
     st = MagicMock()
     st.get_orders_for_trade.return_value = [_sl_order_row()]
 
@@ -204,6 +206,7 @@ def test_f1_an_unrelated_symbol_does_not_count_as_protection() -> None:
          "trigger_price": 100.0},
     ]
     ad.place_order.return_value = SimpleNamespace(broker_order_id="X1")
+    ad.get_order_history.return_value = _hist("TRIGGER PENDING")   # F1b
     st = MagicMock()
     st.get_orders_for_trade.return_value = [_sl_order_row()]
 
@@ -219,6 +222,7 @@ def test_f1_unknown_broker_state_still_restores() -> None:
     ad = MagicMock()
     ad.get_open_orders.side_effect = RuntimeError("broker unreachable")
     ad.place_order.return_value = SimpleNamespace(broker_order_id="X1")
+    ad.get_order_history.return_value = _hist("TRIGGER PENDING")   # F1b
     st = MagicMock()
     st.get_orders_for_trade.return_value = [_sl_order_row()]
 
@@ -329,6 +333,7 @@ def _run_restore(open_orders, sl_row, resting):
     ad = MagicMock()
     ad.get_open_orders.return_value = open_orders
     ad.place_order.return_value = SimpleNamespace(broker_order_id="X1")
+    ad.get_order_history.return_value = _hist("TRIGGER PENDING")   # F1b
     st = MagicMock()
     st.get_orders_for_trade.return_value = [sl_row]
     detail = _bare(adapter=ad, store=st)._restore_protection(_SYM, resting, "PASS_1")
@@ -380,6 +385,7 @@ def test_div1_failed_read_logs_PROTECTION_UNKNOWN_and_still_restores(caplog) -> 
     ad = MagicMock()
     ad.get_open_orders.side_effect = RuntimeError("broker unreachable")
     ad.place_order.return_value = SimpleNamespace(broker_order_id="X1")
+    ad.get_order_history.return_value = _hist("TRIGGER PENDING")   # F1b
     st = MagicMock()
     st.get_orders_for_trade.return_value = [_sl_order_row()]
     obj = _bare(adapter=ad, store=st)
@@ -393,3 +399,187 @@ def test_div1_failed_read_logs_PROTECTION_UNKNOWN_and_still_restores(caplog) -> 
         "from a clean 'no SL found' -- otherwise the record conflates 'we know "
         "there is no stop' with 'we could not find out'"
     )
+
+
+# ── F1b · "restore submitted" is not "restore live" (04-Sep-2026) ────────────
+#
+# THE DEFECT. _restore_protection placed the stop and returned
+# "protection RESTORED (order NNN)" on the strength of a SUBMITTED order. It
+# checked nothing: not the id, not the status. adapter.place_order RAISES on a
+# synchronous refusal but returns a PlacedOrder with status="SUBMITTED" the
+# moment the broker issues an id -- and PlacedOrder has NO success field
+# (zerodha_adapter.py:141-153), so it cannot represent failure at all. A
+# broker-side RMS rejection arriving after the id was issued therefore read as
+# success.
+#
+# WHY THAT IS WORSE THAN SILENCE. The operator rule is "RESTORE FAILED ->
+# flatten by hand". A false RESTORED tells a human to STAND DOWN next to a
+# position with no stop -- the ANANTRAJ outcome, reached through the alert.
+#
+# Third instance of one root cause: cancel accepted != cancel effective (F2),
+# exit submitted != exit accepted (03-Sep), restore submitted != restore live.
+
+
+def _restore_fake(hist_status, *, broker_order_id="X1"):
+    """A broker that accepts the restore and then reports `hist_status` for it."""
+    ad = MagicMock()
+    ad.get_open_orders.return_value = []
+    ad.place_order.return_value = SimpleNamespace(broker_order_id=broker_order_id)
+    if isinstance(hist_status, list):
+        ad.get_order_history.side_effect = [_hist(s) for s in hist_status]
+    else:
+        ad.get_order_history.return_value = _hist(hist_status)
+    st = MagicMock()
+    st.get_orders_for_trade.return_value = [_sl_order_row()]
+    return ad, st
+
+
+@pytest.mark.parametrize("dead", ["REJECTED", "CANCELLED"])
+def test_f1b_a_broker_rejected_restore_is_NOT_reported_as_restored(dead) -> None:
+    """RED before F1b: the old code returned "protection RESTORED (order X1)"
+    here, because it never looked at the order again. The position has no stop
+    and the alert said it was protected."""
+    ad, st = _restore_fake(dead)
+
+    detail = _bare(adapter=ad, store=st)._restore_protection(_SYM, _resting_sl(), "PASS_1")
+
+    assert "RESTORE FAILED" in detail, detail
+    assert "UNPROTECTED" in detail, detail
+    assert "RESTORED" not in detail, (
+        f"a {dead} stop must never be reported as RESTORED -- that is the "
+        f"stand-down defect: {detail}"
+    )
+
+
+def test_f1b_a_resting_restore_is_confirmed() -> None:
+    """The happy path still says RESTORED -- but only now that the broker has
+    been asked, and the answer names the state it was found in."""
+    ad, st = _restore_fake("TRIGGER PENDING")
+
+    detail = _bare(adapter=ad, store=st)._restore_protection(_SYM, _resting_sl(), "PASS_1")
+
+    assert "RESTORED" in detail and "CONFIRMED" in detail, detail
+    assert "TRIGGER PENDING" in detail, detail
+
+
+def test_f1b_an_OPEN_restore_is_also_confirmed() -> None:
+    """A restored LIMIT rests as OPEN rather than TRIGGER PENDING. Both are
+    protection; only one of them is an SL's usual state."""
+    ad, st = _restore_fake("OPEN")
+
+    detail = _bare(adapter=ad, store=st)._restore_protection(_SYM, _resting_sl(), "PASS_1")
+    assert "CONFIRMED" in detail, detail
+
+
+def test_f1b_transient_states_are_polled_not_judged(monkeypatch) -> None:
+    """F2's lesson, applied to the restore side: the first read is usually not
+    the settled one. Judging "VALIDATION PENDING" as failure would manufacture a
+    naked-position alert for a perfectly healthy stop."""
+    monkeypatch.setattr(mod, "_RESTORE_SETTLE_DEADLINE_SEC", 2.0)
+    monkeypatch.setattr(mod, "_RESTORE_SETTLE_POLL_SEC", 0.01)
+    ad, st = _restore_fake(["PUT ORDER REQ RECEIVED", "VALIDATION PENDING",
+                            "TRIGGER PENDING"])
+
+    detail = _bare(adapter=ad, store=st)._restore_protection(_SYM, _resting_sl(), "PASS_1")
+
+    assert "CONFIRMED" in detail, detail
+    assert ad.get_order_history.call_count >= 3, (
+        "it must keep polling through the transient states, not settle on the "
+        "first read"
+    )
+
+
+def test_f1b_an_unverifiable_restore_is_PROTECTION_UNKNOWN_not_success(monkeypatch) -> None:
+    """The read failed, so we do not know. That is neither RESTORED nor FAILED,
+    and collapsing it into either one is the error: "we could not find out" must
+    stay distinct from "we know there is no stop"."""
+    monkeypatch.setattr(mod, "_RESTORE_SETTLE_DEADLINE_SEC", 0.3)
+    monkeypatch.setattr(mod, "_RESTORE_SETTLE_POLL_SEC", 0.01)
+    ad, st = _restore_fake("TRIGGER PENDING")
+    ad.get_order_history.side_effect = RuntimeError("broker unreachable")
+
+    detail = _bare(adapter=ad, store=st)._restore_protection(_SYM, _resting_sl(), "PASS_1")
+
+    assert "PROTECTION_UNKNOWN" in detail, detail
+    assert "RESTORED" not in detail, detail
+    assert "VERIFY THE STOP" in detail, detail
+
+
+def test_f1b_a_never_settling_restore_is_PROTECTION_UNKNOWN(monkeypatch) -> None:
+    """Reads succeed but never reach a decisive state before the budget ends."""
+    monkeypatch.setattr(mod, "_RESTORE_SETTLE_DEADLINE_SEC", 0.3)
+    monkeypatch.setattr(mod, "_RESTORE_SETTLE_POLL_SEC", 0.01)
+    ad, st = _restore_fake("VALIDATION PENDING")
+
+    detail = _bare(adapter=ad, store=st)._restore_protection(_SYM, _resting_sl(), "PASS_1")
+    assert "PROTECTION_UNKNOWN" in detail, detail
+    assert "VALIDATION PENDING" in detail, detail
+
+
+def test_f1b_a_stop_that_already_executed_is_not_a_failure() -> None:
+    """If the restored stop filled between placement and the read, the position
+    is CLOSED. Calling that RESTORE FAILED would send a human to flatten a
+    position that no longer exists."""
+    ad, st = _restore_fake("COMPLETE")
+
+    detail = _bare(adapter=ad, store=st)._restore_protection(_SYM, _resting_sl(), "PASS_1")
+
+    assert "RESTORE FAILED" not in detail, detail
+    assert "EXECUTED" in detail and "NOT naked" in detail, detail
+
+
+def test_f1b_an_empty_broker_order_id_is_a_failure() -> None:
+    """Every other production place_order call site guards this (kill_switch's
+    was added as Bug C on 2026-06-15); the restore did not. An empty id is the
+    only non-exception failure the adapter can return."""
+    ad, st = _restore_fake("TRIGGER PENDING", broker_order_id="")
+
+    detail = _bare(adapter=ad, store=st)._restore_protection(_SYM, _resting_sl(), "PASS_1")
+
+    assert "RESTORE FAILED" in detail and "empty order id" in detail, detail
+    assert "RESTORED" not in detail, detail
+
+
+# ── side symmetry: a SHORT's BUY stop must behave exactly as a LONG's SELL ────
+# (_short_sl_order_row is the Divergence-2 helper defined above -- reused, not
+# redefined, so both suites pin the same notion of "a SHORT's stop".)
+
+@pytest.mark.parametrize("hist_status,expect,forbid", [
+    ("TRIGGER PENDING", "CONFIRMED", "RESTORE FAILED"),
+    ("REJECTED", "RESTORE FAILED", "RESTORED"),
+])
+def test_f1b_short_side_behaves_identically(hist_status, expect, forbid) -> None:
+    """No side-specific branch exists, and this pins that. exit_side is read
+    from the SL leg's own transaction_type, so a BUY stop above LTP must verify
+    exactly as a SELL stop below it."""
+    ad = MagicMock()
+    ad.get_open_orders.return_value = []
+    ad.place_order.return_value = SimpleNamespace(broker_order_id="X1")
+    ad.get_order_history.return_value = _hist(hist_status)
+    st = MagicMock()
+    st.get_orders_for_trade.return_value = [_short_sl_order_row()]
+
+    detail = _bare(adapter=ad, store=st)._restore_protection(_SYM, _resting_sl(), "PASS_1")
+
+    assert ad.place_order.call_args.kwargs["side"] == "BUY"
+    assert expect in detail, detail
+    assert forbid not in detail, detail
+
+
+def test_f1b_verification_never_raises(monkeypatch) -> None:
+    """The whole restore path is contractually "never raises" -- it runs inside
+    an already-failing path, and an exception here would mask the original
+    failure and skip its alert. The verification must not be the thing that
+    breaks that. A history row with no `status` at all resolves to nothing
+    decisive, so this also pins that the fall-through is UNKNOWN, not success."""
+    monkeypatch.setattr(mod, "_RESTORE_SETTLE_DEADLINE_SEC", 0.3)
+    monkeypatch.setattr(mod, "_RESTORE_SETTLE_POLL_SEC", 0.01)
+    ad = MagicMock()
+    ad.get_open_orders.return_value = []
+    ad.place_order.return_value = SimpleNamespace(broker_order_id="X1")
+    ad.get_order_history.return_value = ["not-an-object-with-status"]
+    st = MagicMock()
+    st.get_orders_for_trade.return_value = [_sl_order_row()]
+
+    detail = _bare(adapter=ad, store=st)._restore_protection(_SYM, _resting_sl(), "PASS_1")
+    assert isinstance(detail, str) and detail
