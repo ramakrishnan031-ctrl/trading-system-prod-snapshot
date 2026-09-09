@@ -62,6 +62,7 @@ except Exception:  # noqa: BLE001 — canary must run even if python-dotenv is a
 from alerts.critical import list_pending_sentinels, write_critical_sentinel
 from core.logger import get_logger
 from core.time_authority import now_ist
+from core.account_registry import primary_account_tag
 
 _log = get_logger("monitoring_canary")
 
@@ -277,7 +278,7 @@ def run_canary(cfg, *, sentinel_dir: Optional[Path] = None) -> dict:
 
 def _format_report(results: dict) -> str:
     icon = {True: "✅", False: "🔴"}
-    lines = ["🐤 [LFL836] Monitoring Canary — " + now_ist().strftime("%d-%b %H:%M")]
+    lines = [f"🐤 [{primary_account_tag()}] Monitoring Canary — " + now_ist().strftime("%d-%b %H:%M")]
     for path in ("email", "telegram", "sentinel", "dashboard", "respawn"):
         r = results.get(path, {})
         lines.append(f"{icon.get(r.get('ok'), '❔')} {path}: {r.get('detail', '?')}")

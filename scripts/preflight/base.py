@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 from typing import Any, Dict, Optional
+from core.account_registry import primary_account_tag
 
 
 class Criticality(enum.Enum):
@@ -71,7 +72,7 @@ class CheckContext:
     config_dir: Path
     db_path: Path
     mode: str = "live"            # "live" | "paper" -- only broker checks branch on it
-    account: str = "LFL836"
+    account: str = field(default_factory=primary_account_tag)
     as_of_date: date = field(default_factory=date.today)
     phase: str = "A"             # "A" | "B" | "C"
     dry_run: bool = False        # True -> never send alerts / never mutate

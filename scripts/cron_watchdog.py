@@ -26,6 +26,7 @@ from alerts.critical import write_critical_sentinel
 from core.logger import get_logger
 from core.state_store import StateStore
 from core.time_authority import now_ist
+from core.account_registry import primary_account_tag
 
 _log = get_logger("cron_watchdog")
 _WATCHED = ("cron_officer_eod", "check_cron_drift")
@@ -57,7 +58,7 @@ def main() -> int:
     # Cron-independent alert: a CRITICAL sentinel the (systemd) alert-watcher emails.
     try:
         write_critical_sentinel(
-            title=f"[LFL836] CRON WATCHDOG — watcher down ({', '.join(missing)})",
+            title=f"[{primary_account_tag()}] CRON WATCHDOG — watcher down ({', '.join(missing)})",
             body=("The systemd cron-watchdog (independent of cron) found NO heartbeat "
                   f"today for: {', '.join(missing)}. The cron daemon or shared env may be "
                   "down — the Cron Officer / drift-check cannot self-report this. Investigate "

@@ -12,6 +12,7 @@ import csv
 import html
 import os
 from pathlib import Path
+from core.account_registry import primary_account_tag
 
 # tower severity -> TelegramNotifier tier
 _NOTIFY_TIER = {"CRITICAL": "CRITICAL", "HIGH": "WARNING"}
@@ -51,7 +52,7 @@ def maybe_push(notifier, overall: str, qualifying) -> bool:
     if not qualifying or notifier is None:
         return False
     tier, title, body = format_telegram(overall, qualifying)
-    notifier.send(severity=tier, title=f"[LFL836] {title}", body=body,
+    notifier.send(severity=tier, title=f"[{primary_account_tag()}] {title}", body=body,
                   source_module="control_tower")
     return True
 

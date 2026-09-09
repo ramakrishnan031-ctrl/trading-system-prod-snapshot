@@ -41,6 +41,7 @@ from core.strategy_direction import (
     DEFAULT_SEED_PATH, DEFAULT_STATE_PATH, build_direction_map, load_registry, save_registry,
 )
 from core.time_authority import today_ist
+from core.account_registry import primary_account_tag
 
 _log = get_logger("strategy_registry_officer")
 
@@ -190,7 +191,7 @@ def _notify(new_registered: List[str], new_conflicted: List[str],
             lines.append(f"  • {n}  declared={registry.get(n,{}).get('direction','?')} "
                          f"but a realized trade side differs")
     body = "\n".join(lines)
-    title = f"[LFL836] Strategy registry — {len(new_registered)} new, {len(new_conflicted)} conflict"
+    title = f"[{primary_account_tag()}] Strategy registry — {len(new_registered)} new, {len(new_conflicted)} conflict"
 
     # Telegram (best-effort).
     try:

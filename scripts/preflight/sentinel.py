@@ -18,6 +18,7 @@ import tempfile
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import List
+from core.account_registry import primary_account_tag
 
 DEFAULT_SENTINEL_PATH = Path("data_store/preflight/today.json")
 
@@ -54,7 +55,7 @@ class Sentinel:
     alert_id: str = ""
     last_updated: str = ""
     mode: str = "live"
-    account: str = "LFL836"
+    account: str = field(default_factory=primary_account_tag)
 
 
 def load(path: Path = DEFAULT_SENTINEL_PATH) -> Sentinel:

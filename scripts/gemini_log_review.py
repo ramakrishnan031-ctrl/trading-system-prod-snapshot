@@ -35,6 +35,7 @@ from core.logger import get_logger
 from core.time_authority import today_ist
 
 from scripts.agy_runner import run_log_review as _agy_log_review
+from core.account_registry import primary_account_tag
 
 _EOD_PROMPT = """\
 You are a senior trading ops reviewer. Today's complete log + watchman notes attached.
@@ -266,7 +267,7 @@ def _emit_review_failure_alert(date_iso: str, output_dir: Path, log) -> None:
     try:
         from alerts.critical import write_critical_sentinel
         write_critical_sentinel(
-            title=f"[LFL836] gemini_log_review FAILED -- no AI EOD review for {date_iso}",
+            title=f"[{primary_account_tag()}] gemini_log_review FAILED -- no AI EOD review for {date_iso}",
             body=("All Gemini cascade models were exhausted (quota/timeout); the EOD "
                   "log review did not run. Investigate agy quota / connectivity. "
                   "Trading is unaffected (monitoring tooling only)."),

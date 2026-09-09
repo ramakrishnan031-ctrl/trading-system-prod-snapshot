@@ -20,6 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date, time
 from typing import List, Optional, Tuple
+from core.account_registry import primary_account_tag
 
 # ── status constants ──────────────────────────────────────────────────────────
 COMPLETED = "COMPLETED"
@@ -171,7 +172,8 @@ def _runtime_label(sec: float) -> str:
 
 def _tag(report: CronReport) -> str:
     # Ban-window prefix overrides the normal account tag (Phase 4.6/5.4).
-    return "[LFL836-BAN]" if report.ban_active else "[LFL836]"
+    tag = primary_account_tag()
+    return f"[{tag}-BAN]" if report.ban_active else f"[{tag}]"
 
 
 def eod_subject(report: CronReport) -> str:

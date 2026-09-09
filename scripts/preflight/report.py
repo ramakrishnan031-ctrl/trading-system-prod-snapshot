@@ -18,6 +18,7 @@ from typing import List
 
 from scripts.preflight.base import Criticality, Status
 from scripts.preflight import sentinel as _sentinel
+from core.account_registry import primary_account_tag
 
 # terminal status pills
 _PILL = {
@@ -57,7 +58,7 @@ class PreflightReport:
     run_date: date
     run_id: str = ""
     mode: str = "live"
-    account: str = "LFL836"
+    account: str = field(default_factory=primary_account_tag)
     started_at: str = ""
     completed_at: str = ""
     records: List[CheckRecord] = field(default_factory=list)
@@ -191,10 +192,11 @@ def _e(x) -> str:
 
 def subject(report: PreflightReport, ban_active: bool = False) -> str:
     """Severity-aware subject. The ban-window tag is applied to EVERY pre-flight
-    subject INCLUDING CRITICAL (Fix 4, locked 21-Jun) so a [LFL836-BAN] email filter
+    subject INCLUDING CRITICAL (Fix 4, locked 21-Jun) so a [<account>-BAN] email filter
     can never miss a CRITICAL; after the ban auto-clears, no subject carries it."""
     d = report.run_date.strftime("%d-%b")
-    tag = "[LFL836-BAN]" if ban_active else "[LFL836]"
+    acct = report.account or primary_account_tag()
+    tag = f"[{acct}-BAN]" if ban_active else f"[{acct}]"
     if report.severity == "CRITICAL":
         return f"{tag} 🔴 CRITICAL — Pre-flight FAILED — {d}"
     if report.overall_status == _sentinel.READY_WITH_WARNINGS:

@@ -67,11 +67,12 @@ from alerts.critical import (
 )
 from core.config_loader import load_all
 from core.time_authority import now_ist
+from core.account_registry import primary_account_tag
 
 # Broker account tag for alert subjects (the locked primary account in
 # config/accounts.csv, is_primary=TRUE). Surfaced in every alert subject so the
-# recipient can identify the account at a glance: "[LFL836] CRITICAL — <title>".
-_ACCOUNT_TAG = "LFL836"
+# recipient can identify the account at a glance: "[<account>] CRITICAL — <title>".
+_ACCOUNT_TAG = primary_account_tag()
 
 # DUP-1 (2026-04-26 audit): _IST removed; never read locally.
 
@@ -185,7 +186,7 @@ def _build_email(
     Plain text by default. When ``content_type == "text/html"`` the sentinel
     carries an HTML body + a required ``plain_fallback`` (Cron Officer rich
     report) and we send a multipart/alternative message. Subject defaults to
-    ``[LFL836] <SEVERITY> — <title>`` unless the sentinel supplies a verbatim
+    ``[<account>] <SEVERITY> — <title>`` unless the sentinel supplies a verbatim
     ``subject`` (Cron Officer severity/ban prefixes).
     """
     severity = data.get("context", {}).get("severity", "CRITICAL")

@@ -48,6 +48,7 @@ from scripts.generate_crontab import (
 # F3: reuse the Cron Officer's marker reader (single source of truth for exit_code_file
 # detection) so the drift-check mirrors the Officer's detection map instead of duplicating it.
 from scripts.cron_officer import NO_SIGNAL, _read_marker
+from core.account_registry import primary_account_tag
 
 _log = get_logger("check_cron_drift")
 
@@ -165,8 +166,8 @@ def _build_alert(missing: list[str], cd: ContentDrift | None, registry: CronRegi
         lines += [f"   - {n} (expected: {registry.get(n).schedule})" for n in missing]
 
     if not lines:
-        return "OK", "✅ [LFL836] Cron integrity OK: live == registry; all due heartbeats present."
-    return severity, f"[LFL836] CRON INTEGRITY {severity}\n" + "\n".join(lines)
+        return "OK", f"✅ [{primary_account_tag()}] Cron integrity OK: live == registry; all due heartbeats present."
+    return severity, f"[{primary_account_tag()}] CRON INTEGRITY {severity}\n" + "\n".join(lines)
 
 
 def main() -> int:

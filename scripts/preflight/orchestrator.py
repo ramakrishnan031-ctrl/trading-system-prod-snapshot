@@ -29,6 +29,7 @@ from scripts.preflight.base import Check, CheckContext, CheckResult, Status
 from scripts.preflight.checks import broker as _broker_checks
 from scripts.preflight.checks import phase_a_checks, phase_b_checks, phase_c_checks
 from scripts.preflight.report import CheckRecord, PreflightReport, apply_to_sentinel, render_terminal
+from core.account_registry import primary_account_tag
 
 try:
     from core.logger import get_logger
@@ -151,7 +152,7 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p.add_argument("--config-dir", type=Path, default=Path("config"))
     p.add_argument("--db-path", type=Path, default=Path("data_store/trading_system.db"))
     p.add_argument("--mode", choices=["live", "paper"], default="live")
-    p.add_argument("--account", default="LFL836")
+    p.add_argument("--account", default=primary_account_tag())
     p.add_argument("--as-of-date", type=lambda s: date.fromisoformat(s), default=None,
                    help="simulate a given date (YYYY-MM-DD); default = today (IST)")
     p.add_argument("--dry-run", action="store_true",

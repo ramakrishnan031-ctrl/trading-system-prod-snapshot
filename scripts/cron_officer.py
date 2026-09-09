@@ -41,6 +41,7 @@ from scripts.cron_report_render import (
     render_eod_telegram,
 )
 from utils.cron_heartbeat import record_heartbeat, parse_functional_status
+from core.account_registry import primary_account_tag
 
 _log = get_logger("cron_officer")
 _BAR = "━" * 24
@@ -121,14 +122,14 @@ def build_briefing(registry: CronRegistry, today: date, config_dir: Path,
         reason = f"NSE Holiday: {holiday_name}" if holiday_name else "Weekend"
         running = [j.name for j in due]  # jobs_due_on already excludes market_day on non-trading days
         lines = [
-            f"📋 [LFL836] {reason} — {day_str}",
+            f"📋 [{primary_account_tag()}] {reason} — {day_str}",
             "No market-day jobs today.",
             f"Only running: {', '.join(running) if running else 'none'}",
         ]
         return "\n".join(lines)
 
     crit = sum(1 for j in due if j.critical)
-    lines = [f"📋 [LFL836] Today's Schedule — {day_str}", _BAR]
+    lines = [f"📋 [{primary_account_tag()}] Today's Schedule — {day_str}", _BAR]
     for j in due:
         mark = " ⚡" if j.critical else ""
         lines.append(f"{_time_label(j)}  {j.name}{mark}")
@@ -244,7 +245,7 @@ def build_eod_summary(registry: CronRegistry, store: StateStore, today: date,
         return ", ".join(j.name for j in jobs) if jobs else "—"
 
     lines = [
-        f"📊 [LFL836] Cron Officer — Daily Report — {today.strftime('%d-%b')}",
+        f"📊 [{primary_account_tag()}] Cron Officer — Daily Report — {today.strftime('%d-%b')}",
         _BAR,
         f"✅ Completed: {len(completed)}/{n_exp}",
         f"❌ Failed: {len(failed)} ({_names(failed)})",
@@ -327,9 +328,9 @@ def build_change_report(registry: CronRegistry, crontab_text: str) -> tuple[str,
 
     has_diff = bool(added or missing or changed)
     if not has_diff:
-        return "✅ [LFL836] Cron registry matches live crontab (python jobs).", False
+        return f"✅ [{primary_account_tag()}] Cron registry matches live crontab (python jobs).", False
 
-    lines = ["⚠️ [LFL836] Cron Divergence Detected", _BAR]
+    lines = [f"⚠️ [{primary_account_tag()}] Cron Divergence Detected", _BAR]
     for tok in added:
         lines.append(f"+ in registry, not in crontab: {tok} ({reg_py[tok].schedule})")
     for tok in missing:

@@ -75,6 +75,7 @@ from scripts.monitoring_canary import (
     _parse_systemctl_show,
     _save_service_state,
 )
+from core.account_registry import primary_account_tag
 
 _log = get_logger("liveness_probe")
 
@@ -248,7 +249,7 @@ def format_alarm(props: dict, since: str, now: datetime) -> str:
     exit 0 (Result=success/ExecMainStatus=0), which says 'shut itself down' rather than
     'crashed' — the detail that pointed straight at S4."""
     return "\n".join([
-        f"🔴 [LFL836] LIVENESS: {_UNIT} is DOWN during the service window",
+        f"🔴 [{primary_account_tag()}] LIVENESS: {_UNIT} is DOWN during the service window",
         f"since: {since or 'unknown'}",
         f"now:   {now.strftime('%d-%b %H:%M')} IST "
         f"(window {_LIVENESS_START.strftime('%H:%M')}-{_LIVENESS_END.strftime('%H:%M')})",

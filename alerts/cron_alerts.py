@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Optional
 
 from core.logger import get_logger
+from core.account_registry import primary_account_tag
 
 _log = get_logger("cron_alerts")
 
@@ -99,7 +100,7 @@ def alert_job_result(
         else:
             window = "n/a"
 
-        title = f"{emoji} [LFL836] {job_name} — {status}"
+        title = f"{emoji} [{primary_account_tag()}] {job_name} — {status}"
         body_lines = [f"cron job: {job_name}", f"status: {status}", f"timing: {window}"]
         if message:
             body_lines.append(f"detail: {message}")
