@@ -1838,6 +1838,104 @@ def test_s1b1_secret_redacted_even_outside_webhook_url():
     print("  OK S-1B.1: secret redacted even when it appears outside webhook_url")
 
 
+# ---------------------------------------------------------------------------
+# WR4b (09-Sep-2026): an account-tag prefix on the body scan_name is stripped
+# before the WR4 comparison. Config-driven from accounts.csv via AR12, so the
+# SAME code path is a no-op on production (tag LFL836, no alert carries it) and
+# strips VBB097- on the testing VM.
+# ---------------------------------------------------------------------------
+
+import contextlib as _contextlib
+
+import signals.webhook_receiver as _wr
+
+
+@_contextlib.contextmanager
+def _account_tag(tag):
+    """Force the AR12 resolver seen by the receiver to return `tag`."""
+    original = _wr.primary_account_tag
+    _wr.primary_account_tag = lambda *a, **k: tag
+    try:
+        yield
+    finally:
+        _wr.primary_account_tag = original
+
+
+def test_wr4b_testing_vm_prefixed_scan_name_accepted():
+    """Testing VM: body 'VBB097-GAP GO LONG' + path gap_go_long -> ACCEPTED."""
+    receiver, _, _ = _make_receiver()
+    payload = _valid_payload(scan_name="VBB097-GAP GO LONG")
+    with _account_tag("VBB097"):
+        with receiver.app.test_client() as client:
+            resp = client.post("/webhook/gap_go_long", json=payload)
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+    print("  OK WR4b testing-VM prefixed scan_name -> accepted")
+
+
+def test_wr4b_underscore_separator_also_stripped():
+    """WR4b handles both separators: 'VBB097_GAP GO LONG' normalises to
+    vbb097_gap_go_long and must also be accepted."""
+    receiver, _, _ = _make_receiver()
+    payload = _valid_payload(scan_name="VBB097_GAP GO LONG")
+    with _account_tag("VBB097"):
+        with receiver.app.test_client() as client:
+            resp = client.post("/webhook/gap_go_long", json=payload)
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+    print("  OK WR4b underscore separator -> accepted")
+
+
+def test_wr4b_production_unprefixed_scan_name_unchanged():
+    """Production: tag LFL836, body 'GAP GO LONG' + path gap_go_long ->
+    ACCEPTED exactly as before. The change must be a no-op there."""
+    receiver, _, _ = _make_receiver()
+    payload = _valid_payload(scan_name="GAP GO LONG")
+    with _account_tag("LFL836"):
+        with receiver.app.test_client() as client:
+            resp = client.post("/webhook/gap_go_long", json=payload)
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+    print("  OK WR4b production unprefixed scan_name -> accepted (no-op)")
+
+
+def test_wr4b_genuine_mismatch_still_400():
+    """A real mismatch is STILL rejected: stripping the prefix must not weaken
+    WR4 into a substring/fuzzy match. body 'VBB097-GAP FADE SHORT' + path
+    gap_go_long -> 400."""
+    receiver, _, _ = _make_receiver()
+    payload = _valid_payload(scan_name="VBB097-GAP FADE SHORT")
+    with _account_tag("VBB097"):
+        with receiver.app.test_client() as client:
+            resp = client.post("/webhook/gap_go_long", json=payload)
+    assert resp.status_code == 400, resp.get_data(as_text=True)
+    assert "match" in resp.get_json()["error"].lower()
+    print("  OK WR4b genuine mismatch -> still 400")
+
+
+def test_wr4b_absent_scan_name_still_skips_check():
+    """scan_name absent entirely -> the check is skipped, unchanged by WR4b."""
+    receiver, _, _ = _make_receiver()
+    payload = _valid_payload()
+    payload.pop("scan_name")
+    with _account_tag("VBB097"):
+        with receiver.app.test_client() as client:
+            resp = client.post("/webhook/gap_go_long", json=payload)
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+    print("  OK WR4b absent scan_name -> check skipped")
+
+
+def test_wr4b_unknown_tag_does_not_strip():
+    """AR12 returns 'UNKNOWN' when accounts.csv is unreadable. That must NOT
+    become a strippable prefix -- it would silently widen the check."""
+    with _account_tag("UNKNOWN"):
+        assert _wr._strip_account_prefix("unknown-gap_go_long") == "unknown-gap_go_long"
+    with _account_tag("VBB097"):
+        assert _wr._strip_account_prefix("vbb097-gap_go_long") == "gap_go_long"
+        assert _wr._strip_account_prefix("vbb097_gap_go_long") == "gap_go_long"
+        # prefix ONLY -- an interior or trailing occurrence is untouched
+        assert _wr._strip_account_prefix("gap_go_long_vbb097") == "gap_go_long_vbb097"
+        assert _wr._strip_account_prefix("x_vbb097-gap_go_long") == "x_vbb097-gap_go_long"
+    print("  OK WR4b UNKNOWN not stripped; prefix-only semantics hold")
+
+
 def run_all_tests() -> int:
     tests = [
         test_s1b1_secret_never_persists_to_webhook_payload,
@@ -1906,6 +2004,12 @@ def run_all_tests() -> int:
         test_fix131_epoch_bucket_same_for_signals_within_5min_epoch,
         test_fix131_duplicate_across_minute_boundary_rejected_via_db,
         test_fix131_signal_after_full_window_accepted,
+        test_wr4b_testing_vm_prefixed_scan_name_accepted,
+        test_wr4b_underscore_separator_also_stripped,
+        test_wr4b_production_unprefixed_scan_name_unchanged,
+        test_wr4b_genuine_mismatch_still_400,
+        test_wr4b_absent_scan_name_still_skips_check,
+        test_wr4b_unknown_tag_does_not_strip,
     ]
 
     print("=" * 70)

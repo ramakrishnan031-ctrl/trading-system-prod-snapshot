@@ -54,6 +54,7 @@ from flask import Flask, request, jsonify
 
 from core.ids import new_signal_id
 from core.time_authority import ist_timezone, now_ist
+from core.account_registry import primary_account_tag
 
 # P3-s14 (2026-07-17): per-signal statuses meaning "the system did not take this signal,
 # and it is NOT a duplicate — send it again". The batch answers 503 if any symbol returns
@@ -105,6 +106,36 @@ class _PerIpRateLimiter:
         stale = [ip for ip, (_tok, last) in self._buckets.items() if (now - last) > 60.0]
         for ip in stale:
             self._buckets.pop(ip, None)
+
+
+def _strip_account_prefix(normalized: str) -> str:
+    """Remove a leading ``<primary account tag><sep>`` from an ALREADY-normalised
+    scan_name, where sep is ``-`` or ``_`` (WR4b, 09-Sep-2026).
+
+    WHY. Chartink alert names are per-account on a shared Chartink login, so the
+    testing VM's alerts are named "VBB097-GAP FADE SHORT" while the webhook path
+    stays ``gap_fade_short``. WR4 compares the two and 400s, which stopped every
+    signal on that machine. The account name cannot be dropped in the Chartink
+    UI, so the receiver absorbs it.
+
+    The tag comes from accounts.csv via AR12 -- NOT hardcoded. Production's tag
+    is LFL836 and no alert carries an ``lfl836-`` prefix, so this is a no-op
+    there; the testing VM's tag is VBB097 and the prefix is removed.
+
+    PREFIX ONLY. Whatever remains must still equal the path segment exactly, so
+    a URL pointed at the wrong scanner is still rejected -- that is the whole
+    purpose of WR4 and it is preserved.
+    """
+    tag = (primary_account_tag() or "").strip().lower()
+    # "unknown" is AR12's fallback when accounts.csv is unreadable -- never a
+    # real account, and stripping it would be a silent widening of the check.
+    if not tag or tag == "unknown":
+        return normalized
+    for sep in ("-", "_"):
+        prefix = tag + sep
+        if normalized.startswith(prefix):
+            return normalized[len(prefix):]
+    return normalized
 
 
 class WebhookReceiver:
@@ -589,10 +620,15 @@ class WebhookReceiver:
         body_scan_name = body.get("scan_name")
         if body_scan_name is not None:
             normalized_body = body_scan_name.lower().replace(" ", "_")
-            if normalized_body != scanner_name:
+            # WR4b: an account-tag prefix is stripped before comparing (see
+            # _strip_account_prefix). Prefix only -- the remainder must still
+            # match the path exactly.
+            compared = _strip_account_prefix(normalized_body)
+            if compared != scanner_name:
                 self._log.warning(
-                    "webhook/%s: scan_name mismatch: body=%r (normalized=%r) vs path=%r",
-                    scanner_name, body_scan_name, normalized_body, scanner_name,
+                    "webhook/%s: scan_name mismatch: body=%r (normalized=%r, "
+                    "after account-prefix strip=%r) vs path=%r",
+                    scanner_name, body_scan_name, normalized_body, compared, scanner_name,
                 )
                 return jsonify({"error": "scan_name in body does not match scanner_name path param"}), 400
 
