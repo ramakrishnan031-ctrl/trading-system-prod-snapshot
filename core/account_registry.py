@@ -32,6 +32,7 @@ What This Module Does NOT Do:
 from __future__ import annotations
 
 import csv
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -243,3 +244,117 @@ class AccountRegistry:
     def count(self) -> int:
         """Return the number of accounts loaded (AR8)."""
         return len(self._rows)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AR12 -- the alert-label tag (09-Sep-2026)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# WHY THIS EXISTS. Every alert subject carried a HARDCODED "[LFL836]" -- in
+# ~15 call sites across alerts/, ops/ and scripts/. The comment above the
+# hardcode in scripts/alert_watcher.py stated the intent exactly ("the locked
+# primary account in config/accounts.csv, is_primary=TRUE"); it was simply never
+# read from there. On the testing VM, whose accounts.csv says VBB097, every
+# alert therefore announced the PRODUCTION account -- on the one machine whose
+# purpose is to be told apart from production.
+#
+# Reading the tag from accounts.csv makes the label correct on BOTH machines
+# with ONE code path: production's CSV says LFL836 and keeps "[LFL836]"
+# byte-identical (Rama's "[LFL836]" / "[LFL836-BAN]" mail filters keep matching);
+# the sandbox's says VBB097 and gets "[VBB097]". No per-machine edit, nothing to
+# keep in sync -- which is the point, since two files had already been
+# hand-patched to VBB097 on the sandbox only, drift that a redeploy would have
+# silently reverted.
+#
+# CONTRACT: this function NEVER raises and never blocks an alert. A label is not
+# worth losing a CRITICAL alert over, so every failure path degrades to
+# _TAG_FALLBACK rather than propagating. Stdlib + core.exceptions only (AR7).
+
+_TAG_FALLBACK = "UNKNOWN"
+_primary_tag_cache: Optional[str] = None
+
+
+def primary_account_tag(accounts_csv: Optional[Path] = None) -> str:
+    """
+    Return the primary account_id from accounts.csv, for alert labels (AR12).
+
+    Deliberately does NOT go through AccountRegistry.load(): that runs the full
+    AR1-AR11 validation and raises on a bad row. A subject-line tag must not be
+    able to raise, so this does a minimal direct read and caches the result.
+
+    Args:
+        accounts_csv: Override path (tests). Default: <repo>/config/accounts.csv.
+
+    Returns:
+        The account_id of the is_primary=TRUE row, e.g. "LFL836" / "VBB097".
+        _TAG_FALLBACK ("UNKNOWN") if the file is missing, unreadable, malformed,
+        or has no primary row -- never an exception.
+    """
+    global _primary_tag_cache
+    if accounts_csv is None and _primary_tag_cache is not None:
+        return _primary_tag_cache
+    tag = (_read_primary_row(accounts_csv).get("account_id") or "").strip() or _TAG_FALLBACK
+    if accounts_csv is None:
+        _primary_tag_cache = tag
+    return tag
+
+
+def _read_primary_row(accounts_csv: Optional[Path] = None) -> Dict[str, str]:
+    """The is_primary=TRUE row as a plain dict, or {} on ANY failure (AR12).
+
+    Deliberately NOT AccountRegistry.load(): that runs the full AR1-AR11
+    validation and raises on a bad row. Nothing built on this may raise.
+    """
+    path = Path(accounts_csv) if accounts_csv is not None else (
+        Path(__file__).resolve().parent.parent / "config" / "accounts.csv"
+    )
+    try:
+        with open(path, "r", encoding="utf-8", newline="") as fh:
+            for row in csv.DictReader(fh):
+                if str(row.get("is_primary", "")).strip().lower() in ("true", "1", "yes"):
+                    return {str(k): str(v) for k, v in row.items() if k is not None}
+    except Exception:  # noqa: BLE001 -- must never raise (AR12 contract)
+        pass
+    return {}
+
+
+def reset_primary_account_tag_cache() -> None:
+    """Clear the cached tag (tests only)."""
+    global _primary_tag_cache
+    _primary_tag_cache = None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AR12b -- the per-account CREDENTIAL ENV NAMES (09-Sep-2026)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# WHY THIS EXISTS. Four cron jobs read ``ZERODHA_API_KEY_LFL836`` **by literal
+# name**, each above a comment reading "api_key read from env (.env), NEVER
+# hardcoded -- survives a future api_key rotation". The *value* is indeed not
+# hardcoded. The env var NAME is -- and that hardcodes the ACCOUNT, which the
+# comment does not claim and the author plainly did not intend.
+#
+# On the testing VM that variable does not exist, so all four silently receive
+# "". accounts.csv already names the variable per account in its ``api_key_env``
+# column -- that column exists for exactly this. Reading it there makes
+# production resolve ZERODHA_API_KEY_LFL836 and the testing VM
+# ZERODHA_API_KEY_VBB097 from ONE code path.
+#
+# CONTRACT: as AR12 -- never raises. Unresolvable => "" so each caller keeps its
+# existing empty-key error path instead of meeting a new exception type.
+
+
+def primary_api_key_env(accounts_csv: Optional[Path] = None) -> str:
+    """Env var NAME holding the primary account's API key (AR12b), or ""."""
+    return (_read_primary_row(accounts_csv).get("api_key_env") or "").strip()
+
+
+def primary_api_secret_env(accounts_csv: Optional[Path] = None) -> str:
+    """Env var NAME holding the primary account's API secret (AR12b), or ""."""
+    return (_read_primary_row(accounts_csv).get("api_secret_env") or "").strip()
+
+
+def primary_api_key(accounts_csv: Optional[Path] = None) -> str:
+    """The primary account's API key VALUE from the environment, or "" (AR12b)."""
+    name = primary_api_key_env(accounts_csv)
+    return os.environ.get(name, "") if name else ""
