@@ -54,10 +54,11 @@ from core.logger import get_logger
 from core.state_store import StateStore
 from core.time_authority import now_ist
 from utils.cron_heartbeat import record_heartbeat
+from core.account_registry import primary_account_tag
 
 _log = get_logger("system_manager")
 _BAR = "━" * 30
-_ACCOUNT = "LFL836"
+_ACCOUNT = primary_account_tag()
 
 
 # ─────────────────────────────────────────────────────────────────────────────

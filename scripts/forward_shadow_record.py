@@ -31,6 +31,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from dotenv import load_dotenv
+from core.account_registry import primary_api_key, primary_api_key_env
 load_dotenv(ROOT / ".env")
 
 # VERSIONED, APPEND-ONLY, IMMUTABLE audit artifact. If the METHOD changes (recompute,
@@ -103,7 +104,7 @@ def _build_kite(log):
         from kiteconnect import KiteConnect
         from broker.rate_limiter import RateLimiter
         from core.config_loader import load_all
-        api_key = os.environ.get("ZERODHA_API_KEY_LFL836", "")
+        api_key = primary_api_key()
         # N9-07: the SECOND unencoded read in this file. The register named only
         # the weights one; this is the same class and is fixed with it.
         access = json.loads(tok_path.read_text(encoding="utf-8")).get("access_token")

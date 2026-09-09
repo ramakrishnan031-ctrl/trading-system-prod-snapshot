@@ -32,6 +32,7 @@ from dotenv import load_dotenv
 load_dotenv(ROOT / ".env")
 
 from core.time_authority import today_ist  # noqa: E402 — needs the sys.path bootstrap above
+from core.account_registry import primary_api_key, primary_api_key_env
 
 TOKEN_PATH  = ROOT / "data_store" / "session" / "zerodha_token.json"
 OUTPUT_DIR  = ROOT / "data_store" / "candles"
@@ -40,7 +41,7 @@ INDEX_UNIVERSE_PATH = ROOT / "config" / "index_universe.yaml"
 
 # C-1 (02-Jul): api_key read from env (.env), NEVER hardcoded — survives a future
 # api_key rotation (Rama updates .env; no code change) and never re-exposes a secret.
-API_KEY = os.environ.get("ZERODHA_API_KEY_LFL836", "")
+API_KEY = primary_api_key()
 
 
 def _load_index_universe() -> list[str]:
@@ -260,7 +261,7 @@ def main(argv=None) -> None:
         sys.exit(1)
 
     if not API_KEY:
-        print("ERROR: ZERODHA_API_KEY_LFL836 not set (.env not loaded / var missing)")
+        print("ERROR: " + (primary_api_key_env() or "<no api_key_env in accounts.csv>") + " not set (.env not loaded / var missing)")
         sys.exit(1)
 
     with open(TOKEN_PATH) as f:

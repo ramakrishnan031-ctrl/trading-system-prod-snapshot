@@ -39,13 +39,14 @@ load_dotenv(_ROOT / ".env")
 
 from core.logger import get_logger
 from core.time_authority import today_ist
+from core.account_registry import primary_api_key, primary_api_key_env
 
 DB_PATH = _ROOT / "data_store" / "trading_system.db"
 TOKEN_PATH = _ROOT / "data_store" / "session" / "zerodha_token.json"
 OUTPUT_DIR = _ROOT / "reports" / "integrity"
 # C-1 (02-Jul): api_key read from env (.env loaded above), NEVER hardcoded —
 # survives a future api_key rotation and never re-exposes a secret.
-API_KEY = os.environ.get("ZERODHA_API_KEY_LFL836", "")
+API_KEY = primary_api_key()
 
 from scripts.agy_runner import run_data_integrity as _agy_integrity
 
@@ -143,7 +144,7 @@ def _fetch_zerodha_candles(symbol: str, instrument_token: int, date_iso: str, lo
         return None
 
     if not API_KEY:
-        log.warning("integrity_check: ZERODHA_API_KEY_LFL836 not set (.env) for %s", symbol)
+        log.warning("integrity_check: %s not set (.env) for %s", primary_api_key_env() or "<no api_key_env in accounts.csv>", symbol)
         return None
 
     try:

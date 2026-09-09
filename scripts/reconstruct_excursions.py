@@ -56,6 +56,7 @@ if str(ROOT) not in sys.path:  # cron heartbeat import works without PYTHONPATH=
 # C-1 (02-Jul): load .env so the api_key resolves under cron (matches
 # scripts/reconcile_positions.py / auto_refresh_token.py). Double-load is a no-op.
 from dotenv import load_dotenv
+from core.account_registry import primary_api_key, primary_api_key_env
 load_dotenv(ROOT / ".env")
 
 DB_PATH = ROOT / "data_store" / "trading_system.db"
@@ -65,7 +66,7 @@ LOCK_PATH = ROOT / "data_store" / "locks" / "reconstruct_excursions.lock"
 
 # C-1 (02-Jul): api_key read from env (.env), NEVER hardcoded — survives a future
 # api_key rotation and never re-exposes a secret.
-API_KEY = os.environ.get("ZERODHA_API_KEY_LFL836", "")
+API_KEY = primary_api_key()
 JOB_NAME = "reconstruct_excursions"
 
 # Outcome labels (also the audit-row semantics).
@@ -285,7 +286,7 @@ def _build_fetcher(log) -> Optional[Fetcher]:
         from kiteconnect import KiteConnect
 
         if not API_KEY:
-            raise RuntimeError("ZERODHA_API_KEY_LFL836 not set (.env not loaded / var missing)")
+            raise RuntimeError((primary_api_key_env() or "<no api_key_env in accounts.csv>") + " not set (.env not loaded / var missing)")
         access_token = json.loads(TOKEN_PATH.read_text()).get("access_token")
         kite = KiteConnect(api_key=API_KEY)
         kite.set_access_token(access_token)
