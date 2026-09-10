@@ -74,6 +74,23 @@ def _iso(v):
         return v if isinstance(v, str) else None
 
 
+#: The positional layout of a queued signal tuple (see _process_one's docstring).
+_SIGNAL_TUPLE_FIELDS = ("signal_id", "scanner_name", "symbol", "trigger_price", "triggered_at")
+
+
+def _raw_signal_field(signal_tuple, name):
+    """Batch 1 evidence ONLY: one field of a queued signal, read WITHOUT the
+    "unknown" fallbacks the dispatcher uses for its log line. Absent => None, which
+    fails the record; ⛔ never a placeholder that passes as an identity."""
+    try:
+        if isinstance(signal_tuple, dict):
+            return signal_tuple.get(name)
+        i = _SIGNAL_TUPLE_FIELDS.index(name)
+        return signal_tuple[i] if signal_tuple is not None and len(signal_tuple) > i else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 class _PipelineReject(Exception):
     """Raised inside _process_one to cleanly short-circuit the pipeline."""
 
@@ -424,7 +441,15 @@ class SignalProcessor:
                     # "REJECTED" status (no suffix) is why the first no-bypass
                     # scan, which matched "REJECTED_", never saw it.
                     self._evidence_capture("P2_REJECT", lambda: {
-                        "signal_id": signal_id, "symbol": symbol,
+                        # ⚠️ From the TUPLE ITSELF, never the signal_id/symbol
+                        # locals above: they default to the literal "unknown" for
+                        # the log line, and an invented identity would pass as present.
+                        "signal_id": _raw_signal_field(signal_tuple, "signal_id"),
+                        "symbol": _raw_signal_field(signal_tuple, "symbol"),
+                        "strategy": self._evidence_strategy_for(
+                            _raw_signal_field(signal_tuple, "scanner_name")),
+                        "triggered_at": _iso(_raw_signal_field(signal_tuple, "triggered_at")),
+                        "trigger_price": _raw_signal_field(signal_tuple, "trigger_price"),
                         "status": "REJECTED", "reject_reason": "QUEUE_FULL",
                         "rejected_step": "QUEUE_FULL",
                     })
@@ -532,6 +557,28 @@ class SignalProcessor:
     # ------------------------------------------------------------------
     # Batch 1: forward evidence capture (OBSERVER — never affects a decision)
     # ------------------------------------------------------------------
+    def _evidence_strategy_for(self, scanner_name) -> Optional[str]:
+        """Batch 1 P2 identity ONLY -- ⛔ never read by a decision.
+
+        The strategy `scanner_name` maps to, resolved EXACTLY as _process_one's
+        Step 2 resolves it (same map, same extraction). A reject raised BEFORE
+        Step 2 has no `strategy_name` bound yet -- measured on production,
+        4,168 of 48,934 P2 rejects (all SHADOW_INNING_ACTIVE). The map is the
+        processor's own copy, never written after __init__, so this is Step 2's
+        answer, not a guess. None when the map cannot name it: the record is then
+        FAILED, which is the truth -- the pipeline rejected a signal it could not
+        attribute.
+        """
+        try:
+            entry = (getattr(self, "_scan_webhook_map", None) or {}).get(scanner_name)
+            if entry is None:
+                return None
+            name = (entry.get("strategy") if isinstance(entry, dict)
+                    else getattr(entry, "strategy", str(entry)))
+            return str(name) if name else None
+        except Exception:  # noqa: BLE001
+            return None
+
     def _evidence_capture(self, capture_point: str, payload) -> None:
         """Emit one evidence record. ⛔ NEVER raises, ⛔ never blocks admission.
 
@@ -1154,6 +1201,11 @@ class SignalProcessor:
             self._store.update_signal_status(signal_id, f"REJECTED_{rej.check}", rej.reason)
             self._evidence_capture("P2_REJECT", lambda: {
                 "signal_id": signal_id, "symbol": symbol,
+                # A reject raised before Step 2 has no `strategy_name` bound yet,
+                # so the strategy comes from the scanner, resolved exactly as
+                # Step 2 resolves it -- never left None, never guessed.
+                "strategy": self._evidence_strategy_for(scanner_name),
+                "triggered_at": _iso(triggered_at), "trigger_price": trigger_price,
                 "status": f"REJECTED_{rej.check}", "reject_reason": rej.reason,
                 "rejected_step": rej.check,
             })
@@ -1610,6 +1662,11 @@ class SignalProcessor:
             self._store.update_signal_status(candidate.signal_id, f"REJECTED_{rej.check}", rej.reason)
             self._evidence_capture("P2_REJECT", lambda: {
                 "signal_id": candidate.signal_id, "symbol": getattr(candidate, "symbol", None),
+                # ScoredCandidate carries both as REQUIRED dataclass fields; a
+                # candidate without them is a wiring hole and fails the record.
+                "strategy": getattr(candidate, "strategy_name", None),
+                "triggered_at": _iso(getattr(p, "triggered_at", None)),
+                "trigger_price": getattr(p, "trigger_price", None),
                 "status": f"REJECTED_{rej.check}", "reject_reason": rej.reason,
                 "rejected_step": rej.check,
             })
@@ -1659,6 +1716,11 @@ class SignalProcessor:
             self._evidence_capture("P2_REJECT", lambda: {
                 "signal_id": candidate.signal_id,
                 "symbol": getattr(candidate, "symbol", None),
+                "strategy": getattr(candidate, "strategy_name", None),
+                "triggered_at": _iso(getattr(getattr(candidate, "payload", None),
+                                             "triggered_at", None)),
+                "trigger_price": getattr(getattr(candidate, "payload", None),
+                                         "trigger_price", None),
                 "status": f"REJECTED_{reason}",
                 "reject_reason": f"allocator pre-check: {reason}",
                 "rejected_step": reason,
@@ -2256,6 +2318,11 @@ class SignalProcessor:
             )
             self._evidence_capture("P2_REJECT", lambda: {
                 "signal_id": signal_id, "symbol": symbol,
+                # From the WatchEntry: the local `strategy_name` is bound only
+                # after the kill-switch, window and shadow-inning checks. A
+                # WatchEntry carries no trigger TIME, so these records are PARTIAL.
+                "strategy": getattr(entry, "strategy_name", None),
+                "trigger_price": getattr(entry, "trigger_price", None),
                 "status": f"REJECTED_{rej.check}", "reject_reason": rej.reason,
                 "rejected_step": rej.check,
             })
@@ -2530,7 +2597,10 @@ class SignalProcessor:
                 self._bump_metric("entries_rejected")
             self._store.update_signal_status(signal_id, f"REJECTED_{rej.check}", rej.reason)
             self._evidence_capture("P2_REJECT", lambda: {
-                "signal_id": signal_id, "symbol": symbol,
+                "signal_id": signal_id, "symbol": symbol, "strategy": strategy_name,
+                # bound at the top from the ParkedCandidate, which carries no
+                # trigger TIME -- so these records are PARTIAL.
+                "trigger_price": getattr(parked, "trigger_price", None),
                 "status": f"REJECTED_{rej.check}", "reject_reason": rej.reason,
                 "rejected_step": rej.check,
             })

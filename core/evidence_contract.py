@@ -27,9 +27,16 @@ THREE THINGS THIS MODULE REFUSES TO DO
 ═══════════════════════════════════════════════════════════════════════════════
 record_status — AND WHY PARTIAL IS NARROW
 ═══════════════════════════════════════════════════════════════════════════════
-COMPLETE  every required field present, and every optional field supplied.
-PARTIAL   every required field present; some OPTIONAL CONTEXT absent.
+COMPLETE  every REQUIRED field present, and every OPTIONAL field supplied.
+PARTIAL   every REQUIRED field present; some OPTIONAL context absent.
 FAILED    a REQUIRED identity/provenance field is missing or unresolvable.
+
+REQUIRED / OPTIONAL / N/A is decided PER CAPTURE POINT (and, at P3, per verdict
+shape) by the table after `CONTEXT_FIELDS` -- never by "is this key populated at
+all". A P3 verdict has no sl_price because no screening verdict can have one:
+that is the correct shape of P3, not a gap, so an absent N/A field leaves the
+record COMPLETE. (The first build counted every absent key, so PARTIAL fired on
+essentially every record and therefore told nobody anything.)
 
 ⚠️ PARTIAL is for missing optional context ONLY. A missing identity or
 provenance field is a FAILURE and must be visible. Widening PARTIAL to cover it
@@ -85,24 +92,138 @@ REQUIRED_FIELDS: Tuple[str, ...] = (
 #: points the value is bound at every call site, so an absent one means the
 #: wiring is broken, not that the day was quiet. Absent => FAILED + sentinel,
 #: ⛔ never PARTIAL, because PARTIAL is where nobody looks.
-#: ⛔ P2_REJECT is deliberately NOT here yet: two of its five sites read
-#: `getattr(candidate, "symbol", None)`, whose shape is not guaranteed, and a
-#: flood of FAILED rows would bury the sentinel it is supposed to raise.
-#: Tightening P2 is an OPEN item for the next round.
+#: P2_REJECT joined on 10-Sep night (CLOSE-SIX §1), after the reject corpus was
+#: MEASURED instead of inferred from code shape. Production, 12-Jun..10-Sep:
+#: 48,934 P2 rejects, symbol and strategy resolvable on every one -- 44,766 with
+#: `strategy_name` already bound, and 4,168 (all SHADOW_INNING_ACTIVE, raised
+#: before the strategy lookup) through the scanner the pipeline holds. The two
+#: `getattr(candidate, ...)` sites have NO production population (the allocator
+#: has never run in enforce) and their candidate carries both as required
+#: dataclass fields. The "flood of FAILED rows" the first build feared did not
+#: exist; a FAILED P2 row now means a real wiring hole.
 REQUIRED_BY_CAPTURE_POINT: Dict[str, Tuple[str, ...]] = {
     P1_ACCEPT: ("symbol", "strategy"),
+    P2_REJECT: ("symbol", "strategy"),
     P3_SCREEN: ("symbol", "strategy"),
 }
 
-#: Decision context. Absent => PARTIAL. These are the fields whose absence is a
-#: gap in what we know, not a defect in who we are.
-OPTIONAL_FIELDS: Tuple[str, ...] = (
+#: Decision context: everything a record carries beyond identity and provenance.
+#: EVERY record has EVERY one of these keys (a fixed shape); what differs per
+#: capture point is which of them APPLY there -- see the table below.
+CONTEXT_FIELDS: Tuple[str, ...] = (
     "symbol", "strategy", "triggered_at", "status", "reject_reason",
     "rejected_step", "score_total", "tier", "step_results", "step_statuses",
     "trigger_price", "entry_price_final", "reanchored", "sl_price", "tgt_price",
     "qty", "sizing_breakdown", "binding_constraint", "market_data_snapshot",
     "trade_id",
 )
+
+# ─────────────────────────────────────────────────────────────────────────────
+# WHICH CONTEXT APPLIES WHERE (CLOSE-SIX §2, 10-Sep night)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Per capture point, every context field is exactly one of:
+#
+#   REQUIRED  identity (REQUIRED_BY_CAPTURE_POINT). Absent => FAILED + sentinel.
+#   OPTIONAL  context that APPLIES here. Absent => PARTIAL -- a real gap.
+#   N/A       context that CANNOT exist here. Absent => no effect.
+#
+# OPTIONAL is never listed: it is CONTEXT_FIELDS minus REQUIRED minus N/A, so a
+# new context field is OPTIONAL everywhere until someone argues it is N/A.
+#
+# ⚠️ An N/A value a caller supplies anyway is NOT recorded as a value: it moves
+# to `na_supplied`. That is how the screener's placeholders (score=0,
+# tier="LOW" on a verdict it never scored) stop masquerading as measurements --
+# and because they are moved, not dropped, a wrong table entry loses nothing.
+
+NA_BY_CAPTURE_POINT: Dict[str, Tuple[str, ...]] = {
+    # An ACCEPT has no reject, and the trade row is created by the placer AFTER
+    # the dispatch this record marks, so trade_id cannot exist yet.
+    P1_ACCEPT: ("reject_reason", "rejected_step", "trade_id"),
+    # P2 records the REJECT. A signal's screening context is its P3 row (a
+    # pre-screen reject has none; a post-screen reject has one), and a rejected
+    # signal never becomes a trade.
+    # ⚠️ N/A here states P2's SCOPE, not that nothing existed: a reject raised
+    # after sizing ran had sizing context that nothing captures -- for SIZING_*
+    # the breakdown that rejected it, and past sizing (the admission caps, the
+    # risk rungs, ENTRY_THROTTLED) a fully sized order. Registered, not hidden
+    # behind this table.
+    P2_REJECT: ("score_total", "tier", "step_results", "step_statuses",
+                "market_data_snapshot", "entry_price_final", "reanchored",
+                "sl_price", "tgt_price", "qty", "sizing_breakdown",
+                "binding_constraint", "trade_id"),
+    # A screening verdict precedes pricing, sizing and placement.
+    P3_SCREEN: ("entry_price_final", "reanchored", "sl_price", "tgt_price",
+                "qty", "sizing_breakdown", "binding_constraint", "trade_id"),
+}
+
+#: P3 is ONE capture point with six verdict SHAPES, and they do not all carry
+#: the same context. The extra N/A per shape:
+P3_SHAPE_NA: Dict[str, Tuple[str, ...]] = {
+    "PASSED": ("rejected_step",),                 # a pass has no rejecting step
+    "SCORE_REJECT": ("rejected_step",),           # REJECTED_SCORE_<n>: the score rejected it
+    "SCORED_STEP_REJECT": (),                     # REJECTED_SIGNAL_AGE: scored, then a step
+    "UNSCORED_STEP_REJECT": ("score_total", "tier"),   # REJECTED_STEP_ERROR: scorer never ran
+    "PRE_SCREEN_REJECT": ("score_total", "tier",       # decided before the step executor
+                          "step_results", "step_statuses"),
+    "SKIPPED": ("rejected_step", "score_total", "tier",
+                "step_results", "step_statuses"),
+    "UNKNOWN": (),   # a status nobody classified: EVERYTHING applies (strictest)
+}
+
+#: The screener's pre-screen rejects, NAMED -- an unlisted REJECTED_* is
+#: UNKNOWN (strictest), never silently N/A. AT_CIRCUIT exists only on the V3
+#: Hard-Gate's enforce path.
+P3_PRE_SCREEN_STATUSES: frozenset = frozenset({
+    "REJECTED_NOT_MIS_TRADABLE", "REJECTED_CIRCUIT_PROXIMITY", "REJECTED_AT_CIRCUIT",
+})
+
+
+def p3_shape(status: Any) -> str:
+    """The verdict shape of a P3 record, read from its own `status` -- the
+    screener's structured vocabulary, never free text.
+
+    ⚠️ REJECTED_SIGNAL_AGE is the OFF/shadow path's step-7 reject, which IS
+    scored. The V3 Hard-Gate reuses the same status for a PRE-screen reject when
+    it ENFORCES -- it does not today (`v3_hardgate_mode: shadow`), and a guard
+    test fails the moment that changes, because this table must change with it.
+    """
+    s = status if isinstance(status, str) else ""
+    if s == "PASSED":
+        return "PASSED"
+    if s.startswith("REJECTED_SCORE_"):
+        return "SCORE_REJECT"
+    if s == "REJECTED_SIGNAL_AGE":
+        return "SCORED_STEP_REJECT"
+    if s == "REJECTED_STEP_ERROR":
+        return "UNSCORED_STEP_REJECT"
+    if s in P3_PRE_SCREEN_STATUSES:
+        return "PRE_SCREEN_REJECT"
+    if s.startswith("SKIPPED_"):
+        return "SKIPPED"
+    return "UNKNOWN"
+
+
+#: Values that are a placeholder, not an identity. The dispatcher logs a missing
+#: symbol as the literal "unknown"; ⛔ NO INVENTED IDENTITY is enforced HERE, by
+#: the contract, rather than trusted to every call site.
+_PLACEHOLDER_IDENTITIES: frozenset = frozenset({"unknown"})
+
+
+def _absent_identity(v: Any) -> bool:
+    if v is None or v == "" or v == {}:
+        return True
+    return isinstance(v, str) and v.strip().lower() in _PLACEHOLDER_IDENTITIES
+
+
+def applicability(capture_point: str, status: Any = None) -> Tuple[Tuple[str, ...], frozenset]:
+    """(identity REQUIRED here, context N/A here) for one record. OPTIONAL is
+    everything else in CONTEXT_FIELDS."""
+    required = REQUIRED_BY_CAPTURE_POINT.get(capture_point, ())
+    na = set(NA_BY_CAPTURE_POINT.get(capture_point, ()))
+    if capture_point == P3_SCREEN:
+        na.update(P3_SHAPE_NA[p3_shape(status)])
+    return required, frozenset(na)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # §6.4 — the code fingerprint, from the DEPLOYED BYTES
@@ -417,13 +538,24 @@ class EvidenceRecorder:
             "code_fingerprint_files": self._fingerprint_files,
             "config_hashes": self._config_hashes,
         }
-        for f in OPTIONAL_FIELDS:
-            rec[f] = payload.get(f)
+        # CLOSE-SIX §2: what APPLIES here decides completeness -- not whether a
+        # key happens to be populated. An N/A value is moved aside, never
+        # recorded as a value (see NA_BY_CAPTURE_POINT).
+        pt_required, na = applicability(capture_point, payload.get("status"))
+        na_supplied: Dict[str, Any] = {}
+        for f in CONTEXT_FIELDS:
+            v = payload.get(f)
+            if f in na and v is not None:
+                na_supplied[f] = v
+                v = None
+            rec[f] = v
+        if na_supplied:
+            rec["na_supplied"] = na_supplied
 
-        required = REQUIRED_FIELDS + REQUIRED_BY_CAPTURE_POINT.get(capture_point, ())
+        required = REQUIRED_FIELDS + pt_required
         missing_required = [
             f for f in required
-            if rec.get(f) in (None, "", {}) and f != "config_hashes"
+            if _absent_identity(rec.get(f)) and f != "config_hashes"
         ]
         if not self._config_hashes:
             missing_required.append("config_hashes")
@@ -432,9 +564,9 @@ class EvidenceRecorder:
             rec["record_status"] = FAILED
             rec["missing_required"] = sorted(set(missing_required))
         else:
-            _pt_required = REQUIRED_BY_CAPTURE_POINT.get(capture_point, ())
-            missing_optional = [f for f in OPTIONAL_FIELDS
-                                if rec.get(f) is None and f not in _pt_required]
+            missing_optional = [f for f in CONTEXT_FIELDS
+                                if f not in na and f not in pt_required
+                                and rec.get(f) is None]
             rec["record_status"] = PARTIAL if missing_optional else COMPLETE
             if missing_optional:
                 rec["missing_optional"] = missing_optional

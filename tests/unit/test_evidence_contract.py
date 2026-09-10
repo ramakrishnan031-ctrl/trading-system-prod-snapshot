@@ -24,18 +24,22 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from core.evidence_contract import (  # noqa: E402
     COMPLETE,
+    CONTEXT_FIELDS,
     CONTRACT_VERSION,
     EVIDENCE_EPOCH,
     FAILED,
-    OPTIONAL_FIELDS,
+    NA_BY_CAPTURE_POINT,
     P1_ACCEPT,
     P2_REJECT,
     P3_SCREEN,
     PARTIAL,
+    REQUIRED_BY_CAPTURE_POINT,
     REQUIRED_FIELDS,
     EvidenceRecorder,
+    applicability,
     compute_code_fingerprint,
     evidence_path,
+    p3_shape,
 )
 
 REPO = Path(__file__).resolve().parents[2]
@@ -99,14 +103,19 @@ def test_records_are_append_only(tmp_path):
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _full_payload():
-    return {f: (f + "_v") for f in OPTIONAL_FIELDS}
+    return {f: (f + "_v") for f in CONTEXT_FIELDS}
 
 
 def test_full_payload_is_COMPLETE(tmp_path):
     r = rec_at(tmp_path)
     p = _full_payload(); p["signal_id"] = "sig_1"
     r.capture(P1_ACCEPT, p)
-    assert read_records(tmp_path)[0]["record_status"] == COMPLETE
+    row = read_records(tmp_path)[0]
+    assert row["record_status"] == COMPLETE
+    # ...and the fields that cannot exist at an ACCEPT were moved aside, never
+    # recorded as values (CLOSE-SIX §2):
+    assert set(row["na_supplied"]) == set(NA_BY_CAPTURE_POINT[P1_ACCEPT])
+    assert all(row[f] is None for f in NA_BY_CAPTURE_POINT[P1_ACCEPT])
 
 
 def test_missing_optional_context_is_PARTIAL_not_FAILED(tmp_path):
@@ -641,16 +650,21 @@ def test_p3_call_sites_supply_identity_from_the_enclosing_scope():
     assert '"symbol": symbol,' in block
     assert '"strategy": strategy_name,' in block
     assert '"symbol": None' not in block, "the silent-None placeholder must be gone"
+    # CLOSE-SIX §2: ...and the signal's trigger, on every verdict path, so that a
+    # normal verdict can read COMPLETE.
+    assert ss.count('strategy_name=getattr(strategy, "name", None), '
+                    'trigger_price=trigger_price, triggered_at=triggered_at') == 15
+    assert '"trigger_price": trigger_price,' in block
 
 
-def test_p2_is_documented_as_not_yet_tightened():
-    """⚠️ P2 is deliberately NOT in REQUIRED_BY_CAPTURE_POINT yet — two of its five
-    sites read getattr(candidate, "symbol", None). The reason must stay written
-    down, or a future reader will think it was forgotten."""
-    from core.evidence_contract import REQUIRED_BY_CAPTURE_POINT
-    assert P2_REJECT not in REQUIRED_BY_CAPTURE_POINT
+def test_p2_identity_is_required_and_the_measurement_stays_written_down():
+    """CLOSE-SIX §1: P2 joined REQUIRED only after the production reject corpus was
+    MEASURED. The figures that justified it must stay beside the table, or the first
+    build's "flood of FAILED rows" fear gets re-derived from code shape alone."""
+    assert REQUIRED_BY_CAPTURE_POINT[P2_REJECT] == ("symbol", "strategy")
     src = (REPO / "core" / "evidence_contract.py").read_text(encoding="utf-8")
-    assert "P2_REJECT is deliberately NOT here yet" in src
+    assert "48,934 P2 rejects" in src and "4,168" in src
+    assert "P2_REJECT is deliberately NOT here yet" not in src
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -984,6 +998,9 @@ def test_queue_full_reject_is_captured(tmp_path):
     rows = read_records(tmp_path)
     assert len(rows) == 1 and rows[0]["capture_point"] == P2_REJECT
     assert (rows[0]["status"], rows[0]["reject_reason"]) == ("REJECTED", "QUEUE_FULL")
+    # CLOSE-SIX §1/§2: the strategy resolved from the scanner, and COMPLETE
+    assert (rows[0]["symbol"], rows[0]["strategy"]) == ("RELIANCE", "gap_go_long_v1")
+    assert rows[0]["record_status"] == COMPLETE, rows[0].get("missing_optional")
     row = store.fetch_one(
         "SELECT status, rejection_reason FROM signals WHERE signal_id = ?", ("sig_qf",))
     assert (row["status"], row["rejection_reason"]) == ("REJECTED", "QUEUE_FULL")
@@ -1154,3 +1171,462 @@ def test_evidence_backups_survive_backup_retention_by_the_planner_itself(tmp_pat
     doomed |= {p.resolve() for p in plan.sidecar_delete}
     assert len(doomed) == 2, "non-vacuity: 16 daily backups, keep 14 -> two reaped"
     assert not doomed & {f.resolve() for f in kept}
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# CLOSE-SIX §1 (10-Sep night) — P2 IDENTITY IS REQUIRED, FROM WHAT EACH SITE HOLDS
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# Measured on production BEFORE anything was designed (read-only, 12-Jun..10-Sep):
+# 48,934 P2 rejects; symbol and strategy resolvable on every one -- 44,766 with
+# strategy_name bound, 4,168 (SHADOW_INNING_ACTIVE, raised before Step 2) through
+# the scanner. admit_prepared / reject_prepared (allocator enforce) and QUEUE_FULL
+# have no production population at all.
+
+def _drive_p2(tmp_path, *, sig="sig_p2", scanner="gap_go_long", symbol="RELIANCE",
+              sink=None, **proc_kw):
+    """ONE signal through the REAL _process_one to a P2 reject, with a real
+    recorder attached. Returns (the signals row, the P2 records)."""
+    from tests.unit.test_signal_processor import (
+        _insert_queued_signal, _make_proc, _make_store, _now_tup)
+    store, _ = _make_store()
+    _insert_queued_signal(store, sig, symbol=symbol, scanner=scanner)
+    proc, _, _ = _make_proc(store=store, **proc_kw)
+    proc._evidence = rec_at(tmp_path, critical_sink=sink)
+    proc._process_one_safe(_now_tup(sig, scanner=scanner, symbol=symbol, price=2500.0))
+    row = store.fetch_one("SELECT status FROM signals WHERE signal_id = ?", (sig,))
+    return row, [r for r in read_records(tmp_path) if r["capture_point"] == P2_REJECT]
+
+
+@pytest.mark.parametrize("missing", ["symbol", "strategy"])
+def test_p2_unresolvable_identity_is_FAILED_and_fires_the_sentinel(tmp_path, missing):
+    """⭐ THE BEHAVIOUR CHANGE. Until 10-Sep night this exact payload read PARTIAL
+    -- P2 sat outside REQUIRED_BY_CAPTURE_POINT -- so a reject nobody could
+    attribute looked like a quiet day. The mutation that takes P2 back out of the
+    table turns this RED, with PARTIAL."""
+    alerts = []
+    r = rec_at(tmp_path, critical_sink=lambda s, d: alerts.append((s, d)))
+    payload = {"signal_id": "sig_1", "symbol": "ACME", "strategy": "gap_go_long_v1",
+               "status": "REJECTED_EXPIRED", "reject_reason": "Signal age 75.0s > expiry 60s",
+               "rejected_step": "EXPIRED", "trigger_price": 100.0,
+               "triggered_at": "2026-09-11T10:00:00"}
+    payload[missing] = None
+    r.capture(P2_REJECT, payload)
+    row = read_records(tmp_path)[0]
+    assert row["record_status"] == FAILED
+    assert row["missing_required"] == [missing]
+    assert len(alerts) == 1 and alerts[0][0] == "EVIDENCE_CAPTURE_FAILED"
+
+
+def test_a_placeholder_identity_is_not_an_identity(tmp_path):
+    """⛔ NO INVENTED IDENTITY, enforced by the contract rather than trusted to every
+    call site: the dispatcher's literal "unknown" is not a symbol."""
+    r = rec_at(tmp_path)
+    r.capture(P2_REJECT, {"signal_id": "sig_1", "symbol": "unknown",
+                          "strategy": "gap_go_long_v1", "status": "REJECTED"})
+    row = read_records(tmp_path)[0]
+    assert row["record_status"] == FAILED and row["missing_required"] == ["symbol"]
+
+
+def test_p2_pre_lookup_reject_resolves_strategy_from_the_scanner(tmp_path):
+    """The measured pre-lookup class: SHADOW_INNING_ACTIVE (4,168 production rows) is
+    raised BEFORE Step 2, with no strategy_name bound. The record must name the
+    strategy Step 2 would bind -- the test map is deliberately NOT an identity map
+    (gap_go_long -> gap_go_long_v1), so copying the scanner name fails -- and a
+    normal reject must read COMPLETE (§2.4)."""
+    from tests.unit.test_signal_processor import _StubShadowTracker
+    row, p2 = _drive_p2(tmp_path, shadow_tracker=_StubShadowTracker(tracking={"RELIANCE"}))
+    assert row["status"] == "REJECTED_SHADOW_INNING_ACTIVE"
+    assert len(p2) == 1
+    assert (p2[0]["symbol"], p2[0]["strategy"]) == ("RELIANCE", "gap_go_long_v1")
+    assert p2[0]["record_status"] == COMPLETE, p2[0].get("missing_optional")
+
+
+def test_p2_post_lookup_reject_carries_the_strategy_step2_bound(tmp_path):
+    """The largest measured class: STRATEGY_CONTROL (23,481 production rows)."""
+    import types
+    off = types.SimpleNamespace(name="gap_go_long_v1", direction="LONG",
+                                intent="INTRADAY", enabled=False)
+    row, p2 = _drive_p2(tmp_path, strategies={"gap_go_long_v1": off})
+    assert row["status"] == "REJECTED_STRATEGY_CONTROL"
+    assert len(p2) == 1
+    assert (p2[0]["symbol"], p2[0]["strategy"]) == ("RELIANCE", "gap_go_long_v1")
+    assert p2[0]["record_status"] == COMPLETE, p2[0].get("missing_optional")
+
+
+def test_p2_unmapped_scanner_is_FAILED_never_guessed(tmp_path):
+    """A scanner the pipeline cannot map is rejected UNKNOWN_STRATEGY at Step 2, and
+    the evidence must say it could not attribute the signal: FAILED plus the
+    sentinel, never the scanner name dressed up as a strategy."""
+    alerts = []
+    row, p2 = _drive_p2(tmp_path, scanner="scanner_not_in_the_map",
+                        sink=lambda s, d: alerts.append(s))
+    assert row["status"] == "REJECTED_UNKNOWN_STRATEGY"
+    assert len(p2) == 1 and p2[0]["strategy"] is None
+    assert p2[0]["record_status"] == FAILED and p2[0]["missing_required"] == ["strategy"]
+    assert alerts == ["EVIDENCE_CAPTURE_FAILED"]
+
+
+class _AttrEntry:
+    def __init__(self, strategy):
+        self.strategy = strategy
+
+
+@pytest.mark.parametrize("entry,expected", [
+    ({"strategy": "s_dict"}, "s_dict"),
+    (_AttrEntry("s_attr"), "s_attr"),
+    ("s_bare", "s_bare"),            # Step 2's str(map_entry) fallback
+    ({"strategy": None}, None),      # Step 2 rejects UNKNOWN_STRATEGY: unattributable
+    ({}, None),
+])
+def test_evidence_strategy_mirrors_step2_extraction(entry, expected):
+    from signals.signal_processor import SignalProcessor
+    sp = SignalProcessor.__new__(SignalProcessor)
+    sp._scan_webhook_map = {"scn": entry}
+    assert sp._evidence_strategy_for("scn") == expected
+    assert sp._evidence_strategy_for("not_mapped") is None
+
+
+def test_step2_extraction_is_still_the_one_the_mirror_copies():
+    """_evidence_strategy_for copies Step 2's extraction. If Step 2 ever changes,
+    this fails first, so the copy is re-checked instead of silently diverging."""
+    src = (REPO / "signals" / "signal_processor.py").read_text(encoding="utf-8")
+    assert src.count(
+        'map_entry.get("strategy") if isinstance(map_entry, dict)\n'
+        '                else getattr(map_entry, "strategy", str(map_entry))') == 1
+
+
+def test_queue_full_capture_never_inherits_the_unknown_fallback(tmp_path):
+    """The dispatcher defaults a missing symbol to the literal "unknown" for its log
+    line. Evidence reads the tuple itself: a malformed tuple is a FAILED record,
+    never a COMPLETE one about a stock called "unknown"."""
+    import queue as _queue
+    from tests.unit.test_signal_processor import _make_proc
+    proc, _, _ = _make_proc()
+
+    class Exhausted:
+        def try_acquire(self, bucket): return False
+
+    class FullQueue:
+        def put(self, *a, **k): raise _queue.Full()
+
+    proc._rate_limiter, proc._queue = Exhausted(), FullQueue()
+    proc._evidence = rec_at(tmp_path)
+    proc._process_one_safe(("sig_short", "gap_go_long"))   # no symbol, price or time
+    rows = read_records(tmp_path)
+    assert len(rows) == 1
+    assert rows[0]["symbol"] is None, "the log line's 'unknown' leaked into the evidence"
+    assert rows[0]["strategy"] == "gap_go_long_v1"
+    assert rows[0]["record_status"] == FAILED and rows[0]["missing_required"] == ["symbol"]
+
+
+def _scored_candidate(**over):
+    from allocation.models import AdmitPayload, ScoredCandidate
+    from tests.unit.test_signal_processor import (
+        _BUY_STRATEGY, _MockScreeningResult, _SizingResult)
+    pay = AdmitPayload(scanner_name="gap_go_long", strategy_obj=_BUY_STRATEGY,
+                       sizing=_SizingResult(success=True),
+                       screen_result=_MockScreeningResult(), entry_price=2500.0,
+                       sl_price=2450.0, trigger_price=2498.0,
+                       triggered_at=datetime(2026, 9, 11, 10, 0, 0), retry_count=0,
+                       now=datetime(2026, 9, 11, 10, 0, 1))
+    kw = dict(signal_id="sig_alloc", symbol="RELIANCE", strategy_name="gap_go_long_v1",
+              side="BUY", intent="INTRADAY", score=75.0, tier="HIGH",
+              margin_required=5000.0, sector="Energy", triggered_epoch=0.0, payload=pay)
+    kw.update(over)
+    return ScoredCandidate(**kw)
+
+
+def test_reject_prepared_supplies_identity_from_the_candidate(tmp_path):
+    """Enforce-only (no production population). The candidate carries symbol and
+    strategy_name as REQUIRED dataclass fields, so FAIL costs nothing here."""
+    from tests.unit.test_signal_processor import _make_proc
+    proc, _, _ = _make_proc()
+    proc._evidence = rec_at(tmp_path)
+    proc.reject_prepared(_scored_candidate(), "PORTFOLIO_FULL")
+    p2 = [r for r in read_records(tmp_path) if r["capture_point"] == P2_REJECT]
+    assert len(p2) == 1
+    assert (p2[0]["symbol"], p2[0]["strategy"]) == ("RELIANCE", "gap_go_long_v1")
+    assert (p2[0]["trigger_price"], p2[0]["triggered_at"]) == (2498.0, "2026-09-11T10:00:00")
+    assert p2[0]["record_status"] == COMPLETE, p2[0].get("missing_optional")
+
+
+def test_admit_prepared_reject_supplies_identity_from_the_candidate(tmp_path):
+    from tests.unit.test_signal_processor import _ApprovalResult, _MockRiskEngine, _make_proc
+    risk = _MockRiskEngine(result=_ApprovalResult(approved=False, reason="5 open",
+                                                  failed_check="OPEN_POSITIONS"))
+    proc, _, _ = _make_proc(risk=risk)
+    proc._evidence = rec_at(tmp_path)
+    assert proc.admit_prepared(_scored_candidate()) is False
+    p2 = [r for r in read_records(tmp_path) if r["capture_point"] == P2_REJECT]
+    assert len(p2) == 1 and p2[0]["status"] == "REJECTED_OPEN_POSITIONS"
+    assert (p2[0]["symbol"], p2[0]["strategy"]) == ("RELIANCE", "gap_go_long_v1")
+    assert p2[0]["record_status"] == COMPLETE, p2[0].get("missing_optional")
+
+
+def test_the_dormant_resumes_supply_p2_identity_and_are_honestly_PARTIAL(tmp_path):
+    """The gate and retest resumes (dormant: 0 production log lines, 01-10 Sep) name
+    the strategy from the object they resume. Neither object carries a trigger
+    TIME, so their P2 records are PARTIAL -- honestly: the field applies, it is
+    just not carried."""
+    from screening.entry_gate import WatchEntry
+    from screening.retest_monitor import ParkedCandidate
+    from tests.unit.test_signal_processor import _MockKillSwitch, _make_proc
+    proc, _, _ = _make_proc(ks=_MockKillSwitch(active=True))
+    proc._evidence = rec_at(tmp_path)
+    proc.continue_from_gate(WatchEntry(
+        signal_id="sig_gate_p2", symbol="RELIANCE", direction="LONG", trigger_price=2500.0,
+        entry_price=2495.0, sl_price=2445.0, tgt_price=2595.0, tolerance_pct=0.005,
+        timeout_sec=300, strategy_name="gap_go_long_v1", tier="HIGH",
+        scanner_name="gap_go_long", intent="INTRADAY", added_at=datetime.now()))
+    proc.continue_from_retest(ParkedCandidate(
+        signal_id="sig_retest_p2", symbol="INFY", direction="LONG", zone_band_low=1500.0,
+        zone_band_high=1510.0, entry_price=1512.0, sl_price=1495.0,
+        strategy="gap_go_long_v1", intent="INTRADAY", tier="HIGH", trigger_price=1511.0,
+        sizing_inputs={}, added_at=datetime.now()))
+    p2 = {r["signal_id"]: r for r in read_records(tmp_path) if r["capture_point"] == P2_REJECT}
+    assert set(p2) == {"sig_gate_p2", "sig_retest_p2"}
+    for rec in p2.values():
+        assert rec["status"] == "REJECTED_KILL_SWITCH"
+        assert rec["strategy"] == "gap_go_long_v1"
+        assert rec["record_status"] == PARTIAL and rec["missing_optional"] == ["triggered_at"]
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# CLOSE-SIX §2 — COMPLETE vs PARTIAL: WHAT APPLIES, NOT WHICH KEY IS SET
+# ═════════════════════════════════════════════════════════════════════════════
+
+_P3_STATUSES = ["PASSED", "REJECTED_SCORE_61", "REJECTED_SIGNAL_AGE", "REJECTED_STEP_ERROR",
+                "REJECTED_NOT_MIS_TRADABLE", "SKIPPED_QUOTE_UNAVAILABLE", None]
+
+
+def test_every_context_field_has_exactly_one_class_everywhere():
+    for point, statuses in ((P1_ACCEPT, [None]), (P2_REJECT, [None]), (P3_SCREEN, _P3_STATUSES)):
+        for st in statuses:
+            req, na = applicability(point, st)
+            assert set(req) <= set(CONTEXT_FIELDS), (point, st)
+            assert na <= set(CONTEXT_FIELDS), (point, st)
+            assert not set(req) & na, f"{point}/{st}: a field cannot be REQUIRED and N/A"
+            optional = set(CONTEXT_FIELDS) - set(req) - na
+            assert optional, f"{point}/{st}: no OPTIONAL context -- PARTIAL is unreachable"
+
+
+@pytest.mark.parametrize("status,shape", [
+    ("PASSED", "PASSED"),
+    ("REJECTED_SCORE_59", "SCORE_REJECT"),
+    ("REJECTED_SCORE_0", "SCORE_REJECT"),
+    ("REJECTED_SIGNAL_AGE", "SCORED_STEP_REJECT"),
+    ("REJECTED_STEP_ERROR", "UNSCORED_STEP_REJECT"),
+    ("REJECTED_NOT_MIS_TRADABLE", "PRE_SCREEN_REJECT"),
+    ("REJECTED_CIRCUIT_PROXIMITY", "PRE_SCREEN_REJECT"),
+    ("REJECTED_AT_CIRCUIT", "PRE_SCREEN_REJECT"),
+    ("SKIPPED_QUOTE_UNAVAILABLE", "SKIPPED"),
+    ("SKIPPED_EXECUTOR_ERROR", "SKIPPED"),
+    ("SKIPPED_SCORER_ERROR", "SKIPPED"),
+    ("REJECTED_A_STATUS_NOBODY_CLASSIFIED", "UNKNOWN"),
+    (None, "UNKNOWN"),
+    (42, "UNKNOWN"),
+])
+def test_p3_shape_is_read_from_the_verdicts_own_status(status, shape):
+    assert p3_shape(status) == shape
+
+
+def test_every_status_the_screener_can_emit_has_a_p3_shape():
+    """The table is honest only while it covers the screener's vocabulary. Every
+    status literal in secondary_screener.py, its REJECTED_SCORE_ f-string, and every
+    reason HardGate.evaluate can return (emitted as REJECTED_<reason>) must map to a
+    known shape: a new status fails HERE, not silently as UNKNOWN in the corpus."""
+    import ast
+    import re
+    ss = (REPO / "screening" / "secondary_screener.py").read_text(encoding="utf-8")
+    emitted = set()
+    for n in ast.walk(ast.parse(ss)):
+        if (isinstance(n, ast.Constant) and isinstance(n.value, str)
+                and re.fullmatch(r"PASSED|(REJECTED|SKIPPED)_[A-Z_]+", n.value)):
+            emitted.add(n.value)
+        if (isinstance(n, ast.JoinedStr) and n.values and isinstance(n.values[0], ast.Constant)
+                and n.values[0].value == "REJECTED_SCORE_"):
+            emitted.add("REJECTED_SCORE_61")
+    hg = ast.parse((REPO / "screening" / "hard_gate.py").read_text(encoding="utf-8"))
+    consts = {t.id: node.value.value for node in hg.body
+              if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant)
+              for t in node.targets if isinstance(t, ast.Name)}
+    evaluate = next(f for c in hg.body if isinstance(c, ast.ClassDef) and c.name == "HardGate"
+                    for f in c.body if isinstance(f, ast.FunctionDef) and f.name == "evaluate")
+    reasons = {consts[c.args[1].id] if isinstance(c.args[1], ast.Name) else c.args[1].value
+               for c in ast.walk(evaluate)
+               if isinstance(c, ast.Call) and getattr(c.func, "id", None) == "GateVerdict"
+               and len(c.args) >= 2 and isinstance(c.args[0], ast.Constant)
+               and c.args[0].value is False}
+    assert reasons, "found no Hard-Gate reject reasons -- the scan has gone blind"
+    emitted |= {"REJECTED_" + r for r in reasons}
+    assert {"PASSED", "SKIPPED_QUOTE_UNAVAILABLE", "REJECTED_SCORE_61"} <= emitted, \
+        "the status scan has gone blind"
+    unknown = sorted(s for s in emitted if p3_shape(s) == "UNKNOWN")
+    assert unknown == [], f"statuses the screener can emit with no P3 shape: {unknown}"
+
+
+def test_the_p3_shape_table_assumes_the_hard_gate_is_not_enforcing():
+    """p3_shape reads REJECTED_SIGNAL_AGE as the OFF/shadow path's SCORED step-7
+    reject. An ENFORCING Hard-Gate reuses that status for a PRE-screen reject
+    (placeholder score, no steps), so the table must change the moment it does."""
+    import re
+    cfg = (REPO / "config" / "scoring_weights.yaml").read_text(encoding="utf-8")
+    m = re.search(r'^v3_hardgate_mode:\s*"?([a-z]+)"?', cfg, re.M)
+    assert m, "v3_hardgate_mode not found -- this guard has gone blind"
+    assert m.group(1) != "enforce", \
+        "the Hard-Gate enforces: REJECTED_SIGNAL_AGE is now ALSO a pre-screen reject -- fix p3_shape"
+
+
+def _p3(status, **over):
+    base = {"signal_id": "sig_1", "symbol": "ACME", "strategy": "gap_go_long_v1",
+            "status": status, "reject_reason": status, "score_total": 57, "tier": "LOW",
+            "step_results": {"volume_surge": 1.0}, "step_statuses": {"volume_surge": "PASSED"},
+            "market_data_snapshot": {"ltp": 100.0}, "trigger_price": 99.9,
+            "triggered_at": "2026-09-11T10:00:00"}
+    base.update(over)
+    return base
+
+
+def test_an_absent_NA_field_is_COMPLETE_but_an_absent_OPTIONAL_one_is_PARTIAL(tmp_path):
+    """⭐ §2.1 in one test: a P3 verdict has no sl_price (N/A, still COMPLETE); a
+    scored verdict without step_statuses is missing context that applies (PARTIAL)."""
+    r = rec_at(tmp_path)
+    r.capture(P3_SCREEN, _p3("REJECTED_SCORE_57"))
+    no_steps = _p3("REJECTED_SCORE_57")
+    no_steps.pop("step_statuses")
+    r.capture(P3_SCREEN, no_steps)
+    a, b = read_records(tmp_path)
+    assert a["sl_price"] is None
+    assert a["record_status"] == COMPLETE and "missing_optional" not in a
+    assert b["record_status"] == PARTIAL and b["missing_optional"] == ["step_statuses"]
+
+
+def test_a_placeholder_score_on_an_unscored_verdict_is_moved_aside_not_recorded(tmp_path):
+    """The screener hands P3 score=0 / tier="LOW" on verdicts it never scored.
+    Recorded as values they would pool with real scores -- the corpus lying about
+    itself. They move to na_supplied; nothing is dropped."""
+    r = rec_at(tmp_path)
+    r.capture(P3_SCREEN, _p3("SKIPPED_QUOTE_UNAVAILABLE", score_total=0, tier="LOW",
+                             step_results={}, step_statuses={}, market_data_snapshot={}))
+    row = read_records(tmp_path)[0]
+    assert (row["score_total"], row["tier"], row["step_results"]) == (None, None, None)
+    assert row["na_supplied"] == {"score_total": 0, "tier": "LOW",
+                                  "step_results": {}, "step_statuses": {}}
+    assert row["record_status"] == COMPLETE
+
+
+def test_an_unclassified_status_is_the_strictest_shape(tmp_path):
+    """A status the table does not know applies EVERYTHING: nothing is moved aside,
+    and absent context makes it PARTIAL -- never a quiet COMPLETE."""
+    r = rec_at(tmp_path)
+    r.capture(P3_SCREEN, _p3("REJECTED_SOMETHING_NEW", score_total=0))
+    row = read_records(tmp_path)[0]
+    assert row["score_total"] == 0 and "na_supplied" not in row
+    assert row["record_status"] == PARTIAL and row["missing_optional"] == ["rejected_step"]
+
+
+@pytest.mark.parametrize("case,pullback,quotes", [
+    ("momentum, live LTP re-anchors", False, {"RELIANCE": 2550.0}),
+    ("momentum, quote unavailable (stale)", False, {}),
+    ("pullback, never fetches a quote", True, {"RELIANCE": 2550.0}),
+])
+def test_a_normal_p1_through_the_real_pipeline_reads_COMPLETE(tmp_path, case, pullback, quotes):
+    """§2.4 at P1. Before §2 this record could NOT be COMPLETE: reject_reason,
+    rejected_step and trade_id cannot exist at an ACCEPT, yet they were counted."""
+    from tests.unit.test_signal_processor import _MockStrategy
+    strat = _MockStrategy(name="gap_go_long_v1", direction="LONG", entry_method="LIMIT",
+                          entry_offset_pct=0.001, pullback_wait_enabled=pullback)
+    placer, p1 = _drive_to_p1(tmp_path, strategy=strat, quote_prices=quotes)
+    assert placer.calls and len(p1) == 1, case
+    assert p1[0]["record_status"] == COMPLETE, (case, p1[0].get("missing_optional"))
+
+
+def _screen_for_real(tmp_path, *, market_data, min_score=0):
+    """ONE signal through the REAL SecondaryScreener (real StepExecutor + scorer),
+    with a real recorder attached. Returns (the verdict, the P3 records)."""
+    from datetime import timedelta
+    from unittest.mock import patch
+    from tests.unit.test_secondary_screener import (
+        _insert_signal_row, _make_screener, _mock_strategy, _prime_time_patch)
+    screener, store = _make_screener()
+    _insert_signal_row(store)
+    screener._evidence = rec_at(tmp_path)
+    prime = _prime_time_patch()
+    with patch("screening.step_executor.now_ist", return_value=prime):
+        res = screener.screen(
+            signal_id="sig_001", symbol="RELIANCE", scanner_name="open_low_breakout_long",
+            trigger_price=2500.0, triggered_at=prime - timedelta(seconds=10),
+            direction="LONG", intent="INTRADAY", strategy=_mock_strategy(min_score=min_score),
+            market_data=market_data)
+    return res, [r for r in read_records(tmp_path) if r["capture_point"] == P3_SCREEN]
+
+
+@pytest.mark.parametrize("case,passing_md,min_score,status_prefix", [
+    ("a pass", True, 0, "PASSED"),
+    ("a score reject", True, 101, "REJECTED_SCORE_"),
+    ("a skip: no quote", False, 0, "SKIPPED_QUOTE_UNAVAILABLE"),
+])
+def test_a_normal_p3_through_the_real_screener_reads_COMPLETE(
+        tmp_path, case, passing_md, min_score, status_prefix):
+    """§2.4 at P3, on the three shapes that dominate the corpus."""
+    from tests.unit.test_secondary_screener import _passing_market_data
+    res, p3 = _screen_for_real(tmp_path, min_score=min_score,
+                               market_data=_passing_market_data() if passing_md else None)
+    assert res.status.startswith(status_prefix), (case, res.status)
+    assert len(p3) == 1
+    assert (p3[0]["symbol"], p3[0]["strategy"]) == ("RELIANCE", "open_low_breakout_long")
+    assert p3[0]["trigger_price"] == 2500.0 and p3[0]["triggered_at"]
+    assert p3[0]["record_status"] == COMPLETE, (case, p3[0].get("missing_optional"))
+
+
+@pytest.mark.parametrize("status,rejected_step,has_steps", [
+    ("REJECTED_CIRCUIT_PROXIMITY", "circuit_proximity", False),
+    ("REJECTED_NOT_MIS_TRADABLE", "mis_tradable", False),
+    ("REJECTED_STEP_ERROR", "vwap_position", True),
+])
+def test_the_unscored_p3_shapes_read_COMPLETE_without_a_fake_score(
+        tmp_path, status, rejected_step, has_steps):
+    """The verdicts the scorer never saw, through the real _persist funnel: COMPLETE,
+    with the placeholder score moved aside rather than recorded."""
+    from screening.secondary_screener import ScreeningResult, SecondaryScreener
+
+    class Store:
+        def update_signal_status(self, *a, **k): pass
+        def insert_screener_result(self, *a, **k): pass
+
+    class Fx:
+        def inc(self): pass
+
+    ss = SecondaryScreener.__new__(SecondaryScreener)
+    ss._fx_verdict, ss._state_store, ss._logger = Fx(), Store(), None
+    ss._evidence = rec_at(tmp_path)
+    res = ScreeningResult(
+        passed=False, status=status, score=0, tier="LOW", rejected_step=rejected_step,
+        step_results={"vwap_position": 0.0} if has_steps else {},
+        step_statuses={"vwap_position": "ERROR"} if has_steps else {},
+        error_steps=[], latencies_ms={}, market_data_snapshot={"ltp": 100.0})
+    ss._persist("sig_1", res, symbol="ACME", strategy_name="gap_go_long_v1",
+                trigger_price=99.9, triggered_at=datetime(2026, 9, 11, 10, 0, 0))
+    row = read_records(tmp_path)[0]
+    assert row["record_status"] == COMPLETE, row.get("missing_optional")
+    assert row["score_total"] is None and row["na_supplied"]["score_total"] == 0
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# CLOSE-SIX §3 — the backup says what it protects, everywhere it is described
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_the_backup_is_labelled_same_disk_everywhere_it_is_described():
+    """⚠️ A WORDING pin, not a behaviour test -- the backup's behaviour is pinned by
+    the backup tests above. This stops the label drifting back to implying off-box
+    or disaster protection, which nothing in this system provides."""
+    bk = (REPO / "scripts" / "backup_evidence.py").read_text(encoding="utf-8")
+    orr = (REPO / "scripts" / "output_retention.py").read_text(encoding="utf-8")
+    reg = (REPO / "config" / "cron_registry.yaml").read_text(encoding="utf-8")
+    assert "SAME-DISK copy" in bk
+    assert "does NOT protect against loss of the disk or the machine" in bk
+    i = orr.index("data_store/evidence/*.jsonl")
+    assert "SAME-DISK" in orr[i:i + 900]
+    j = reg.index("evidence_backup:")
+    assert "SAME-DISK" in reg[j:j + 300]

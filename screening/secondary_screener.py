@@ -160,7 +160,7 @@ class SecondaryScreener:
                         latencies_ms={},
                         market_data_snapshot={},
                     )
-                    self._persist(signal_id, result, symbol=symbol, strategy_name=getattr(strategy, "name", None))
+                    self._persist(signal_id, result, symbol=symbol, strategy_name=getattr(strategy, "name", None), trigger_price=trigger_price, triggered_at=triggered_at)
                     return result
                 # shadow=True -> the would-drop is logged inside the helper; fall through.
 
@@ -179,7 +179,7 @@ class SecondaryScreener:
                         "SKIPPED_QUOTE_UNAVAILABLE", signal_id, symbol,
                     )
                     result = self._make_skipped("SKIPPED_QUOTE_UNAVAILABLE", {}, signal_id)
-                    self._persist(signal_id, result, symbol=symbol, strategy_name=getattr(strategy, "name", None))
+                    self._persist(signal_id, result, symbol=symbol, strategy_name=getattr(strategy, "name", None), trigger_price=trigger_price, triggered_at=triggered_at)
                     return result
                 market_data = self._build_market_data(quote)
             except Exception:
@@ -192,7 +192,7 @@ class SecondaryScreener:
                 result = self._make_skipped(
                     "SKIPPED_QUOTE_UNAVAILABLE", {}, signal_id
                 )
-                self._persist(signal_id, result, symbol=symbol, strategy_name=getattr(strategy, "name", None))
+                self._persist(signal_id, result, symbol=symbol, strategy_name=getattr(strategy, "name", None), trigger_price=trigger_price, triggered_at=triggered_at)
                 return result
 
         market_data_snapshot = dict(market_data)
@@ -228,7 +228,7 @@ class SecondaryScreener:
                 latencies_ms={},
                 market_data_snapshot=market_data_snapshot,
             )
-            self._persist(signal_id, result, symbol=symbol, strategy_name=getattr(strategy, "name", None))
+            self._persist(signal_id, result, symbol=symbol, strategy_name=getattr(strategy, "name", None), trigger_price=trigger_price, triggered_at=triggered_at)
             return result
 
         # ── 2. Build thresholds from strategy ─────────────────────────────────
@@ -259,7 +259,7 @@ class SecondaryScreener:
             result = self._make_skipped(
                 "SKIPPED_EXECUTOR_ERROR", market_data_snapshot, signal_id
             )
-            self._persist(signal_id, result, symbol=symbol, strategy_name=getattr(strategy, "name", None))
+            self._persist(signal_id, result, symbol=symbol, strategy_name=getattr(strategy, "name", None), trigger_price=trigger_price, triggered_at=triggered_at)
             return result
 
         # ── 4b. Check for step errors (P9a fix a) ─────────────────────────────
@@ -282,7 +282,7 @@ class SecondaryScreener:
                 latencies_ms=exec_result.latencies_ms,
                 market_data_snapshot=market_data_snapshot,
             )
-            self._persist(signal_id, result, symbol=symbol, strategy_name=getattr(strategy, "name", None))
+            self._persist(signal_id, result, symbol=symbol, strategy_name=getattr(strategy, "name", None), trigger_price=trigger_price, triggered_at=triggered_at)
             return result
 
         # ── 5. Score ──────────────────────────────────────────────────────────
@@ -296,7 +296,7 @@ class SecondaryScreener:
             result = self._make_skipped(
                 "SKIPPED_SCORER_ERROR", market_data_snapshot, signal_id
             )
-            self._persist(signal_id, result, symbol=symbol, strategy_name=getattr(strategy, "name", None))
+            self._persist(signal_id, result, symbol=symbol, strategy_name=getattr(strategy, "name", None), trigger_price=trigger_price, triggered_at=triggered_at)
             return result
 
         total_score = score_result.total_score
@@ -333,7 +333,7 @@ class SecondaryScreener:
                 latencies_ms=exec_result.latencies_ms,
                 market_data_snapshot=market_data_snapshot,
             )
-            self._persist(signal_id, result, symbol=symbol, strategy_name=getattr(strategy, "name", None), eligible_score=effective_min)
+            self._persist(signal_id, result, symbol=symbol, strategy_name=getattr(strategy, "name", None), trigger_price=trigger_price, triggered_at=triggered_at, eligible_score=effective_min)
             return result
 
         # ── 7. Signal age defense-in-depth check (P9a add, SS4 step 7) ───────
@@ -350,7 +350,7 @@ class SecondaryScreener:
                 latencies_ms=exec_result.latencies_ms,
                 market_data_snapshot=market_data_snapshot,
             )
-            self._persist(signal_id, result, symbol=symbol, strategy_name=getattr(strategy, "name", None), eligible_score=effective_min)
+            self._persist(signal_id, result, symbol=symbol, strategy_name=getattr(strategy, "name", None), trigger_price=trigger_price, triggered_at=triggered_at, eligible_score=effective_min)
             return result
 
         # ── 8. All passed ─────────────────────────────────────────────────────
@@ -366,7 +366,7 @@ class SecondaryScreener:
             latencies_ms=exec_result.latencies_ms,
             market_data_snapshot=market_data_snapshot,
         )
-        self._persist(signal_id, result, symbol=symbol, strategy_name=getattr(strategy, "name", None), eligible_score=effective_min)
+        self._persist(signal_id, result, symbol=symbol, strategy_name=getattr(strategy, "name", None), trigger_price=trigger_price, triggered_at=triggered_at, eligible_score=effective_min)
         self._logger.info(
             "secondary_screener [%s/%s]: %s score=%d tier=%s",
             signal_id, symbol, result.status, result.score, result.tier,
@@ -455,7 +455,7 @@ class SecondaryScreener:
                 rejected_step=str(gate.reason).lower(), step_results={}, step_statuses={},
                 error_steps=[], latencies_ms={}, market_data_snapshot=market_data_snapshot,
             )
-            self._persist(signal_id, result, symbol=symbol, strategy_name=getattr(strategy, "name", None))
+            self._persist(signal_id, result, symbol=symbol, strategy_name=getattr(strategy, "name", None), trigger_price=trigger_price, triggered_at=triggered_at)
             return result
 
         thresholds = {
@@ -480,7 +480,7 @@ class SecondaryScreener:
                 signal_id, symbol, traceback.format_exc(),
             )
             result = self._make_skipped("SKIPPED_EXECUTOR_ERROR", market_data_snapshot, signal_id)
-            self._persist(signal_id, result, symbol=symbol, strategy_name=getattr(strategy, "name", None))
+            self._persist(signal_id, result, symbol=symbol, strategy_name=getattr(strategy, "name", None), trigger_price=trigger_price, triggered_at=triggered_at)
             return result
         if exec_result.error_steps:
             bad = ", ".join(str(s) for s in exec_result.error_steps)
@@ -490,7 +490,7 @@ class SecondaryScreener:
                 step_statuses=exec_result.step_statuses, error_steps=exec_result.error_steps,
                 latencies_ms=exec_result.latencies_ms, market_data_snapshot=market_data_snapshot,
             )
-            self._persist(signal_id, result, symbol=symbol, strategy_name=getattr(strategy, "name", None))
+            self._persist(signal_id, result, symbol=symbol, strategy_name=getattr(strategy, "name", None), trigger_price=trigger_price, triggered_at=triggered_at)
             return result
 
         # 3. Re-scaled 8-step total + v3 tier (shared helpers; scorer untouched).
@@ -510,7 +510,7 @@ class SecondaryScreener:
                 step_statuses=exec_result.step_statuses, error_steps=exec_result.error_steps,
                 latencies_ms=exec_result.latencies_ms, market_data_snapshot=market_data_snapshot,
             )
-            self._persist(signal_id, result, symbol=symbol, strategy_name=getattr(strategy, "name", None), eligible_score=eff_min)
+            self._persist(signal_id, result, symbol=symbol, strategy_name=getattr(strategy, "name", None), trigger_price=trigger_price, triggered_at=triggered_at, eligible_score=eff_min)
             return result
 
         # 5. Passed — NO signal_age defense-in-depth (freshness is now the gate).
@@ -520,7 +520,7 @@ class SecondaryScreener:
             error_steps=exec_result.error_steps, latencies_ms=exec_result.latencies_ms,
             market_data_snapshot=market_data_snapshot,
         )
-        self._persist(signal_id, result, symbol=symbol, strategy_name=getattr(strategy, "name", None), eligible_score=eff_min)
+        self._persist(signal_id, result, symbol=symbol, strategy_name=getattr(strategy, "name", None), trigger_price=trigger_price, triggered_at=triggered_at, eligible_score=eff_min)
         self._logger.info(
             "secondary_screener [%s/%s]: %s score=%d tier=%s (v3-enforce)",
             signal_id, symbol, result.status, result.score, result.tier,
@@ -599,6 +599,7 @@ class SecondaryScreener:
         self, signal_id: str, result: ScreeningResult,
         eligible_score: Optional[int] = None,
         *, symbol: Optional[str] = None, strategy_name: Optional[str] = None,
+        trigger_price: Optional[float] = None, triggered_at=None,
     ) -> None:
         """
         SS5: Write to state_store. DB failure is logged but never raised
@@ -656,6 +657,12 @@ class SecondaryScreener:
             "symbol": symbol,
             "strategy": strategy_name,
             "ts": ts,
+            # The signal's own trigger, carried in like the identity. A signals
+            # row that ends REJECTED* is pruned by eod_cleanup after
+            # signal_retention_days (default 90); this record is not.
+            "trigger_price": trigger_price,
+            "triggered_at": (triggered_at.isoformat() if hasattr(triggered_at, "isoformat")
+                             else triggered_at),
             "status": result.status,
             "rejected_step": result.rejected_step,
             "reject_reason": result.rejected_step or result.status,
