@@ -217,6 +217,15 @@ class SymbolOutcome:
     exit_side: str = ""
     broker_order_id: str = ""
     detail: str = ""
+    #: The protected-MARKET band actually submitted, as a PERCENT (1.5 == 1.5%).
+    #: Recorded so the system can PROVE which value it sent, not merely which
+    #: value was configured. None = the field was omitted from the wire.
+    market_protection: Optional[float] = None
+    #: Block A: PASS_1's broker order id as consulted by PASS_2's residual gate
+    #: ("" when this is PASS_1, or when PASS_1 placed nothing for this symbol).
+    pass_1_order_id: str = ""
+    #: Block A: what the residual gate concluded. Empty on PASS_1.
+    residual_detail: str = ""
 
 
 @dataclass
@@ -264,6 +273,13 @@ class MisAutoSquareoff:
         # never skips the exit.
         pass_2_bound_ms_per_symbol: int = 800,
         pass_2_bound_fixed_ms: int = 400,
+        # ⚠️⚠️ UNITS: PERCENTAGES. 1.5 means 1.5%, NOT a fraction.
+        # eod_squareoff.limit_aggressive_pct is a fraction (0.01 == 1%); these are
+        # not, which is why they are named "_percent". A fraction-style 0.015 here
+        # would be 0.015% — ~100x too tight — and both the config validator and the
+        # adapter's chokepoint refuse it. Defaults mirror config/system_config.yaml.
+        pass_1_market_protection_percent: float = 1.5,
+        pass_2_market_protection_percent: float = 2.5,
         notifier=None,
         critical_sink: Optional[Callable[[str, str], None]] = None,
     ) -> None:
@@ -278,6 +294,10 @@ class MisAutoSquareoff:
         self._max_pass_1_attempts = int(max_pass_1_attempts)
         self._p2_per_symbol_ms = int(pass_2_bound_ms_per_symbol)
         self._p2_fixed_ms = int(pass_2_bound_fixed_ms)
+        self._protection_percent: Dict[str, float] = {
+            PASS_1: float(pass_1_market_protection_percent),
+            PASS_2: float(pass_2_market_protection_percent),
+        }
         self._notifier = notifier
         # F's entry point. Optional: the orchestrator is fully functional
         # without it, which is the point -- F observes, it does not control.
@@ -550,6 +570,135 @@ class MisAutoSquareoff:
 
     # ── execution ────────────────────────────────────────────────────────────
 
+    # ── Block A (10-Sep-2026): the PASS_2 residual gate ──────────────────────
+    #
+    # THE RULE: never let PASS_2 coexist with an unresolved PASS_1 order.
+    #
+    # A protected MARKET is not binary. Zerodha's protected MARKET behaves with a
+    # protected execution range and may leave unfilled quantity open when price
+    # moves beyond that range -- so PASS_1 can leave a RESTING order behind. The
+    # per-symbol cancel below cannot see it: that cancel set comes from the LOCAL
+    # db filtered `leg IN ('SL','TGT')` (state_store.get_open_mis_exit_orders_for_
+    # symbol), and this unit writes no orders row at all, so its own exit is
+    # invisible to it. Without this gate PASS_2 would place ON TOP of a live
+    # remainder and both could fill -- the exact "a long 1 becomes a short 1"
+    # outcome this module's docstring exists to prevent.
+    #
+    # ⚠️ A CORRECT PASS_2 QUANTITY IS NOT SUFFICIENT. A 60-of-100 partial leaves
+    # the position at 40, so the fresh-position read sizes PASS_2 correctly -- and
+    # the resting 40 is still live. Right quantity, two live orders, still an
+    # oversell. Quantity and residual are separate problems.
+
+    def _pass_1_order_id_for(self, d: date, sym: str) -> str:
+        """PASS_1's broker order id for this symbol, or "".
+
+        RETENTION ALREADY EXISTED -- `_execute_mis_auto_squareoff` has always
+        written it to `outcome.broker_order_id`, and `_store_result` has always
+        kept it in `self._results`. It was simply never consulted. This reads it.
+        ⚠️ In-process only: it does not survive a restart, and it is not in the DB.
+        """
+        r = self.result(d, PASS_1)          # takes self._lock
+        if r is None:
+            return ""
+        for o in r.symbols:
+            if o.symbol == sym and o.broker_order_id:
+                return str(o.broker_order_id)
+        return ""
+
+    def _read_open_order_ids(self) -> Tuple[set, bool]:
+        """Broker-side OPEN/TRIGGER-PENDING order ids. Returns (ids, read_failed).
+
+        ONE call for the whole pass, not one per symbol.
+        ⭐ `get_open_orders()` applies NO trigger_price filter -- that test lives in
+        _restore_protection_inner, which has its own job (find a resting STOP) and
+        is deliberately NOT touched here. So this call can see a market-protection
+        residual, which carries no trigger price.
+
+        ⚠️⚠️ "QUERY FAILED" AND "ID ABSENT" ARE DIFFERENT ANSWERS AND MUST NOT
+        COLLAPSE. Absent means the broker SAID the order is not live -> resolved.
+        Failed means we do not know -> BLOCK. An earlier revision of this method
+        wrote `get_open_orders() or []`, which silently turned a None/degraded
+        response into an EMPTY set -- i.e. into "absent", i.e. into "resolved".
+        That is the unknown-resolves-towards-safety principle inverted, on the
+        exposure path. None is now a FAILURE, and the parsing lives INSIDE the
+        try so a malformed row is a failure too rather than an exception thrown
+        through the whole pass.
+        """
+        try:
+            rows = self._adapter.get_open_orders()
+            if rows is None:
+                raise RuntimeError("get_open_orders returned None")
+            ids = {str(_row_get(o, "order_id", "")) for o in rows}
+        except Exception as exc:  # noqa: BLE001
+            self._log.error(
+                "mis_autosquareoff: PASS_2 residual gate could not read broker "
+                "open orders: %s -- every symbol with a PASS_1 order will BLOCK", exc,
+            )
+            return set(), True
+        return ids, False
+
+    def _resolve_pass_1_residual(
+        self, oid: str, open_ids: set, read_failed: bool,
+    ) -> Tuple[bool, str]:
+        """Resolve ONE PASS_1 order. Returns (resolved, detail).
+
+        Resolved means: PROVEN not live. A read failure is NOT resolution -- an
+        unknown must never let PASS_2 place, which is the first-principle applied
+        to exposure rather than to attribution.
+        """
+        if read_failed:
+            return False, f"PASS_1 order {oid} UNRESOLVED: broker open-order read failed"
+        if oid not in open_ids:
+            return True, f"PASS_1 order {oid} already terminal at broker"
+        try:
+            r = self._adapter.cancel_order(str(oid), variety="regular")
+            if not getattr(r, "success", False):
+                return False, (f"PASS_1 residual {oid} cancel REJECTED: "
+                               f"{getattr(r, 'reason', '')}")
+        except Exception as exc:  # noqa: BLE001
+            return False, f"PASS_1 residual {oid} cancel RAISED: {exc}"
+        # Reuses _verify_cancelled unmodified. ⚠️ Its 5 s deadline is computed ONCE
+        # (see :  the `deadline = ...` line) and is therefore SHARED across every row
+        # passed in -- fine here because this is deliberately a SINGLE-row call.
+        # ⛔ Do not later hand it a list and wonder why the last rows starved.
+        # COMPLETE counts as terminal, and that is correct: the hazard is a LIVE
+        # order. A residual that FILLED is not live -- and the caller re-reads the
+        # position afterwards precisely because "confirmed" does not mean
+        # "position unchanged".
+        if not self._verify_cancelled([{"order_id": oid}]):
+            return False, f"PASS_1 residual {oid} cancellation NOT CONFIRMED"
+        return True, f"PASS_1 residual {oid} cancelled and CONFIRMED"
+
+    def _fresh_qty_after_residual(
+        self, sym: str, cache: dict,
+    ) -> Tuple[Optional[int], str]:
+        """Re-read the broker position after a PASS_1 order was resolved.
+
+        ONE `get_positions()` per pass, cached across symbols.
+        ⚠️ REQUIRED, not ceremonial: `_verify_cancelled` treats COMPLETE as
+        terminal, so a residual that FILLED between the top-of-pass position read
+        and now reads as "confirmed" while the remaining quantity has changed.
+        Sizing PASS_2 from the stale read would oversell by exactly the fill.
+        Returns (qty, error). qty None => the read FAILED; ⛔ a failure is never
+        flat (§3.10) and the caller must not place.
+        """
+        if "positions" not in cache:
+            try:
+                positions = self._adapter.get_positions()
+                if positions is None:
+                    raise RuntimeError("get_positions returned None")
+                cache["positions"] = {
+                    r["symbol"]: int(r["qty"])
+                    for r in self._find_open_mis_positions_for_auto_squareoff(positions)
+                }
+                cache["error"] = ""
+            except Exception as exc:  # noqa: BLE001
+                cache["positions"] = None
+                cache["error"] = str(exc)
+        if cache.get("positions") is None:
+            return None, cache.get("error") or "position re-read failed"
+        return int(cache["positions"].get(sym, 0)), ""
+
     def _execute_mis_auto_squareoff(
         self, which: str, candidates: List[dict], res: PassResult,
         hard_deadline: datetime,
@@ -565,6 +714,27 @@ class MisAutoSquareoff:
         Only that symbol's MIS orders are cancelled. Never "all pending orders",
         never anything CNC, never a GTT.
         """
+        # Block A: PASS_2's residual gate. PASS_1 has no predecessor to resolve,
+        # so it never pays for any of this.
+        today = self._now().date()
+        p1_ids: Dict[str, str] = {}
+        residual_open_ids: set = set()
+        residual_read_failed = False
+        if which == PASS_2:
+            for _c in candidates:
+                _oid = self._pass_1_order_id_for(today, _c["symbol"])
+                if _oid:
+                    p1_ids[_c["symbol"]] = _oid
+            # ONE broker read for the whole pass, and ONLY when PASS_1 actually
+            # left something to resolve. When PASS_1 placed nothing (it was never
+            # run, or it blocked at its own cancel step) there is no residual by
+            # construction and this costs zero extra broker calls.
+            if p1_ids:
+                residual_open_ids, residual_read_failed = self._read_open_order_ids()
+        # Lazily-filled, pass-scoped position snapshot for the post-residual
+        # re-read. Only touched when a PASS_1 order actually existed.
+        fresh_pos_cache: dict = {}
+
         for i, cand in enumerate(candidates):
             sym = cand["symbol"]
             qty = cand["qty"]
@@ -581,6 +751,65 @@ class MisAutoSquareoff:
                 # local_filled - broker_remaining: no double-subtraction.
                 requested_qty=abs(qty),
             )
+
+            # ── Block A: THE PASS_2 RESIDUAL GATE ────────────────────────────
+            # Runs BEFORE the protective legs are read or cancelled, so a BLOCK
+            # leaves whatever protection exists untouched. That is why there is no
+            # _restore_protection call on this path: nothing was cancelled yet, so
+            # there is nothing to restore -- and restoring here could not work
+            # anyway, because PASS_1 already drove those rows to CANCELLED and
+            # get_open_mis_exit_orders_for_symbol excludes terminal rows.
+            if which == PASS_2:
+                p1_oid = p1_ids.get(sym, "")
+                outcome.pass_1_order_id = p1_oid
+                if p1_oid:
+                    resolved, detail = self._resolve_pass_1_residual(
+                        p1_oid, residual_open_ids, residual_read_failed
+                    )
+                    outcome.residual_detail = detail
+                    if not resolved:
+                        outcome.state = MisState.CANCEL_FAILED
+                        outcome.detail = detail
+                        self._emit(
+                            MisState.CANCEL_FAILED,
+                            f"{which} {sym}: {detail}; PASS_2 exit NOT submitted "
+                            f"(a second live exit is worse than a late one); "
+                            f"protective legs untouched",
+                            critical=True,
+                        )
+                        res.symbols.append(outcome)
+                        continue
+                    # Resolved -> the remaining quantity may have MOVED (a residual
+                    # that filled is 'terminal' too), so re-derive it. §3.7.
+                    fresh_qty, err = self._fresh_qty_after_residual(sym, fresh_pos_cache)
+                    if fresh_qty is None:
+                        # §3.10: a query failure is NEVER flat, and it is not a
+                        # sizing basis either. Do not place.
+                        outcome.state = MisState.RECONCILIATION_UNKNOWN
+                        outcome.detail = f"post-residual position re-read failed: {err}"
+                        self._emit(
+                            MisState.RECONCILIATION_UNKNOWN,
+                            f"{which} {sym}: {outcome.detail}; PASS_2 exit NOT submitted",
+                            critical=True,
+                        )
+                        res.symbols.append(outcome)
+                        continue
+                    if fresh_qty == 0:
+                        # §3.1: flat now -> nothing to exit for this symbol.
+                        outcome.state = MisState.EXIT_FILLED
+                        outcome.requested_qty = 0
+                        outcome.detail = (
+                            f"{detail}; position FLAT on re-read -- no PASS_2 exit needed"
+                        )
+                        self._log.info(
+                            "mis_autosquareoff %s %s: flat after PASS_1 residual "
+                            "resolution; no exit placed", which, sym,
+                        )
+                        res.symbols.append(outcome)
+                        continue
+                    outcome.broker_qty_at_start = fresh_qty
+                    outcome.requested_qty = abs(fresh_qty)
+                    outcome.exit_side = "SELL" if fresh_qty > 0 else "BUY"
 
             try:
                 resting = self._store.get_open_mis_exit_orders_for_symbol(sym)
@@ -628,17 +857,46 @@ class MisAutoSquareoff:
                 continue
 
             try:
+                exit_order_type = PASS_2_EXIT_PROTOCOL if which == PASS_2 else "MARKET"
+                # ⚠️ UNITS: a PERCENT. 1.5 means 1.5%, not 0.015.
+                # Only MARKET/SL-M accept a protection band, so the type gate keeps
+                # this correct if PASS_2_EXIT_PROTOCOL is ever changed to a LIMIT.
+                protection = (
+                    self._protection_percent.get(which)
+                    if exit_order_type in ("MARKET", "SL-M")
+                    else None
+                )
                 placed = self._adapter.place_order(
                     symbol=sym,
                     side=outcome.exit_side,
                     qty=outcome.requested_qty,
                     price=0.0,
-                    order_type=PASS_2_EXIT_PROTOCOL if which == PASS_2 else "MARKET",
+                    order_type=exit_order_type,
                     intent="INTRADAY",
                     tag=f"mis_autosq_{which.lower()}",
+                    market_protection=protection,
                 )
+                # Record what we SUBMITTED, not what was configured (§2.2).
+                outcome.market_protection = protection
                 outcome.broker_order_id = str(getattr(placed, "broker_order_id", ""))
                 outcome.state = MisState.EXIT_SUBMITTED
+                # §2.2 durability: SymbolOutcome lives only in self._results, which
+                # is in-memory and dies with the process. The submitted band has to
+                # survive in the log or it cannot be proven after a restart.
+                self._log.info(
+                    "MIS_AUTO_SQUAREOFF_EXIT_SUBMITTED",
+                    extra={
+                        "pass": which,
+                        "symbol": sym,
+                        "broker_order_id": outcome.broker_order_id,
+                        "qty": outcome.requested_qty,
+                        "side": outcome.exit_side,
+                        "order_type": exit_order_type,
+                        "market_protection_percent": protection,
+                        "pass_1_order_id": outcome.pass_1_order_id,
+                        "residual_detail": outcome.residual_detail,
+                    },
+                )
             except Exception as exc:  # noqa: BLE001
                 # F1: the protective orders were cancelled moments ago and the
                 # exit was refused by the broker. Without a restore this is the

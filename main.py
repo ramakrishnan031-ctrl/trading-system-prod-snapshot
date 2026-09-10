@@ -3332,6 +3332,13 @@ def _main_locked(args, config_dir: Path) -> int:
         limit_grace_sec=app_config.system.eod_squareoff.limit_grace_sec,
         inter_order_delay_sec=(
             app_config.system.eod_squareoff.inter_order_delay_ms / 1000.0),
+        # ⚠️ UNITS: PERCENTAGES (1.5 == 1.5%). Passed through verbatim -- ⛔ never
+        # divide by 100 here. The neighbouring limit_aggressive_pct IS a fraction;
+        # these are not. Config load already refused anything outside [0.1, 10.0].
+        pass_1_market_protection_percent=(
+            app_config.system.eod_squareoff.mis_pass_1_market_protection_percent),
+        pass_2_market_protection_percent=(
+            app_config.system.eod_squareoff.mis_pass_2_market_protection_percent),
         notifier=notifier,
         critical_sink=lambda state, detail: mis_notifier.notify_critical(
             state, detail),
