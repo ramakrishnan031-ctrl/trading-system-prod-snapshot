@@ -140,8 +140,9 @@ def compute_code_fingerprint(root: Path) -> Tuple[Optional[str], int]:
     Returns (None, 0) on ANY failure -- a fingerprint that cannot be computed is
     absent, ⛔ never approximated. The caller turns that into a FAILED record.
 
-    Measured cost on the deployed tree: 109 files, ~2.85 MB, under 20 ms. It is
-    computed ONCE per process and cached by EvidenceRecorder; ⛔ never per row.
+    Measured cost: 110 files at the checkpoint (the frozen list is
+    core/evidence_artefact_manifest.txt), ~2.85 MB, under 20 ms. It is computed
+    ONCE per process and cached by EvidenceRecorder; ⛔ never per row.
     """
     try:
         paths = []
@@ -199,6 +200,17 @@ def evidence_path(root: Path, arm: str, on: date) -> Path:
             / f"{EVIDENCE_FILE_PREFIX}_{arm}_{on.isoformat()}.jsonl")
 
 
+#: §6.7 PERSIST: the observer's own failure ledger -- one append-only line per
+#: failure event, beside the evidence it describes, with the same arm + date
+#: naming, so the same backup and the same never-prune rule cover it.
+EVIDENCE_FAILURE_PREFIX: str = "evidence_failures"
+
+
+def failure_log_path(root: Path, arm: str, on: date) -> Path:
+    return (root / "data_store" / EVIDENCE_DIRNAME
+            / f"{EVIDENCE_FAILURE_PREFIX}_{arm}_{on.isoformat()}.jsonl")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # §6.7 — the CRITICAL sink, bound to the system's own alert officer
 # ─────────────────────────────────────────────────────────────────────────────
@@ -249,8 +261,8 @@ class _FailureLedger:
         self.capture_points: Dict[str, int] = {}
         self.classes: Dict[str, int] = {}
 
-    def record(self, day: str, ts: str, capture_point: str, cls: str) -> bool:
-        """Register a failure. Returns True iff this is the day's FIRST (=> alert)."""
+    def record(self, day: str, ts: str, capture_point: str, cls: str) -> Tuple[bool, int]:
+        """Register a failure. Returns (is_first_of_day, total_today); first => alert."""
         with self._lock:
             if self._day != day:          # day/epoch boundary: reset
                 self._day = day
@@ -265,8 +277,8 @@ class _FailureLedger:
             self.classes[cls] = self.classes.get(cls, 0) + 1
             if self.total == 1:
                 self.first_ts = ts
-                return True
-            return False
+                return (True, self.total)
+            return (False, self.total)
 
     def summary(self) -> Dict[str, Any]:
         with self._lock:
@@ -310,6 +322,7 @@ class EvidenceRecorder:
         self._critical_sink = critical_sink
         self._enabled = bool(enabled)
         self._write_lock = threading.Lock()
+        self._fail_lock = threading.Lock()   # §6.7 failure ledger; never nests with _write_lock
         self._failures = _FailureLedger()
         self.records_written = 0
 
@@ -336,7 +349,7 @@ class EvidenceRecorder:
         # computed ONCE, cached
         self._fingerprint, self._fingerprint_files = compute_code_fingerprint(self._root)
 
-    # ── introspection (used by tests and the daily summary) ──────────────────
+    # ── introspection (tests only -- the DURABLE record is the failure ledger) ─
 
     @property
     def code_fingerprint(self) -> Optional[str]:
@@ -352,10 +365,19 @@ class EvidenceRecorder:
     # ── the capture entry point ──────────────────────────────────────────────
 
     def capture(self, capture_point: str, payload: Optional[Dict[str, Any]] = None) -> None:
-        """Emit ONE evidence record. ⛔ NEVER raises. ⛔ Never blocks trading.
+        """Emit ONE evidence record. ⛔ NEVER raises.
 
-        A failure anywhere below is swallowed, counted and (once a day) alerted.
-        The pipeline neither knows nor cares.
+        A failure anywhere below is swallowed, counted, persisted to the failure
+        ledger and (once a day) alerted. The pipeline's DECISIONS neither know nor
+        care.
+
+        ⚠️ It is NOT free, and the first build's "never blocks trading" overstated
+        it: the append runs SYNCHRONOUSLY on the calling (trading) thread --
+        open + write + fsync under one process-wide lock. Measured on the dev PC
+        (10-Sep night, a realistic ~2.5 KB P3 row): mean 2.18 ms, p99 3.1 ms,
+        max 4.1 ms per record; 0.21 ms mean with fsync disabled. The VMs' volumes
+        are UNMEASURED. Whether that cost belongs on the decision path (keep it /
+        drop the per-record fsync / a writer thread) is an OPEN item for review.
         """
         if not self._enabled:
             return
@@ -433,7 +455,9 @@ class EvidenceRecorder:
             )
 
         arm = rec.get("arm") or "UNKNOWN_ARM"
-        path = evidence_path(self._root, arm, now.date())
+        self._append(evidence_path(self._root, arm, now.date()), rec)
+
+    def _append(self, path: Path, rec: Dict[str, Any]) -> None:
         line = json.dumps(rec, default=str, ensure_ascii=False, sort_keys=True)
         with self._write_lock:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -442,6 +466,33 @@ class EvidenceRecorder:
                 fh.flush()
                 os.fsync(fh.fileno())
             self.records_written += 1
+
+    def note_failure(self, capture_point: str, exc: BaseException) -> None:
+        """An observer failure that happened OUTSIDE capture() -- typically the
+        caller's payload could not be BUILT (an unbound name, a bad attribute).
+        ⛔ NEVER raises.
+
+        ⚠️ The first build had no such entry point: the callers' guards swallowed
+        these with ONE log line -- never counted, never alerted, no row. That is
+        precisely the silent loss §6.7 exists to prevent. Now it is counted and
+        alerted like any capture failure, persisted to the failure ledger, and
+        the corpus gets a FAILED row at that capture point, so the hole is
+        visible where the data is read.
+        """
+        if not self._enabled:
+            return
+        try:
+            self._on_failure(capture_point, exc)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            now = self._now()
+            rec = self._build_record(capture_point, {}, now)     # FAILED: no identity
+            rec["observer_error"] = f"{type(exc).__name__}: {exc}"[:500]
+            self._append(evidence_path(self._root, rec.get("arm") or "UNKNOWN_ARM",
+                                       now.date()), rec)
+        except Exception:  # noqa: BLE001
+            pass
 
     def _on_failure(self, capture_point: str, exc: BaseException,
                     already_built: bool = False) -> None:
@@ -452,7 +503,8 @@ class EvidenceRecorder:
         except Exception:  # noqa: BLE001
             ts, day = "", ""
         cls = type(exc).__name__
-        first = self._failures.record(day, ts, capture_point, cls)
+        first, total = self._failures.record(day, ts, capture_point, cls)
+        self._persist_failure(ts, day, capture_point, cls, exc, first, total)
 
         if self._log is not None:
             try:
@@ -484,3 +536,33 @@ class EvidenceRecorder:
                 pass
         # ⛔ and nothing propagates. Trading is untouched. (already_built is
         # accepted so a FAILED record can be counted without a second write.)
+
+    def _persist_failure(self, ts: str, day: str, capture_point: str, cls: str,
+                         exc: BaseException, first: bool, total: int) -> None:
+        """§6.7 PERSIST: one append-only line per failure event.
+
+        The spec asks for total failures, first and last timestamps, capture
+        points and failure class to be PERSISTED. The first build kept them in
+        memory only -- gone at the ~17:35 self-exit. One line per event makes
+        every one of them derivable, exactly, with no rate limiter and no
+        shutdown hook to forget. ⛔ Never raises: if the disk itself is the
+        failure this write fails too, and the sentinel is the channel that
+        remains.
+        """
+        try:
+            arm = self._resolve_arm() or "UNKNOWN_ARM"
+            on = date.fromisoformat(day) if day else self._now().date()
+            line = json.dumps({
+                "ts": ts, "day": day, "capture_point": capture_point,
+                "failure_class": cls, "message": str(exc)[:500],
+                "first_of_day": bool(first), "total_today": int(total),
+                "arm": arm, "contract_version": CONTRACT_VERSION,
+                "evidence_epoch": EVIDENCE_EPOCH,
+            }, default=str, ensure_ascii=False, sort_keys=True)
+            path = failure_log_path(self._root, arm, on)
+            with self._fail_lock:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with open(path, "a", encoding="utf-8") as fh:
+                    fh.write(line + "\n")
+        except Exception:  # noqa: BLE001
+            pass

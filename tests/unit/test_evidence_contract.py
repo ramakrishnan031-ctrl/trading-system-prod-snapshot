@@ -265,9 +265,15 @@ def test_two_arms_never_share_a_file(tmp_path):
     project has already copied one machine's disk onto another."""
     rec_at(tmp_path, arm_fn=lambda: "LFL836").capture(P1_ACCEPT, {"signal_id": "a"})
     rec_at(tmp_path, arm_fn=lambda: "VBB097").capture(P1_ACCEPT, {"signal_id": "b"})
-    names = sorted(p.name for p in (tmp_path / "data_store" / "evidence").glob("*.jsonl"))
+    d = tmp_path / "data_store" / "evidence"
+    names = sorted(p.name for p in d.glob("signal_evidence_*.jsonl"))
     assert names == ["signal_evidence_LFL836_2026-09-11.jsonl",
                      "signal_evidence_VBB097_2026-09-11.jsonl"]
+    # Both captures are FAILED (P1 requires symbol + strategy), so each arm also
+    # has a §6.7 failure ledger -- and those must be arm-separated too.
+    ledgers = sorted(p.name for p in d.glob("evidence_failures_*.jsonl"))
+    assert ledgers == ["evidence_failures_LFL836_2026-09-11.jsonl",
+                       "evidence_failures_VBB097_2026-09-11.jsonl"]
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -706,3 +712,77 @@ def test_main_builds_the_recorder_guarded_and_with_the_real_sink():
             guarded = True
             break
     assert guarded, "EvidenceRecorder(...) must be constructed inside a try in _main_locked"
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# RE-CHECK — §6.7: every observer failure is counted, alerted once, PERSISTED
+# ═════════════════════════════════════════════════════════════════════════════
+
+@pytest.mark.parametrize("cls_path,log_attr", [
+    ("signals.signal_processor:SignalProcessor", "_log"),
+    ("screening.secondary_screener:SecondaryScreener", "_logger"),
+])
+def test_a_payload_that_cannot_be_built_is_counted_alerted_and_leaves_a_hole(
+        tmp_path, cls_path, log_attr):
+    """⚠️ RE-CHECK FINDING. A payload that raised while being BUILT (an unbound
+    name, a bad attribute) was swallowed by the caller's guard with ONE log line:
+    never counted, never alerted, no row -- exactly the silent loss §6.7 exists to
+    prevent. Now: counted, first-of-day sentinel, persisted, and a FAILED row."""
+    import importlib
+    mod_name, cls_name = cls_path.split(":")
+    cls = getattr(importlib.import_module(mod_name), cls_name)
+    alerts = []
+    r = rec_at(tmp_path, critical_sink=lambda s, d: alerts.append(s))
+
+    class Log:
+        def __init__(self): self.errors = []
+        def error(self, *a, **k): self.errors.append(a)
+
+    obj = cls.__new__(cls)
+    obj._evidence = r
+    setattr(obj, log_attr, Log())
+
+    def payload():
+        raise NameError("name 'strategy_name' is not defined")
+
+    obj._evidence_capture(P1_ACCEPT, payload)          # must not raise
+    s = r.failure_summary()
+    assert s["total_failures"] == 1 and s["failure_classes"] == {"NameError": 1}
+    assert alerts == ["EVIDENCE_CAPTURE_FAILED"], "a payload failure must reach the sentinel"
+    rows = read_records(tmp_path)
+    assert len(rows) == 1 and rows[0]["record_status"] == FAILED
+    assert rows[0]["capture_point"] == P1_ACCEPT
+    assert rows[0]["observer_error"].startswith("NameError")
+    assert getattr(obj, log_attr).errors, "and it is still logged"
+
+
+def test_the_failure_ledger_is_persisted_one_line_per_event(tmp_path):
+    """§6.7 says PERSIST total failures, first and last timestamps, capture points
+    and failure class. The first build kept them in memory only -- gone at the
+    ~17:35 self-exit. One append-only line per event makes each one derivable."""
+    from core.evidence_contract import failure_log_path
+    r = BoomRecorder(tmp_path, config_hashes={"a": "b"}, arm_fn=lambda: "A",
+                     now_fn=lambda: FIXED_NOW)
+    for point, sid in ((P1_ACCEPT, "s1"), (P2_REJECT, "s2"), (P2_REJECT, "s3")):
+        r.capture(point, {"signal_id": sid})
+    p = failure_log_path(tmp_path, "A", FIXED_NOW.date())
+    lines = [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines()]
+    assert [l["total_today"] for l in lines] == [1, 2, 3]
+    assert [l["first_of_day"] for l in lines] == [True, False, False]
+    assert [l["capture_point"] for l in lines] == [P1_ACCEPT, P2_REJECT, P2_REJECT]
+    assert {l["failure_class"] for l in lines} == {"RuntimeError"}
+    assert {l["arm"] for l in lines} == {"A"}
+    assert lines[0]["ts"] == FIXED_NOW.isoformat() and lines[-1]["ts"]
+
+
+def test_a_failure_ledger_that_cannot_be_written_still_does_not_raise(tmp_path):
+    """If the disk is the failure, the ledger write fails too -- and must be
+    swallowed; the sentinel is the channel that remains."""
+    (tmp_path / "data_store").write_text("a FILE where the directory should be",
+                                         encoding="utf-8")
+    alerts = []
+    r = BoomRecorder(tmp_path, config_hashes={"a": "b"}, arm_fn=lambda: "A",
+                     now_fn=lambda: FIXED_NOW, critical_sink=lambda s, d: alerts.append(s))
+    r.capture(P1_ACCEPT, {"signal_id": "s"})          # must not raise
+    assert r.failure_summary()["total_failures"] == 1
+    assert alerts == ["EVIDENCE_CAPTURE_FAILED"]

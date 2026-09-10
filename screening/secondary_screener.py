@@ -670,6 +670,13 @@ class SecondaryScreener:
                 return
             rec.capture(capture_point, payload() if callable(payload) else payload)
         except Exception as exc:  # noqa: BLE001
+            # §6.7: a failure OUTSIDE capture() -- typically a payload that could
+            # not be BUILT -- is counted, alerted once a day, persisted and left
+            # as a FAILED row. The first build logged it and did nothing else.
+            try:
+                getattr(self, "_evidence", None).note_failure(capture_point, exc)
+            except Exception:  # noqa: BLE001
+                pass
             try:
                 self._logger.error("evidence capture failed at %s: %s", capture_point, exc)
             except Exception:  # noqa: BLE001
