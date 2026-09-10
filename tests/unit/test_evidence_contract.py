@@ -1101,3 +1101,56 @@ def test_the_failure_ledger_is_backed_up_too(tmp_path):
     assert backup_once(src, dst) == (2, 0, [])
     assert sorted(p.name for p in dst.iterdir()) == [
         "evidence_failures_A_2026-09-11.jsonl", "signal_evidence_A_2026-09-11.jsonl"]
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# RE-CHECK — §7.2 "JSONL survives retention", proven by the planners themselves
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_evidence_survives_output_retention_by_the_planner_itself(tmp_path):
+    """⚠️ RE-CHECK FINDING. The first retention test asserted that a COMMENT names
+    data_store/evidence -- so a family glob added to SCOPES tomorrow would delete
+    evidence while that test stayed green. This runs the REAL planner over a tree
+    holding both prunable logs and old evidence."""
+    from scripts.output_retention import build_plan
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    for d in range(1, 10):
+        (logs / f"system_2026-01-0{d}.log").write_text("x", encoding="utf-8")
+    ev = tmp_path / "data_store" / "evidence"
+    ev.mkdir(parents=True)
+    evidence = [ev / f"signal_evidence_A_2026-01-0{d}.jsonl" for d in range(1, 10)]
+    evidence.append(ev / "evidence_failures_A_2026-01-01.jsonl")
+    for f in evidence:
+        f.write_text("{}\n", encoding="utf-8")
+    plan = build_plan(root=tmp_path, keep=7)
+    doomed = {p.resolve() for p in plan.to_delete}
+    assert len(doomed) == 2, "non-vacuity: the planner DOES delete -- the two oldest logs"
+    evidence_set = {f.resolve() for f in evidence}
+    assert not doomed & evidence_set, "evidence must never be planned for deletion"
+    assert not {p.resolve() for p, _ in plan.refused} & evidence_set
+
+
+def test_evidence_backups_survive_backup_retention_by_the_planner_itself(tmp_path):
+    """backup_retention keeps N per family of files at the BASE of
+    data_store/backups; the evidence backups live in a subdirectory, so they are
+    never candidates -- proven here with the REAL planner, not asserted."""
+    import os as _os
+    from scripts.backup_retention import build_plan
+    base = tmp_path / "backups"
+    base.mkdir()
+    for d in range(1, 17):
+        f = base / f"trading_system-2026-01-{d:02d}.db"
+        f.write_bytes(b"x")
+        _os.utime(f, (1_700_000_000 + d, 1_700_000_000 + d))
+    evb = base / "evidence"
+    evb.mkdir()
+    kept = [evb / "signal_evidence_A_2026-01-01.jsonl",
+            evb / "evidence_failures_A_2026-01-01.jsonl"]
+    for f in kept:
+        f.write_text("{}\n", encoding="utf-8")
+    plan = build_plan(base, max_delete=100)
+    doomed = {p.resolve() for c in plan.categories for p in c.delete}
+    doomed |= {p.resolve() for p in plan.sidecar_delete}
+    assert len(doomed) == 2, "non-vacuity: 16 daily backups, keep 14 -> two reaped"
+    assert not doomed & {f.resolve() for f in kept}
