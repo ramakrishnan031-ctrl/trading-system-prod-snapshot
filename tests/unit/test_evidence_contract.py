@@ -1045,3 +1045,59 @@ def test_the_gate_resume_emits_p1(tmp_path):
         ("sig_gate_p1", "RELIANCE", "gap_go_long_v1")
     assert p1[0]["record_status"] != FAILED
     assert p1[0]["reanchored"] is None, "M-S1 never runs on the gate path -- unknown, not False"
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# RE-CHECK — the backup may never destroy the last good copy
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_backup_extends_an_older_backup_when_the_source_has_grown(tmp_path):
+    from scripts.backup_evidence import backup_once
+    src = tmp_path / "evidence"
+    src.mkdir()
+    dst = tmp_path / "bk"
+    f = src / "signal_evidence_A_2026-09-11.jsonl"
+    f.write_bytes(b'{"n":1}\n')
+    assert backup_once(src, dst)[0] == 1
+    f.write_bytes(b'{"n":1}\n{"n":2}\n')                    # append-only growth
+    assert backup_once(src, dst) == (1, 0, [])
+    assert (dst / f.name).read_bytes() == f.read_bytes()
+    assert not list(dst.glob("*.tmp-*")), "no temp file may be left behind"
+
+
+def test_backup_refuses_to_overwrite_when_the_source_is_not_an_extension(tmp_path):
+    """⚠️ RE-CHECK FINDING. The first version overwrote the backup in place
+    whenever the hashes differed -- so a truncated or corrupted source would have
+    replaced the LAST GOOD COPY. The evidence is append-only: a backup is now
+    replaced only by a byte-extension of itself; anything else is REFUSED."""
+    from scripts.backup_evidence import backup_once
+    src = tmp_path / "evidence"
+    src.mkdir()
+    dst = tmp_path / "bk"
+    f = src / "signal_evidence_A_2026-09-11.jsonl"
+    good = b'{"n":1}\n{"n":2}\n'
+    f.write_bytes(good)
+    backup_once(src, dst)
+
+    f.write_bytes(b'{"n":1}\n')                              # the source SHRANK
+    copied, skipped, failures = backup_once(src, dst)
+    assert copied == 0 and len(failures) == 1 and "REFUSED" in failures[0]
+    assert (dst / f.name).read_bytes() == good, "the last good copy must survive"
+
+    f.write_bytes(b'{"n":9}\n{"n":2}\n{"n":3}\n')            # longer, but REWRITTEN
+    copied, skipped, failures = backup_once(src, dst)
+    assert copied == 0 and len(failures) == 1 and "REFUSED" in failures[0]
+    assert (dst / f.name).read_bytes() == good
+
+
+def test_the_failure_ledger_is_backed_up_too(tmp_path):
+    from scripts.backup_evidence import backup_once
+    src = tmp_path / "evidence"
+    src.mkdir()
+    (src / "signal_evidence_A_2026-09-11.jsonl").write_text("{}\n", encoding="utf-8")
+    (src / "evidence_failures_A_2026-09-11.jsonl").write_text("{}\n", encoding="utf-8")
+    (src / "unrelated.jsonl").write_text("{}\n", encoding="utf-8")
+    dst = tmp_path / "bk"
+    assert backup_once(src, dst) == (2, 0, [])
+    assert sorted(p.name for p in dst.iterdir()) == [
+        "evidence_failures_A_2026-09-11.jsonl", "signal_evidence_A_2026-09-11.jsonl"]
