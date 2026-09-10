@@ -3245,6 +3245,19 @@ def _main_locked(args, config_dir: Path) -> int:
         freshness_max_sec=app_config.scoring.v3_freshness_max_sec,
         circuit_proximity_reject_enabled=app_config.system.entry_gate.circuit_proximity_reject_enabled,
     )
+    # ── Batch 1: the forward evidence contract ───────────────────────────────
+    # An OBSERVER. None => OFF => byte-identical behaviour. It is built here, once,
+    # so the code fingerprint is computed a single time at boot rather than per row.
+    # ⛔ config hashes are REUSED from AppConfig.file_hashes -- no second scheme.
+    from core.evidence_contract import EvidenceRecorder
+    evidence_recorder = EvidenceRecorder(
+        Path(__file__).resolve().parent,
+        config_hashes=app_config.file_hashes,
+        logger=get_logger("evidence_contract"),
+        critical_sink=lambda state, detail: notifier.send(
+            severity="CRITICAL", title=f"[EVIDENCE] {state}", body=detail),
+    )
+
     screener = SecondaryScreener(
         step_executor=step_executor,
         quality_scorer=scorer,
@@ -3261,6 +3274,7 @@ def _main_locked(args, config_dir: Path) -> int:
         # V3 03.03/03.04 — Hard-Gate + scorer re-scale (default-OFF via config).
         hard_gate=hard_gate,
         scoring_config=app_config.scoring,
+        evidence=evidence_recorder,          # Batch 1: P3 capture
     )
 
     eod = EodSquareoff(
@@ -3585,6 +3599,7 @@ def _main_locked(args, config_dir: Path) -> int:
         # Slice 2: strategy-control gate inputs (LAYER 1 master + LAYER 0 breaker).
         trade_type=app_config.system.trade_type,
         force_intraday_only=app_config.system.force_intraday_only,
+        evidence=evidence_recorder,          # Batch 1: P1 + P2 capture
     )
 
     # ── V3 03.05 Portfolio Allocator (ranked batch admission) — default-OFF ──

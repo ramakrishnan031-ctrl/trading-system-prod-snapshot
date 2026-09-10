@@ -65,6 +65,15 @@ from strategies.control import (  # Slice 2: strategy-control gate
 # Internal control-flow exception for clean pipeline rejection
 # ---------------------------------------------------------------------------
 
+def _iso(v):
+    """Batch 1: triggered_at may arrive as a datetime or a string. Never guess a
+    format; hand a non-datetime through unchanged rather than fabricate one."""
+    try:
+        return v.isoformat()
+    except Exception:  # noqa: BLE001
+        return v if isinstance(v, str) else None
+
+
 class _PipelineReject(Exception):
     """Raised inside _process_one to cleanly short-circuit the pipeline."""
 
@@ -163,6 +172,7 @@ class SignalProcessor:
         force_intraday_only: bool = False,  # Slice 2 LAYER 0: read for the control resolver
         allocator=None,                     # V3 03.05: PortfolioAllocator (None = OFF → FCFS byte-identical)
         v3_chain=None,                      # V3 Step 10: V3ChainRunner (None = OFF → byte-identical; also set via set_v3_chain)
+        evidence=None,                      # Batch 1: EvidenceRecorder (None = OFF → byte-identical)
     ) -> None:
         self._queue = signal_queue
         self._store = state_store
@@ -206,6 +216,7 @@ class SignalProcessor:
         self._force_intraday_only = bool(force_intraday_only)  # Slice 2 LAYER 0
         self._allocator = allocator                        # V3 03.05: None unless shadow/enforce (also settable via set_allocator)
         self._v3_chain = v3_chain                          # V3 Step 10: None unless shadow (also settable via set_v3_chain)
+        self._evidence = evidence                          # Batch 1: forward evidence; None = OFF, and OFF is byte-identical
 
         # Lifecycle
         self._running = False
@@ -504,6 +515,34 @@ class SignalProcessor:
                 "signal_processor: signal-alert notifier.send failed for %s: %s",
                 symbol, exc,
             )
+
+    # ------------------------------------------------------------------
+    # Batch 1: forward evidence capture (OBSERVER — never affects a decision)
+    # ------------------------------------------------------------------
+    def _evidence_capture(self, capture_point: str, payload) -> None:
+        """Emit one evidence record. ⛔ NEVER raises, ⛔ never blocks admission.
+
+        Parity with `_sr_observe` below: wrapped, logged, swallowed. The recorder
+        is wrapped internally too, so this is belt-and-braces on purpose — an
+        evidence bug must never be able to reject a signal.
+        """
+        try:
+            # ⛔ EVERY lookup lives inside the guard. The gate caught the
+            # alternative: reading self._evidence outside it raised
+            # AttributeError straight through a reject path on an object
+            # built without __init__ — the observer changing a decision,
+            # which is the one thing it may never do.
+            rec = getattr(self, "_evidence", None)
+            if rec is None:
+                return
+            # payload is a CALLABLE so it is built in here too; evaluated at
+            # the call site, an unbound name would escape the guard.
+            rec.capture(capture_point, payload() if callable(payload) else payload)
+        except Exception as exc:  # noqa: BLE001
+            try:
+                self._log.error("evidence capture failed at %s: %s", capture_point, exc)
+            except Exception:  # noqa: BLE001
+                pass
 
     def _sr_observe(
         self,
@@ -1087,6 +1126,11 @@ class SignalProcessor:
             if rej.check != "ENTRY_THROTTLED":
                 self._bump_metric("entries_rejected")
             self._store.update_signal_status(signal_id, f"REJECTED_{rej.check}", rej.reason)
+            self._evidence_capture("P2_REJECT", lambda: {
+                "signal_id": signal_id, "symbol": symbol,
+                "status": f"REJECTED_{rej.check}", "reject_reason": rej.reason,
+                "rejected_step": rej.check,
+            })
             # Release reservation if we had one
             if reservation_id:
                 try:
@@ -1299,6 +1343,25 @@ class SignalProcessor:
             # effect-telemetry (frozen A2.1): an approved entry DISPATCHED to
             # placement — counted at dispatch, whether or not place() raises.
             self._fx_dispatch.inc()
+            # P1 (Batch 1): the ACCEPT record, emitted at dispatch — the same
+            # instant the effect-telemetry counter fires, so the two can never
+            # disagree about what was approved.
+            self._evidence_capture("P1_ACCEPT", lambda: {
+                "signal_id": signal_id, "symbol": symbol, "strategy": strategy_name,
+                "triggered_at": _iso(triggered_at), "status": "ACCEPTED",
+                "score_total": getattr(screen_result, "score", None),
+                "tier": getattr(screen_result, "tier", None),
+                "step_results": getattr(screen_result, "step_results", None),
+                "step_statuses": getattr(screen_result, "step_statuses", None),
+                "market_data_snapshot": getattr(screen_result, "market_data_snapshot", None),
+                "trigger_price": trigger_price,
+                "entry_price_final": entry_price,
+                "reanchored": bool(entry_price != trigger_price),
+                "sl_price": sl_price, "tgt_price": tgt_price,
+                "qty": sizing.qty,
+                "sizing_breakdown": getattr(sizing, "breakdown", None),
+                "binding_constraint": getattr(sizing, "constraint", None),
+            })
             self._placer.place(
                 symbol=symbol,
                 side=side,
@@ -1516,6 +1579,11 @@ class SignalProcessor:
                 retry_count=p.retry_count, now=p.now)
         except _PipelineReject as rej:
             self._store.update_signal_status(candidate.signal_id, f"REJECTED_{rej.check}", rej.reason)
+            self._evidence_capture("P2_REJECT", lambda: {
+                "signal_id": candidate.signal_id, "symbol": getattr(candidate, "symbol", None),
+                "status": f"REJECTED_{rej.check}", "reject_reason": rej.reason,
+                "rejected_step": rej.check,
+            })
             if ac.reservation_id:
                 try:
                     self._fm.release(ac.reservation_id, f"rejected_{rej.check.lower()}")
@@ -1557,6 +1625,15 @@ class SignalProcessor:
         try:
             self._store.update_signal_status(candidate.signal_id, f"REJECTED_{reason}",
                                              f"allocator pre-check: {reason}")
+            # ⚠️ This reject is NOT a _PipelineReject. Capturing only the
+            # exception handlers would miss it entirely.
+            self._evidence_capture("P2_REJECT", lambda: {
+                "signal_id": candidate.signal_id,
+                "symbol": getattr(candidate, "symbol", None),
+                "status": f"REJECTED_{reason}",
+                "reject_reason": f"allocator pre-check: {reason}",
+                "rejected_step": reason,
+            })
         except Exception as exc:
             self._log.error(f"reject_prepared status write failed for {candidate.signal_id}: {exc}")
         with self._stats_lock:
@@ -2133,6 +2210,11 @@ class SignalProcessor:
             self._store.update_signal_status(
                 signal_id, f"REJECTED_{rej.check}", rej.reason
             )
+            self._evidence_capture("P2_REJECT", lambda: {
+                "signal_id": signal_id, "symbol": symbol,
+                "status": f"REJECTED_{rej.check}", "reject_reason": rej.reason,
+                "rejected_step": rej.check,
+            })
             if reservation_id:
                 try:
                     self._fm.release(reservation_id, f"rejected_{rej.check.lower()}")
@@ -2389,6 +2471,11 @@ class SignalProcessor:
             if rej.check != "ENTRY_THROTTLED":
                 self._bump_metric("entries_rejected")
             self._store.update_signal_status(signal_id, f"REJECTED_{rej.check}", rej.reason)
+            self._evidence_capture("P2_REJECT", lambda: {
+                "signal_id": signal_id, "symbol": symbol,
+                "status": f"REJECTED_{rej.check}", "reject_reason": rej.reason,
+                "rejected_step": rej.check,
+            })
             if reservation_id:
                 try:
                     self._fm.release(reservation_id, f"rejected_{rej.check.lower()}")
