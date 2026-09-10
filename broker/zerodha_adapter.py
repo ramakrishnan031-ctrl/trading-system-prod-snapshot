@@ -229,6 +229,22 @@ class Quote:
 _VALID_SIDES: frozenset[str] = frozenset({"BUY", "SELL"})
 _VALID_ORDER_TYPES: frozenset[str] = frozenset({"MARKET", "LIMIT", "SL", "SL-M"})
 
+# ── market_protection bounds (10-Sep-2026) ───────────────────────────────────
+# MEASURED: kiteconnect 5.1.0 validates NOTHING. 999, -7, 2.5 and the string "-1"
+# all reach the wire unchanged; the only filter is `if params[k] is None: del`,
+# and because `0 is None` is False, a literal 0 IS SENT. So the bounds check has
+# to be ours. The band is a PERCENTAGE: 1.5 means 1.5%.
+#
+# ⚠️ THE LOWER BOUND IS NOT COSMETIC — IT IS THE UNITS TRAP.
+# The nearest existing config, eod_squareoff.limit_aggressive_pct, is a FRACTION
+# (0.01 == 1%). Writing 0.015 here "meaning 1.5%" yields 0.015%, a band ~100x too
+# tight that would essentially never fill while looking like a working fix. A
+# plain "> 0" check would happily accept it. 0.1% is below the MEASURED median
+# spread (0.067%) plus median 60s adverse excursion (0.080%) on this book, so any
+# band under it cannot even cross the touch — it is refused as incoherent.
+_MARKET_PROTECTION_MIN_PCT: float = 0.1
+_MARKET_PROTECTION_MAX_PCT: float = 10.0
+
 # SLICE2.5-P2: paper GTT ids must be NUMERIC because gtt_state.gtt_id is an INTEGER
 # PRIMARY KEY (live = Kite's integer trigger_id, returned as a numeric string). A
 # high base keeps a paper id clearly out of the range of any real trigger id.
@@ -486,6 +502,7 @@ class ZerodhaAdapter:
         tag: Optional[str] = None,
         trigger_price: float = 0.0,
         variety: str = "regular",
+        market_protection: Optional[float] = None,
     ) -> PlacedOrder:
         """
         Place an order with Zerodha (or simulate in paper mode).
@@ -503,6 +520,18 @@ class ZerodhaAdapter:
             tag:           optional order tag passed to kite
             trigger_price: stop trigger price (ZA17; required > 0 for SL/SL-M)
             variety:       kite variety string (ZA17; default "regular"; "co" for CO orders)
+            market_protection:
+                           Zerodha's protected-MARKET band, **AS A PERCENTAGE**.
+                           ⚠️ UNITS. 1.5 means 1.5%. It is NOT a fraction.
+                           The neighbouring config `limit_aggressive_pct` IS a
+                           fraction (0.01 == 1%), and copying that convention here
+                           sends 0.015 == 0.015% — a band ~100x too tight, which
+                           would almost never fill and would look like a working
+                           fix. Bounds-checked in _validate_place_order.
+                           None (the default) OMITS the field entirely, exactly as
+                           `price` does for MARKET orders, so every pre-existing
+                           caller — ENTRY, SL, TGT, EOD — is byte-identical on the
+                           wire. kiteconnect 5.1.0 strips None via `locals()`.
 
         Returns:
             PlacedOrder with internal_order_id and broker_order_id.
@@ -523,8 +552,14 @@ class ZerodhaAdapter:
                    "intent": intent},
         )
 
-        # ZA13: validate before burning rate-limit token
-        self._validate_place_order(symbol, side, qty, price, order_type, trigger_price)
+        # ZA13: validate before burning rate-limit token.
+        # market_protection is validated HERE, i.e. BEFORE the `if self._paper`
+        # branch below — so an out-of-range band is rejected identically in paper
+        # and live. That is the parity that matters: the value has no meaning for a
+        # synthesized paper fill, but a bad value must fail the same way in both.
+        self._validate_place_order(
+            symbol, side, qty, price, order_type, trigger_price, market_protection
+        )
 
         # FIX-181 (GICRE incident): authoritative tick-snap. Runs in BOTH paper
         # and live (parity) so the synthesized paper fill and the live Kite order
@@ -612,6 +647,10 @@ class ZerodhaAdapter:
                 price=price if order_type in ("LIMIT", "SL") else None,
                 trigger_price=trigger_price if trigger_price > 0 else None,
                 tag=tag,
+                # None omits the field: kiteconnect 5.1.0's place_order does
+                # `params = locals()` then deletes every `is None` entry, so a
+                # None here reproduces today's wire body byte-for-byte.
+                market_protection=market_protection,
             )
         except Exception as exc:
             # ZA7: transition to FAILED on any kite exception
@@ -2046,6 +2085,7 @@ class ZerodhaAdapter:
         price: float,
         order_type: str,
         trigger_price: float = 0.0,
+        market_protection: Optional[float] = None,
     ) -> None:
         """ZA13: raise ValueError before touching rate limiter or state machine."""
         if not symbol or not isinstance(symbol, str):
@@ -2073,6 +2113,28 @@ class ZerodhaAdapter:
                 f"trigger_price must be > 0 for {order_type} orders, "
                 f"got {trigger_price!r}"
             )
+        # market_protection: None means "omit", which is the pre-existing wire
+        # shape for every caller that does not opt in. Any non-None value is
+        # bounds-checked HERE because the SDK checks nothing (see the constants).
+        if market_protection is not None:
+            if isinstance(market_protection, bool) or not isinstance(
+                market_protection, (int, float)
+            ):
+                raise ValueError(
+                    f"market_protection must be a number (percent), got "
+                    f"{market_protection!r}"
+                )
+            if not (
+                _MARKET_PROTECTION_MIN_PCT
+                <= float(market_protection)
+                <= _MARKET_PROTECTION_MAX_PCT
+            ):
+                raise ValueError(
+                    f"market_protection must be a PERCENT in "
+                    f"[{_MARKET_PROTECTION_MIN_PCT}, {_MARKET_PROTECTION_MAX_PCT}] "
+                    f"(1.5 means 1.5%, NOT a fraction — 0.015 would be 0.015%); "
+                    f"got {market_protection!r}"
+                )
 
     def _paper_place_order(
         self,
