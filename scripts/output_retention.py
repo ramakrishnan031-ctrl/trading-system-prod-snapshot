@@ -57,7 +57,11 @@
 #                             and UNREGENERABLE BY CONSTRUCTION: the contract
 #                             forbids backfill, so a deleted day cannot be
 #                             recreated from any later state. Never delete.
-#                             (Backed up separately -- see scripts/backup_evidence.py;
+#                             (Backed up separately by scripts/backup_evidence.py --
+#                             a SAME-DISK copy: it protects against accidental
+#                             deletion or corruption of the primary file, NOT
+#                             against loss of the disk or the machine; nothing in
+#                             this system copies any artefact off the box. And
 #                             excluded-from-pruning is NOT backed-up.)
 #   data_store/candles/, t2_proof_*/, control_tower/, cron_marks/,
 #   security_state.json.
