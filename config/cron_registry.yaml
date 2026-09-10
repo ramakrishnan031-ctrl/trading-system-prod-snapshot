@@ -64,6 +64,21 @@ jobs:
     env_wrapper: python
     log_target: '>> logs/cron-backup-retention.log 2>&1'
     marker_name: backup_retention
+  evidence_backup:
+    script: scripts/backup_evidence.py (Batch 1 forward evidence -> data_store/backups/evidence/)
+    schedule: 01:10 daily
+    type: python
+    critical: false
+    market_day_only: false
+    cadence: daily
+    monitored: true
+    enabled: true
+    personal_tooling: false
+    cron_expression: 10 1 * * *
+    command: scripts/backup_evidence.py
+    env_wrapper: python
+    log_target: '>> logs/cron-evidence-backup.log 2>&1'
+    marker_name: evidence_backup
   sentinel_retention:
     script: find data_store critical_alert_*.delivered -mtime +7 -delete (never *.flag)
     schedule: 02:05 daily

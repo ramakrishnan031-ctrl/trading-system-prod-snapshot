@@ -53,6 +53,12 @@
 #                             (keep 20 pre_* / 14 daily / 14 analytics).
 #   data_store/v3/*.jsonl  -- append-only and UNREGENERABLE; read IN FULL by
 #                             v3_shadow_soak_report.py. Never delete.
+#   data_store/evidence/*.jsonl -- Batch 1 forward evidence contract. Append-only
+#                             and UNREGENERABLE BY CONSTRUCTION: the contract
+#                             forbids backfill, so a deleted day cannot be
+#                             recreated from any later state. Never delete.
+#                             (Backed up separately -- see scripts/backup_evidence.py;
+#                             excluded-from-pruning is NOT backed-up.)
 #   data_store/candles/, t2_proof_*/, control_tower/, cron_marks/,
 #   security_state.json.
 #
