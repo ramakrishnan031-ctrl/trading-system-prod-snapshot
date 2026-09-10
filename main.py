@@ -3249,14 +3249,34 @@ def _main_locked(args, config_dir: Path) -> int:
     # An OBSERVER. None => OFF => byte-identical behaviour. It is built here, once,
     # so the code fingerprint is computed a single time at boot rather than per row.
     # ⛔ config hashes are REUSED from AppConfig.file_hashes -- no second scheme.
-    from core.evidence_contract import EvidenceRecorder
-    evidence_recorder = EvidenceRecorder(
-        Path(__file__).resolve().parent,
-        config_hashes=app_config.file_hashes,
-        logger=get_logger("evidence_contract"),
-        critical_sink=lambda state, detail: notifier.send(
-            severity="CRITICAL", title=f"[EVIDENCE] {state}", body=detail),
-    )
+    # ⛔ The sink goes through notifier_critical_sink: TelegramNotifier.send
+    #    REQUIRES source_module, and a hand-rolled lambda that omitted it made the
+    #    §6.7 sentinel raise TypeError on every call (swallowed -- never fired).
+    # ⛔ And the observer must not be able to stop the boot: failing to BUILD it
+    #    means no evidence this session -- loud, but trading proceeds (§6.7).
+    try:
+        from core.evidence_contract import EvidenceRecorder, notifier_critical_sink
+        evidence_recorder = EvidenceRecorder(
+            Path(__file__).resolve().parent,
+            config_hashes=app_config.file_hashes,
+            logger=get_logger("evidence_contract"),
+            critical_sink=notifier_critical_sink(notifier),
+        )
+    except Exception as _ev_exc:  # noqa: BLE001
+        evidence_recorder = None
+        _log.error("evidence_contract: recorder NOT built -- no forward evidence "
+                   "will be captured this session: %s", _ev_exc)
+        try:
+            notifier.send(
+                severity="CRITICAL",
+                title="[EVIDENCE] RECORDER_NOT_BUILT",
+                body=(f"evidence_contract: the recorder could not be constructed at "
+                      f"boot ({type(_ev_exc).__name__}: {_ev_exc}). Trading continues; "
+                      f"NO forward evidence is being captured this session."),
+                source_module="evidence_contract",
+            )
+        except Exception:  # noqa: BLE001
+            pass
 
     screener = SecondaryScreener(
         step_executor=step_executor,

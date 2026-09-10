@@ -200,6 +200,34 @@ def evidence_path(root: Path, arm: str, on: date) -> Path:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# §6.7 — the CRITICAL sink, bound to the system's own alert officer
+# ─────────────────────────────────────────────────────────────────────────────
+
+def notifier_critical_sink(notifier: Any) -> Callable[[str, str], None]:
+    """Bind the recorder's once-a-day CRITICAL to `TelegramNotifier.send`.
+
+    ⚠️ `source_module` is a REQUIRED positional parameter of
+    `TelegramNotifier.send(severity, title, body, source_module, ...)`. The first
+    build wired a hand-rolled lambda in main.py that omitted it, so every call
+    raised TypeError -- which the recorder swallows by design. The §6.7 sentinel
+    could therefore never fire in production, while every test (all of them used
+    a fake sink) stayed green. This helper exists so the REAL signature is
+    exercised by a test against a REAL notifier.
+
+    CRITICAL writes the sentinel FIRST (TG5), so alert_watcher still emails it
+    when Telegram is down.
+    """
+    def _sink(state: str, detail: str) -> None:
+        notifier.send(
+            severity="CRITICAL",
+            title=f"[EVIDENCE] {state}",
+            body=detail,
+            source_module="evidence_contract",
+        )
+    return _sink
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # §6.7 — observer failure accounting
 # ─────────────────────────────────────────────────────────────────────────────
 

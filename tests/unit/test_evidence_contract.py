@@ -643,3 +643,66 @@ def test_p2_is_documented_as_not_yet_tightened():
     assert P2_REJECT not in REQUIRED_BY_CAPTURE_POINT
     src = (REPO / "core" / "evidence_contract.py").read_text(encoding="utf-8")
     assert "P2_REJECT is deliberately NOT here yet" in src
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# RE-CHECK 10-Sep night — §6.7's sentinel must reach the REAL alert officer
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_the_critical_sink_writes_a_real_sentinel_through_the_real_notifier(tmp_path):
+    """⚠️ REGRESSION. The first build wired `critical_sink` as a lambda calling
+    `notifier.send(severity=, title=, body=)` -- WITHOUT the required positional
+    `source_module`. Every call raised TypeError, which the recorder swallows by
+    design, so the §6.7 sentinel could never fire in production while every test
+    (all of them used a fake sink) stayed green. This one uses the REAL
+    TelegramNotifier -- paper mode writes the sentinel and sends no HTTP."""
+    from alerts.telegram_notifier import TelegramNotifier
+    from core.evidence_contract import notifier_critical_sink
+
+    sent = tmp_path / "sentinels"
+    notifier = TelegramNotifier(
+        bot_token="test-token", chat_ids=["1"],
+        failed_alerts_log_path=tmp_path / "failed_alerts.log",
+        sentinel_dir=sent, paper_mode=True, send_in_paper_mode=False,
+    )
+    r = rec_at(tmp_path, critical_sink=notifier_critical_sink(notifier))
+    r.capture(P3_SCREEN, {"signal_id": "sig_1", "symbol": None, "strategy": "gap_fade"})
+
+    flags = sorted(sent.glob("critical_alert_*.flag"))
+    assert len(flags) == 1, "the first failure of the day must leave ONE real sentinel"
+    body = json.loads(flags[0].read_text(encoding="utf-8"))
+    assert body["source_module"] == "evidence_contract"
+    assert "EVIDENCE_CAPTURE_FAILED" in body["title"]
+
+    # ...and exactly once: the second failure is counted, never alerted.
+    r.capture(P3_SCREEN, {"signal_id": "sig_2", "symbol": None, "strategy": "gap_fade"})
+    assert len(sorted(sent.glob("critical_alert_*.flag"))) == 1
+    assert r.failure_summary()["total_failures"] == 2
+
+
+def test_main_builds_the_recorder_guarded_and_with_the_real_sink():
+    """main.py must (1) bind the sink through notifier_critical_sink -- never a
+    hand-rolled lambda that can drift from TelegramNotifier.send's signature -- and
+    (2) build the recorder INSIDE a try, so an observer that cannot be constructed
+    can never stop the boot (§6.7: trading is never blocked)."""
+    import ast
+    tree = ast.parse((REPO / "main.py").read_text(encoding="utf-8"))
+    parents = {}
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            parents[child] = node
+    calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
+             and getattr(n.func, "id", None) == "EvidenceRecorder"]
+    assert len(calls) == 1, f"expected ONE EvidenceRecorder(...) in main.py, found {len(calls)}"
+    sink = {k.arg: k.value for k in calls[0].keywords}.get("critical_sink")
+    assert isinstance(sink, ast.Call) and getattr(sink.func, "id", None) == "notifier_critical_sink", \
+        "critical_sink must be notifier_critical_sink(notifier), not a hand-rolled lambda"
+    node, guarded = calls[0], False
+    while node in parents:
+        node = parents[node]
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            break
+        if isinstance(node, ast.Try):
+            guarded = True
+            break
+    assert guarded, "EvidenceRecorder(...) must be constructed inside a try in _main_locked"
