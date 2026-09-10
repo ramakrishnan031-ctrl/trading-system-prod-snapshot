@@ -829,3 +829,49 @@ def test_p3_is_captured_even_when_the_db_write_fails(tmp_path):
         ("REJECTED_SCORE_57", "ACME", "gap_go_long")
     assert rows[0]["step_statuses"] == {"volume_surge": "PASSED"}
     assert ss._logger.errors, "the DB failure itself is still logged"
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# RE-CHECK — `reanchored` must come from the re-anchor itself
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _drive_to_p1(tmp_path, *, strategy, quote_prices, stale=2500.0):
+    """ONE webhook signal through the REAL _process_one (the FIX-067 harness) with
+    a real recorder attached. Returns (placer, the P1 rows)."""
+    from tests.unit.test_fix067_ms1_fresh_anchor import (
+        _CaptureFM, _CapturePlacer, _CaptureSizer, _list_quote_fn)
+    from tests.unit.test_signal_processor import (
+        _insert_queued_signal, _make_proc, _make_store, _now_tup)
+    store, _ = _make_store()
+    _insert_queued_signal(store, "sig_p1", symbol="RELIANCE", scanner="gap_go_long")
+    placer = _CapturePlacer()
+    proc, _, _ = _make_proc(
+        store=store, placer=placer, sizer=_CaptureSizer(), fm=_CaptureFM(),
+        strategies={"gap_go_long_v1": strategy},
+        scan_webhook_map={"gap_go_long": {"strategy": "gap_go_long_v1"}})
+    proc._quote_fn = _list_quote_fn(quote_prices)
+    proc._evidence = rec_at(tmp_path)
+    proc._process_one_safe(_now_tup("sig_p1", scanner="gap_go_long", symbol="RELIANCE",
+                                    price=stale))
+    return placer, [r for r in read_records(tmp_path) if r["capture_point"] == P1_ACCEPT]
+
+
+@pytest.mark.parametrize("case,pullback,quotes,expected", [
+    ("momentum, live LTP re-anchors",       False, {"RELIANCE": 2550.0}, True),
+    ("momentum, quote unavailable (stale)", False, {},                   False),
+    ("pullback, never fetches a quote",     True,  {"RELIANCE": 2550.0}, False),
+])
+def test_reanchored_comes_from_the_reanchor_itself(tmp_path, case, pullback, quotes, expected):
+    """⚠️ RE-CHECK FINDING. P1 recorded `reanchored = entry_price != trigger_price`.
+    Every strategy in config/strategies is LIMIT with a 0.1-0.2 % entry offset, so
+    entry != trigger on EVERY signal: the field read True 100 % of the time --
+    present, never correct. It now comes from the M-S1 branch that re-anchors."""
+    from tests.unit.test_signal_processor import _MockStrategy
+    strat = _MockStrategy(name="gap_go_long_v1", direction="LONG", entry_method="LIMIT",
+                          entry_offset_pct=0.001, pullback_wait_enabled=pullback)
+    placer, p1 = _drive_to_p1(tmp_path, strategy=strat, quote_prices=quotes)
+    assert placer.calls, f"{case}: nothing was placed -- the harness never reached P1"
+    assert len(p1) == 1, f"{case}: expected ONE P1 record, got {len(p1)}"
+    assert p1[0]["reanchored"] is expected, case
+    # ...and the old inference would have said True in EVERY one of these cases:
+    assert p1[0]["entry_price_final"] != p1[0]["trigger_price"]

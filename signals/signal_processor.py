@@ -89,13 +89,18 @@ class _AdmitCtx:
     caller's except+finally see it on EVERY exit path (normal, early-return, and raise) —
     this is what preserves the pre-extraction behaviour byte-for-byte (esp. the queue.Full
     reservation-leak guard, where reservation_id must remain visible to the outer handler)."""
-    __slots__ = ("reservation_id", "requeued", "in_flight_incremented", "placed")
+    __slots__ = ("reservation_id", "requeued", "in_flight_incremented", "placed",
+                 "reanchored")
 
     def __init__(self) -> None:
         self.reservation_id = None            # type: Optional[str]
         self.requeued = False                 # FIX-069
         self.in_flight_incremented = False    # FIX-165c
         self.placed = False                   # True once order_placer.place() succeeded
+        # Batch 1 evidence ONLY -- read by the P1 capture, never by a decision.
+        # True/False only where the caller KNOWS whether M-S1 re-anchored; None
+        # (unknown) otherwise, e.g. the allocator's admit_prepared path.
+        self.reanchored = None                # type: Optional[bool]
 
 
 # ---------------------------------------------------------------------------
@@ -1015,6 +1020,10 @@ class SignalProcessor:
             # skip this (EntryGate already waits for current price). trigger_price is
             # preserved for FIX-128's slippage guard, which now sizes its tolerance off
             # the fresh SL. Parity: paper get_quote returns the same dict[str, Quote].
+            # Batch 1 evidence: True ONLY where M-S1 actually re-anchors below.
+            # ⛔ Never inferred from entry != trigger: every strategy is LIMIT with
+            # an entry offset, so those two differ on EVERY signal.
+            _reanchored = False
             if not strategy_obj.pullback_wait_enabled and self._quote_fn is not None:
                 live_ltp = None
                 try:
@@ -1034,6 +1043,7 @@ class SignalProcessor:
                     entry_price, sl_price = self._derive_prices(
                         live_ltp, strategy_obj, now_time=now.time()
                     )
+                    _reanchored = True                # Batch 1 evidence
                 else:
                     self._log.warning(
                         f"FIX-067 momentum fresh quote unavailable for {symbol} "
@@ -1112,6 +1122,7 @@ class SignalProcessor:
             # outer except/finally read — preserving every existing behaviour (incl. the
             # queue.Full reservation-leak guard and FIX-165c in_flight bookkeeping).
             _ac = _AdmitCtx()
+            _ac.reanchored = _reanchored          # Batch 1 evidence (the P1 field only)
             try:
                 self._admit_and_place(
                     _ac, signal_id=signal_id, symbol=symbol, scanner_name=scanner_name,
@@ -1363,7 +1374,10 @@ class SignalProcessor:
                 "market_data_snapshot": getattr(screen_result, "market_data_snapshot", None),
                 "trigger_price": trigger_price,
                 "entry_price_final": entry_price,
-                "reanchored": bool(entry_price != trigger_price),
+                # ⚠️ From the re-anchor ITSELF (set in _process_one's M-S1 branch).
+                # The first build inferred `entry_price != trigger_price`, which is
+                # True on EVERY signal -- all strategies are LIMIT with an offset.
+                "reanchored": getattr(ac, "reanchored", None),
                 "sl_price": sl_price, "tgt_price": tgt_price,
                 "qty": sizing.qty,
                 "sizing_breakdown": getattr(sizing, "breakdown", None),
