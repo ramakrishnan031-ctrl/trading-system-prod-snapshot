@@ -363,6 +363,18 @@ eod_squareoff:                # EOD12 — EOD square-off settings
   exit_protocol: "LIMIT_THEN_MARKET"  # Audit 3.3 — aggressive LIMIT, MARKET fallback
   limit_aggressive_pct: 0.01  # LTP ± 1% for the initial exit limit
   limit_grace_sec: 120        # seconds to wait before promoting unfilled LIMITs to MARKET
+  # ⚠️⚠️ UNITS: the two values below are PERCENTAGES. 1.5 means 1.5%.
+  # limit_aggressive_pct one line above is a FRACTION (0.01 == 1%). These are NOT
+  # — hence "_percent", not "_pct". Zerodha's market_protection takes a percent;
+  # writing 0.015 here "meaning 1.5%" sends 0.015%, a band ~100x too tight that
+  # would essentially never fill while looking like a working fix. Config load
+  # REFUSES anything outside [0.1, 10.0], so that mistake fails at boot, not 15:03.
+  # Chosen by Rama 10-Sep-2026 from the measured Population B coverage table
+  # (actual-held MIS, n=289): 1.5% = 100% historical coverage at PASS_1 (15:03),
+  # 2.5% at PASS_2 (15:06) — preserving the measured tail asymmetry.
+  # ⚠️ Historical adverse-excursion coverage is NOT a guaranteed fill.
+  mis_pass_1_market_protection_percent: 1.5   # PASS_1 (15:03) protected-MARKET band, PERCENT
+  mis_pass_2_market_protection_percent: 2.5   # PASS_2 (15:06) protected-MARKET band, PERCENT
 
 alerts:                       # TG12/AW11 — alert subsystem settings
   failed_alerts_log_path: "logs/failed_alerts.log"

@@ -651,6 +651,20 @@ class EodSquareoffConfig(BaseModel):
     exit_protocol: str = "MARKET"            # "MARKET" (legacy) | "LIMIT_THEN_MARKET"
     limit_aggressive_pct: float = 0.01       # LTP +/- this for SELL/BUY exit limits
     limit_grace_sec: float = 120.0           # wait before promoting unfilled LIMITs to MARKET
+    # ── MIS auto-squareoff protected-MARKET bands (10-Sep-2026) ──────────────
+    # ⚠️⚠️ UNITS: these are PERCENTAGES. 1.5 means 1.5%.
+    # `limit_aggressive_pct` three lines above is a FRACTION (0.01 == 1%). These
+    # are NOT, which is why they are named "_percent" and not "_pct". Zerodha's
+    # market_protection takes a percentage; writing 0.015 here "meaning 1.5%"
+    # sends 0.015% — a band ~100x too tight that would essentially never fill
+    # while looking like a working fix. The validators below refuse that value.
+    # Chosen by Rama 10-Sep from the measured Population B (actual-held MIS,
+    # n=289) adverse-excursion coverage table: 1.5% reaches 100% historical
+    # coverage at PASS_1 (15:03) and 2.5% at PASS_2 (15:06), preserving the
+    # measured asymmetry (PASS_2's minute has the fatter tail).
+    # ⚠️ Historical adverse-excursion coverage is NOT a guaranteed fill.
+    mis_pass_1_market_protection_percent: float = 1.5
+    mis_pass_2_market_protection_percent: float = 2.5
 
     @field_validator("inter_order_delay_ms")
     @classmethod
@@ -689,6 +703,30 @@ class EodSquareoffConfig(BaseModel):
         if not (0.0 <= v <= 300.0):
             raise ValueError(
                 f"limit_grace_sec must be in [0, 300] (5-min sanity cap); got {v!r}"
+            )
+        return v
+
+    @field_validator(
+        "mis_pass_1_market_protection_percent",
+        "mis_pass_2_market_protection_percent",
+    )
+    @classmethod
+    def _validate_market_protection_percent(cls, v: float, info) -> float:
+        """Fail LOUDLY at config load, never at 15:03.
+
+        The lower bound is the UNITS guard: 0.1% is below this book's MEASURED
+        median spread (0.067%) plus median 60s adverse excursion (0.080%), so a
+        smaller band cannot even cross the touch. A fraction-style 0.015 written
+        for "1.5%" is refused here rather than silently sent as 0.015%.
+        Mirrors broker/zerodha_adapter.py's chokepoint bounds; kept in both
+        places deliberately — config catches it at boot, the adapter catches
+        anything that reaches the wire by another route.
+        """
+        if not (0.1 <= v <= 10.0):
+            raise ValueError(
+                f"{info.field_name} must be a PERCENT in [0.1, 10.0] "
+                f"(1.5 means 1.5%, NOT a fraction — 0.015 would be 0.015%); "
+                f"got {v!r}"
             )
         return v
 
