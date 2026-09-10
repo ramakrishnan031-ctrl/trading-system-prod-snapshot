@@ -629,37 +629,42 @@ class SecondaryScreener:
                 ts=ts,
                 eligible_score=eligible_score,
             )
-            # P3 (Batch 1): the single P18 funnel -- every verdict path reaches
-            # here, PASSED and REJECTED_* alike, and 68.99 % of the corpus is a
-            # REJECTED_SCORE_* whose context nothing else preserves.
-            # step_statuses is written HERE because it is populated in memory and
-            # persisted NOWHERE else: insert_screener_result does not accept it
-            # and screener_results has no column for it. Written from the LIVE
-            # value; never reconstructed from logs.
-            self._evidence_capture("P3_SCREEN", lambda: {
-                "signal_id": signal_id,
-                # Identity, carried in from screen()/_screen_v3_enforce() -- both
-                # have `symbol` and `strategy` bound at every one of the 15 call
-                # sites. ⚠️ These are REQUIRED for P3: if either is unresolvable
-                # the record is FAILED and the sentinel fires. ⛔ It must never sit
-                # quietly as PARTIAL, where nobody looks.
-                "symbol": symbol,
-                "strategy": strategy_name,
-                "ts": ts,
-                "status": result.status,
-                "rejected_step": result.rejected_step,
-                "reject_reason": result.rejected_step or result.status,
-                "score_total": result.score,
-                "tier": result.tier,
-                "step_results": result.step_results,
-                "step_statuses": result.step_statuses,
-                "market_data_snapshot": result.market_data_snapshot,
-            })
         except Exception:
             self._logger.error(
                 "secondary_screener [%s]: state_store write failed:\n%s",
                 signal_id, traceback.format_exc(),
             )
+        # P3 (Batch 1): the single P18 funnel -- every verdict path reaches
+        # here, PASSED and REJECTED_* alike, and 68.99 % of the corpus is a
+        # REJECTED_SCORE_* whose context nothing else preserves.
+        # step_statuses is written HERE because it is populated in memory and
+        # persisted NOWHERE else: insert_screener_result does not accept it
+        # and screener_results has no column for it. Written from the LIVE
+        # value; never reconstructed from logs.
+        # ⚠️ OUTSIDE the DB try, deliberately. The first build captured after the
+        # two DB writes and INSIDE their try, so a failed write (a locked DB, a
+        # full disk) silently took the evidence record with it. The contract
+        # exists partly BECAUSE a failing record write is swallowed today (§8);
+        # coupling the evidence to that same write reintroduced the loss.
+        self._evidence_capture("P3_SCREEN", lambda: {
+            "signal_id": signal_id,
+            # Identity, carried in from screen()/_screen_v3_enforce() -- both
+            # have `symbol` and `strategy` bound at every one of the 15 call
+            # sites. ⚠️ These are REQUIRED for P3: if either is unresolvable
+            # the record is FAILED and the sentinel fires. ⛔ It must never sit
+            # quietly as PARTIAL, where nobody looks.
+            "symbol": symbol,
+            "strategy": strategy_name,
+            "ts": ts,
+            "status": result.status,
+            "rejected_step": result.rejected_step,
+            "reject_reason": result.rejected_step or result.status,
+            "score_total": result.score,
+            "tier": result.tier,
+            "step_results": result.step_results,
+            "step_statuses": result.step_statuses,
+            "market_data_snapshot": result.market_data_snapshot,
+        })
 
     def _evidence_capture(self, capture_point: str, payload) -> None:
         """Batch 1 observer. NEVER raises into screening."""

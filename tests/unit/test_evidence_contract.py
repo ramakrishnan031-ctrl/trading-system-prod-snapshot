@@ -786,3 +786,46 @@ def test_a_failure_ledger_that_cannot_be_written_still_does_not_raise(tmp_path):
     r.capture(P1_ACCEPT, {"signal_id": "s"})          # must not raise
     assert r.failure_summary()["total_failures"] == 1
     assert alerts == ["EVIDENCE_CAPTURE_FAILED"]
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# RE-CHECK — P3 must not depend on the DB write succeeding
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_p3_is_captured_even_when_the_db_write_fails(tmp_path):
+    """⚠️ RE-CHECK FINDING. P3 was captured AFTER the two DB writes and INSIDE
+    their try, so a locked DB or a full disk silently took the evidence record
+    with it -- the very swallowed-write loss (§8) the contract exists to end."""
+    from screening.secondary_screener import ScreeningResult, SecondaryScreener
+
+    class Store:
+        def update_signal_status(self, *a, **k):
+            raise RuntimeError("database is locked")
+
+        def insert_screener_result(self, *a, **k):
+            raise AssertionError("unreachable once the first write has failed")
+
+    class Log:
+        def __init__(self): self.errors = []
+        def error(self, *a, **k): self.errors.append(a)
+
+    class Fx:
+        def inc(self): pass
+
+    ss = SecondaryScreener.__new__(SecondaryScreener)
+    ss._fx_verdict, ss._state_store, ss._logger = Fx(), Store(), Log()
+    ss._evidence = rec_at(tmp_path)
+    res = ScreeningResult(
+        passed=False, status="REJECTED_SCORE_57", score=57, tier="LOW",
+        rejected_step=None, step_results={"volume_surge": 1.8},
+        step_statuses={"volume_surge": "PASSED"}, error_steps=[],
+        latencies_ms={}, market_data_snapshot={"ltp": 100.0})
+    ss._persist("sig_1", res, symbol="ACME", strategy_name="gap_go_long")
+
+    rows = read_records(tmp_path)
+    assert len(rows) == 1, "a failed DB write must not take the evidence record with it"
+    assert rows[0]["capture_point"] == P3_SCREEN
+    assert (rows[0]["status"], rows[0]["symbol"], rows[0]["strategy"]) == \
+        ("REJECTED_SCORE_57", "ACME", "gap_go_long")
+    assert rows[0]["step_statuses"] == {"volume_surge": "PASSED"}
+    assert ss._logger.errors, "the DB failure itself is still logged"
