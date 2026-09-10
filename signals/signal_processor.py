@@ -420,6 +420,14 @@ class SignalProcessor:
                         )
                     except Exception:
                         pass
+                    # Batch 1 P2: a rejected path like any other. Its bare
+                    # "REJECTED" status (no suffix) is why the first no-bypass
+                    # scan, which matched "REJECTED_", never saw it.
+                    self._evidence_capture("P2_REJECT", lambda: {
+                        "signal_id": signal_id, "symbol": symbol,
+                        "status": "REJECTED", "reject_reason": "QUEUE_FULL",
+                        "rejected_step": "QUEUE_FULL",
+                    })
                     if self._in_flight_release is not None:
                         try:
                             self._in_flight_release(symbol)

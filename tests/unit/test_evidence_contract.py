@@ -875,3 +875,113 @@ def test_reanchored_comes_from_the_reanchor_itself(tmp_path, case, pullback, quo
     assert p1[0]["reanchored"] is expected, case
     # ...and the old inference would have said True in EVERY one of these cases:
     assert p1[0]["entry_price_final"] != p1[0]["trigger_price"]
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# RE-CHECK — §6.1 widened: no rejected-status write ANYWHERE bypasses capture
+# ═════════════════════════════════════════════════════════════════════════════
+
+#: The live pipeline, not the tooling around it: ops_dashboard only READS
+#: signals, scripts/ are offline tools, tests/ are tests.
+_REJECT_SCAN_EXCLUDE = {"tests", "venv", "ops_dashboard", "scripts", ".git", "docs"}
+
+#: A rejected-status write may have no capture ONLY with a stated reason AND a
+#: guard test that fails the moment the reason stops being true.
+_REJECT_BYPASS_ALLOWED = {
+    ("screening/retest_monitor.py", "REJECTED_RETEST_DUP"):
+        "DORMANT: the SNR-V2 retest divert runs only when wait_for_retest_enabled "
+        "is true -- it is false. A P2 capture is OWED before that flag is enabled.",
+}
+
+
+def _reject_status_writes():
+    """Every update_signal_status(...) in a first-party module whose status is a
+    REJECTED literal or f-string, with the P2 capture lines of the same file."""
+    import ast
+    found = []
+    for py in sorted(REPO.rglob("*.py")):
+        rel = py.relative_to(REPO).as_posix()
+        if rel.split("/")[0] in _REJECT_SCAN_EXCLUDE:
+            continue
+        try:
+            tree = ast.parse(py.read_text(encoding="utf-8"))
+        except (SyntaxError, UnicodeDecodeError):
+            continue
+        captures = [n.lineno for n in ast.walk(tree)
+                    if isinstance(n, ast.Call)
+                    and getattr(n.func, "attr", None) == "_evidence_capture"
+                    and n.args and isinstance(n.args[0], ast.Constant)
+                    and n.args[0].value == "P2_REJECT"]
+        for n in ast.walk(tree):
+            if not (isinstance(n, ast.Call)
+                    and getattr(n.func, "attr", None) == "update_signal_status"):
+                continue
+            st = n.args[1] if len(n.args) > 1 else next(
+                (k.value for k in n.keywords if k.arg == "status"), None)
+            lit = None
+            if isinstance(st, ast.Constant) and isinstance(st.value, str):
+                lit = st.value
+            elif (isinstance(st, ast.JoinedStr) and st.values
+                  and isinstance(st.values[0], ast.Constant)):
+                lit = str(st.values[0].value) + "{...}"
+            if lit is not None and lit.startswith("REJECTED"):
+                found.append((rel, n.lineno, lit, captures))
+    return found
+
+
+def test_no_rejected_status_write_anywhere_bypasses_capture():
+    """⭐ §6.1, WIDENED. The first scan read ONE file and matched "REJECTED_"
+    on a line window -- so the bare "REJECTED" QUEUE_FULL write, and every module
+    other than signal_processor, were invisible to it. This parses every
+    first-party module and finds every update_signal_status(...) whose status is
+    a REJECTED literal or f-string. The census is pinned EXACTLY: a new reject
+    path is a visible diff here, never a silent hole."""
+    from collections import Counter
+    writes = _reject_status_writes()
+    census = Counter((rel, lit) for rel, _, lit, _ in writes)
+    assert census == Counter({
+        ("signals/signal_processor.py", "REJECTED"): 1,         # QUEUE_FULL
+        ("signals/signal_processor.py", "REJECTED_{...}"): 5,   # 4 handlers + allocator pre-check
+        ("screening/retest_monitor.py", "REJECTED_RETEST_DUP"): 1,
+    }), f"the rejected-status census changed -- re-check capture coverage: {dict(census)}"
+    uncaptured = [f"{rel}:{line} {lit}" for rel, line, lit, caps in writes
+                  if not any(abs(c - line) <= 12 for c in caps)
+                  and (rel, lit) not in _REJECT_BYPASS_ALLOWED]
+    assert uncaptured == [], f"rejected-status writes with no P2 capture: {uncaptured}"
+
+
+def test_every_allowed_bypass_is_still_dormant():
+    """The allow-list is honest only while its reason holds. If the retest divert
+    is ever switched on, this fails -- the capture is owed first."""
+    import re
+    cfg = (REPO / "config" / "system_config.yaml").read_text(encoding="utf-8")
+    assert re.search(r"^\s*wait_for_retest_enabled:\s*false\b", cfg, re.M), \
+        "wait_for_retest_enabled is no longer false: REJECTED_RETEST_DUP needs a P2 capture NOW"
+
+
+def test_queue_full_reject_is_captured(tmp_path):
+    """⚠️ RE-CHECK FINDING. _process_one_safe rejects a signal it cannot
+    re-queue with the bare status "REJECTED" -- no suffix -- and it had no capture."""
+    import queue as _queue
+    from tests.unit.test_signal_processor import (
+        _insert_queued_signal, _make_proc, _make_store, _now_tup)
+    store, _ = _make_store()
+    _insert_queued_signal(store, "sig_qf", symbol="RELIANCE", scanner="gap_go_long")
+    proc, _, _ = _make_proc(store=store)
+
+    class Exhausted:
+        def try_acquire(self, bucket): return False
+
+    class FullQueue:
+        def put(self, *a, **k): raise _queue.Full()
+
+    proc._rate_limiter, proc._queue = Exhausted(), FullQueue()
+    proc._evidence = rec_at(tmp_path)
+    proc._process_one_safe(_now_tup("sig_qf", scanner="gap_go_long", symbol="RELIANCE"))
+
+    rows = read_records(tmp_path)
+    assert len(rows) == 1 and rows[0]["capture_point"] == P2_REJECT
+    assert (rows[0]["status"], rows[0]["reject_reason"]) == ("REJECTED", "QUEUE_FULL")
+    row = store.fetch_one(
+        "SELECT status, rejection_reason FROM signals WHERE signal_id = ?", ("sig_qf",))
+    assert (row["status"], row["rejection_reason"]) == ("REJECTED", "QUEUE_FULL")
