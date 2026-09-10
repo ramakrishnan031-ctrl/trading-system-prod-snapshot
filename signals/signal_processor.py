@@ -2171,6 +2171,21 @@ class SignalProcessor:
                 )
 
             try:
+                # Batch 1 P1 -- every placement dispatch emits ACCEPT. This path is
+                # DORMANT today: nothing calls EntryGate.add(), so only gate_state
+                # rows rehydrated at boot can reach it. Covered anyway, so that
+                # re-activating it cannot open an unseen hole. reanchored=None: M-S1
+                # never runs here, and a WatchEntry carries no score.
+                self._evidence_capture("P1_ACCEPT", lambda: {
+                    "signal_id": signal_id, "symbol": symbol, "strategy": strategy_name,
+                    "status": "ACCEPTED", "tier": tier,
+                    "trigger_price": getattr(entry, "trigger_price", None),
+                    "entry_price_final": entry_price, "reanchored": None,
+                    "sl_price": sl_price, "tgt_price": tgt_price,
+                    "qty": sizing.qty,
+                    "sizing_breakdown": getattr(sizing, "breakdown", None),
+                    "binding_constraint": getattr(sizing, "constraint", None),
+                })
                 self._placer.place(
                     symbol=symbol,
                     side=side,
@@ -2454,6 +2469,20 @@ class SignalProcessor:
                 raise _PipelineReject("ENTRY_THROTTLED", f"Entry throttled: {_tr.reason}")
 
             try:
+                # Batch 1 P1 -- every placement dispatch emits ACCEPT. DORMANT today
+                # (wait_for_retest_enabled: false); covered so enabling it cannot
+                # open an unseen hole. reanchored=None: the retest entry is a MARKET
+                # order at the live LTP, and M-S1's re-anchor does not apply here.
+                self._evidence_capture("P1_ACCEPT", lambda: {
+                    "signal_id": signal_id, "symbol": symbol, "strategy": strategy_name,
+                    "status": "ACCEPTED", "tier": tier,
+                    "trigger_price": getattr(parked, "trigger_price", None),
+                    "entry_price_final": entry_est, "reanchored": None,
+                    "sl_price": structure_sl, "tgt_price": tgt_price,
+                    "qty": sizing.qty,
+                    "sizing_breakdown": getattr(sizing, "breakdown", None),
+                    "binding_constraint": getattr(sizing, "constraint", None),
+                })
                 self._placer.place(
                     symbol=symbol, side=side, qty=sizing.qty,
                     entry_price=entry_est, sl_price=structure_sl,

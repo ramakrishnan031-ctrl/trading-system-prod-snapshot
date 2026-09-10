@@ -453,7 +453,9 @@ def test_all_four_terminal_pipeline_reject_handlers_are_covered():
 def test_p1_and_p3_capture_sites_exist():
     sp = (REPO / "signals" / "signal_processor.py").read_text(encoding="utf-8")
     ss = (REPO / "screening" / "secondary_screener.py").read_text(encoding="utf-8")
-    assert sp.count('_evidence_capture("P1_ACCEPT"') == 1
+    # three placement paths, three P1 captures -- the gate and retest resumes are
+    # dormant today; see test_every_placement_dispatch_emits_p1
+    assert sp.count('_evidence_capture("P1_ACCEPT"') == 3
     assert ss.count('_evidence_capture("P3_SCREEN"') == 1
 
 
@@ -985,3 +987,61 @@ def test_queue_full_reject_is_captured(tmp_path):
     row = store.fetch_one(
         "SELECT status, rejection_reason FROM signals WHERE signal_id = ?", ("sig_qf",))
     assert (row["status"], row["rejection_reason"]) == ("REJECTED", "QUEUE_FULL")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# RE-CHECK — the accept side of §6.1: every placement dispatch emits P1
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_every_placement_dispatch_emits_p1():
+    """The accept-side twin of §6.1. Every `self._placer.place(` in
+    signal_processor must be preceded by a P1_ACCEPT capture. The first build
+    covered ONE of the three placement paths; the other two (the gate and retest
+    resumes) are dormant today -- which is exactly when a hole gets opened without
+    anyone noticing: re-activating either would have produced accepted trades
+    with no P1 row, and the first build's own test pinned exactly ONE P1 site."""
+    src = (REPO / "signals" / "signal_processor.py").read_text(encoding="utf-8").splitlines()
+    places = [i for i, l in enumerate(src) if "self._placer.place(" in l]
+    p1 = [i for i, l in enumerate(src) if '_evidence_capture("P1_ACCEPT"' in l]
+    assert len(places) == 3, f"placement call count changed ({len(places)}) -- re-check P1"
+    assert len(p1) == len(places)
+    for i in places:
+        assert any(0 < i - c <= 25 for c in p1), \
+            f"place() at line {i + 1} has no P1_ACCEPT capture before it"
+
+
+def test_the_gate_resume_emits_p1(tmp_path):
+    """Behavioural, on the dormant gate path: a released WatchEntry that reaches
+    placement leaves exactly one P1 row, identity present, reanchored unknown."""
+    from datetime import datetime as _dt
+    from screening.entry_gate import WatchEntry
+    from tests.unit.test_signal_processor import _make_proc
+
+    class _Placer:
+        def __init__(self): self.calls = []
+        def place(self, **kw): self.calls.append(kw)
+
+    placer = _Placer()
+    proc, _, store = _make_proc(placer=placer)
+    proc._evidence = rec_at(tmp_path)
+    with store.transaction() as cur:
+        cur.execute(
+            "INSERT OR IGNORE INTO signals (signal_id, symbol, scanner, strategy, "
+            "triggered_at, received_at, expires_at, status, fingerprint, fingerprint_date) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ("sig_gate_p1", "RELIANCE", "gap_go_long", "gap_go_long_v1",
+             "2026-04-15 10:00:00", "2026-04-15 10:00:00", "2026-04-15 10:01:00",
+             "PROCESSING", "fp_gate_p1", "2026-04-15"))
+    proc.continue_from_gate(WatchEntry(
+        signal_id="sig_gate_p1", symbol="RELIANCE", direction="LONG",
+        trigger_price=2500.0, entry_price=2495.0, sl_price=2445.0, tgt_price=2595.0,
+        tolerance_pct=0.005, timeout_sec=300, strategy_name="gap_go_long_v1",
+        tier="HIGH", scanner_name="gap_go_long", intent="INTRADAY",
+        added_at=_dt.now()))
+    assert placer.calls, "the gate resume never reached placement"
+    p1 = [r for r in read_records(tmp_path) if r["capture_point"] == P1_ACCEPT]
+    assert len(p1) == 1
+    assert (p1[0]["signal_id"], p1[0]["symbol"], p1[0]["strategy"]) == \
+        ("sig_gate_p1", "RELIANCE", "gap_go_long_v1")
+    assert p1[0]["record_status"] != FAILED
+    assert p1[0]["reanchored"] is None, "M-S1 never runs on the gate path -- unknown, not False"
